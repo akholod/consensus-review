@@ -1,13 +1,13 @@
 ---
-description: Ревью качества тестов через агента test-reviewer
-argument-hint: "[<PR-url|git-range|path|пусто=working tree>]"
+description: Test-quality review via the test-reviewer agent
+argument-hint: "[<PR-url|git-range|path|empty=working tree>] [lang=en|ua]"
 ---
 
-Запусти субагента `test-reviewer` через Task и верни его полный структурированный
-результат без сокращений.
+Run the `test-reviewer` subagent via Task and return its full structured result without abridgement.
 
-- `subagent_type: "test-reviewer"` (если как плагин и не резолвится — `consensus-review:test-reviewer`)
-- Передай в промпт скоуп из аргументов ниже. Если пусто — тесты, связанные с текущим рабочим деревом; PR-ссылка/реф → этот PR; git range / path / glob — как есть.
-- Это read-only ревью: ничего не редактируй и не коммить. После вывода результата остановись.
+- `subagent_type: "test-reviewer"` (when installed as a plugin and the bare name does not resolve — `consensus-review:test-reviewer`)
+- Pass the scope from the args below into the prompt. Empty → tests related to the current working tree; a PR URL/ref → that PR; git range / path / glob — as given.
+- Pass the output language if `lang=en|ua` is present (default English).
+- This is a read-only review: do not edit or commit anything. Stop after returning the result.
 
-Скоуп: $ARGUMENTS
+Scope: $ARGUMENTS

@@ -1,13 +1,13 @@
 ---
-description: Ревью изменения и его влияния на смежные части через агента impact-reviewer
-argument-hint: "[<PR-url|пусто=working tree>]"
+description: Review of a change and its impact on adjacent parts via the impact-reviewer agent
+argument-hint: "[<PR-url|empty=working tree>] [lang=en|ua]"
 ---
 
-Запусти субагента `impact-reviewer` через Task и верни его полный структурированный
-результат без сокращений (начиная с одной строки вердикта).
+Run the `impact-reviewer` subagent via Task and return its full structured result without abridgement (starting with the one-line verdict).
 
-- `subagent_type: "impact-reviewer"` (если как плагин и не резолвится — `consensus-review:impact-reviewer`)
-- Передай в промпт скоуп из аргументов ниже. Если пусто — текущее рабочее дерево (staged + unstaged); PR-ссылка/реф → этот PR (все коммиты против base).
-- Это read-only ревью: ничего не редактируй и не коммить. После вывода результата остановись.
+- `subagent_type: "impact-reviewer"` (when installed as a plugin and the bare name does not resolve — `consensus-review:impact-reviewer`)
+- Pass the scope from the args below into the prompt. Empty → current working tree (staged + unstaged); a PR URL/ref → that PR (all commits against base).
+- Pass the output language if `lang=en|ua` is present (default English).
+- This is a read-only review: do not edit or commit anything. Stop after returning the result.
 
-Скоуп: $ARGUMENTS
+Scope: $ARGUMENTS

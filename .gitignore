@@ -8,6 +8,6 @@ Thumbs.db
 *.swp
 
 # Local review artifacts (in case the repo is itself reviewed)
-.omc/reviews/
+.reviews/
 graphify-out/
 .codegraph/

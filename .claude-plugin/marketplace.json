@@ -10,7 +10,7 @@
     {
       "name": "consensus-review",
       "description": "Multi-model consensus code review across architecture/quality/impact/tests with triage, P0–P2, sceptic mode, and code-graph awareness.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "source": "./",
       "category": "productivity",
       "tags": [
@@ -23,5 +23,5 @@
       ]
     }
   ],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

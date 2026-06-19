@@ -1,100 +1,100 @@
 ---
-description: Консенсус-код-ревью (Opus-арбитр + codex + opencode) по 4 измерениям (архитектура/качество/impact/тесты) для PR или незакоммиченных изменений; находки P0–P2; режимы [sceptic] [codex-only]
-argument-hint: "[<PR-url|owner/repo#N|#N>] [sceptic] [codex-only] [arch] [deep|minimal]"
+description: Consensus code review (Opus arbiter + codex + opencode) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; modes [sceptic] [codex-only]
+argument-hint: "[<PR-url|owner/repo#N|#N>] [sceptic] [codex-only] [arch] [deep|minimal] [lang=en|ua]"
 ---
 
-Ты — **Opus-арбитр** консенсус-ревью. Ревью идёт по **измерениям** (что проверять)
-силами **независимых** ревьюеров (кто проверяет): твои dimension-агенты + `codex` +
-`opencode`. Сведи всё в единый консенсус-отчёт с находками P0–P2.
-Это **read-only** ревью: ничего не чинить, не коммитить, не пушить, не комментить PR.
-Единственная запись — markdown-файл отчёта.
+You are the **Opus arbiter** of a consensus review. Review runs by **dimensions** (what
+to check) using **independent** reviewers (who checks): your dimension agents + `codex` +
+`opencode`. Merge everything into a single consensus report with P0–P2 findings.
+This is a **read-only** review: do not fix, commit, push, or comment on the PR.
+The only write is the markdown report file.
 
-Аргументы: `$ARGUMENTS`
+Arguments: `$ARGUMENTS`
 
-## 0. Разбор аргументов
-- PR-URL / `owner/repo#N` / `#N` в аргументах → **режим PR**. Иначе → **режим uncommitted**.
-- `sceptic` (или `--sceptic`) → **sceptic ON**.
-- `codex-only` (или `--codex-only`) → **codex-only ON**: opencode не используется (полезно, если он не установлен/не залогинен).
-- `arch` (или `--arch`) → принудительно включить архитектурное измерение, даже если изменение не структурное.
-- `deep` / `full` → принудительно максимальный тир (вся панель + оба консультанта), минуя авто-классификацию.
-- `minimal` → принудительно минимальный тир (impact + codex), минуя авто-классификацию.
+## 0. Parse arguments
+- A PR URL / `owner/repo#N` / `#N` in the args → **PR mode**. Otherwise → **uncommitted mode**.
+- `sceptic` (or `--sceptic`) → **sceptic ON**.
+- `codex-only` (or `--codex-only`) → **codex-only ON**: opencode is not used (handy if it is not installed/authenticated).
+- `arch` (or `--arch`) → force the architecture dimension even if the change is not structural.
+- `deep` / `full` → force the maximum tier (full panel + both consultants), skipping auto-classification.
+- `minimal` → force the minimal tier (impact + codex), skipping auto-classification.
+- `lang=en|ua` → output language for the review. **Default `en`** (English). `lang=ua` → Ukrainian. Code identifiers, paths, and technical terms always stay in their original form. Pass the chosen language to the dimension agents and into the consultant brief.
 
-## 1. Резолв diff и контекста
-Рабочая папка **вне репо**: `WD=$(mktemp -d)` (в `/tmp`, не под repo — иначе засоришь `git status`).
+## 1. Resolve diff and context
+Work dir **outside the repo**: `WD=$(mktemp -d)` (in `/tmp`, not under the repo — otherwise it pollutes `git status`).
 
-**Режим PR:**
-- Разрешение репо для `gh`: полный URL самодостаточен. Для `owner/repo#N` и `#N` передавай `-R <owner/repo>` (иначе `gh pr diff` из не-git каталога падает «not a git repository»). Голый `#N` без owner/repo: попробуй вывести репо из git-remote cwd, иначе останови и попроси `owner/repo#N` или URL.
+**PR mode:**
+- gh repo resolution: a full URL is self-describing. For `owner/repo#N` and `#N` pass `-R <owner/repo>` (otherwise `gh pr diff` from a non-git dir fails with "not a git repository"). Bare `#N` without owner/repo: try to derive the repo from the cwd git remote, else stop and ask for `owner/repo#N` or a URL.
 - `gh pr diff <target> [-R …] > "$WD/diff.patch"`
-- `gh pr view <target> [-R …] --json title,baseRefName,headRefName,url` (только метаданные, **без** `body`).
-- `REPO` = текущий клон, если соответствует PR; иначе **diff-only режим** (пометь в отчёте).
+- `gh pr view <target> [-R …] --json title,baseRefName,headRefName,url` (metadata only, **no** `body`).
+- `REPO` = the current clone if it matches the PR; otherwise **diff-only mode** (note it in the report).
 
-**Режим uncommitted:**
-- `git diff HEAD > "$WD/diff.patch"`; untracked через `git status --porcelain`.
-- Пусто и нет untracked → «Нет изменений для ревью» и **стоп**.
-- `REPO` = корень текущего репозитория.
+**Uncommitted mode:**
+- `git diff HEAD > "$WD/diff.patch"`; untracked via `git status --porcelain`.
+- Empty and no untracked → print "No changes to review" and **stop**.
+- `REPO` = the root of the current repository.
 
 ## 2. Pre-flight health-check
-`codex --version`; если **codex-only OFF** — ещё `opencode --version`. Недоступный тул помечается `unavailable`, его lane пропускается (не жди таймаута). При codex-only opencode не проверяется (статус: `skipped (codex-only)`).
+`codex --version`; if **codex-only OFF** — also `opencode --version`. An unavailable tool is marked `unavailable` and its lane is skipped (don't wait for the timeout). With codex-only, opencode is not checked (status: `skipped (codex-only)`).
 
-**Код-граф (если ревью в каталоге проекта).** Проверь наличие готового код-графа: `.codegraph/codegraph.db` (codegraph) или `graphify-out/graph.json` (graphify). Если есть — зафиксируй `CODE_GRAPH=codegraph|graphify` и используй его дальше (триаж blast-radius + бриф консультантам + dimension-агенты сами его подхватят). **Только детект-и-используй, граф НЕ строй** (построение graphify тратит токены). Нет графа → обычный grep, это не проблема.
+**Code graph (if the review runs in the project dir).** Check for a prebuilt code graph: `.codegraph/codegraph.db` (codegraph) or `graphify-out/graph.json` (graphify). If present — set `CODE_GRAPH=codegraph|graphify` and use it downstream (triage blast-radius + consultant brief + the dimension agents pick it up themselves). **Detect-and-use only; do NOT build the graph** (building graphify costs tokens). No graph → plain grep, that's fine.
 
-## 3. Триаж: классификация изменения (ДО запуска ревьюеров)
-Цель — не гонять всю панель там, где это не нужно (напр. PR на 2000 строк руками
-добавленных Bruno-конфигов имеет нулевой code-impact). Размер сам по себе не сигнал —
-важны «эффективный код» и blast radius.
+## 3. Triage: classify the change (BEFORE running reviewers)
+Goal — don't run the whole panel where it isn't warranted (e.g. a 2000-line PR of hand-added Bruno configs has zero code impact). Size alone is not the signal — what matters is "effective code" and blast radius.
 
-**3.1. Раздели изменённые файлы на классы** (`git diff --numstat` / `gh pr diff` + имена; учитывай added/renamed/deleted):
-- **non-code (нулевой/низкий impact)** — Bruno/Postman/HTTP (`*.bru`, `*.http`, `*.rest`, postman collections); lock-файлы (`*-lock.json`, `*.lock`, `pnpm-lock.yaml`, `yarn.lock`, `go.sum`, `Cargo.lock`, `poetry.lock`, `composer.lock`); доки (`*.md`, `*.mdx`, `*.rst`, `docs/**`, `LICENSE`); ассеты (изображения, шрифты, `*.svg`); данные/фикстуры (`*.csv`, `__snapshots__/`, `*.snap`, fixtures/); сгенерированное (`dist/`, `build/`, `*.min.*`, `*.generated.*`, `*.pb.go`); i18n (`locales/**`, `*.po`).
-- **config-as-code (средний impact — рантайм/деплой)** — конфиги `*.json|*.yaml|*.toml`, `Dockerfile`, CI (`.github/workflows/**`), IaC (`*.tf`), env-шаблоны.
-- **manifests зависимостей (impact + security)** — `package.json`, `go.mod`, `Cargo.toml`, `requirements.txt`, `pyproject.toml`, `pom.xml`, `build.gradle`.
-- **migrations (высокий impact)** — `migrations/**`, `*.sql`.
-- **tests** — пути по паттернам `*test*`, `*spec*`, `__tests__/`, `*.test.*`, `*.spec.*`, `*_test.go`, `test_*.py`, `*Test.*`.
-- **source code** — остальной исполняемый код.
+**3.1. Split changed files into classes** (`git diff --numstat` / `gh pr diff` + names; account for added/renamed/deleted):
+- **non-code (zero/low impact)** — Bruno/Postman/HTTP (`*.bru`, `*.http`, `*.rest`, postman collections); lock files (`*-lock.json`, `*.lock`, `pnpm-lock.yaml`, `yarn.lock`, `go.sum`, `Cargo.lock`, `poetry.lock`, `composer.lock`); docs (`*.md`, `*.mdx`, `*.rst`, `docs/**`, `LICENSE`); assets (images, fonts, `*.svg`); data/fixtures (`*.csv`, `__snapshots__/`, `*.snap`, fixtures/); generated (`dist/`, `build/`, `*.min.*`, `*.generated.*`, `*.pb.go`); i18n (`locales/**`, `*.po`).
+- **config-as-code (medium impact — runtime/deploy)** — config `*.json|*.yaml|*.toml`, `Dockerfile`, CI (`.github/workflows/**`), IaC (`*.tf`), env templates.
+- **dependency manifests (impact + security)** — `package.json`, `go.mod`, `Cargo.toml`, `requirements.txt`, `pyproject.toml`, `pom.xml`, `build.gradle`.
+- **migrations (high impact)** — `migrations/**`, `*.sql`.
+- **tests** — path patterns `*test*`, `*spec*`, `__tests__/`, `*.test.*`, `*.spec.*`, `*_test.go`, `test_*.py`, `*Test.*`.
+- **source code** — the remaining executable code.
 
-**3.2. Эффективный размер кода** — строки/файлы ТОЛЬКО в классах source/config-as-code/manifests/migrations/tests (non-code исключи из размера, но запомни для отчёта):
-`none` (0 кода) / `small` (≲50 строк или ≲3 файлов) / `medium` (≲~400 строк или ≲~15 файлов) / `large` (больше).
+**3.2. Effective code size** — lines/files ONLY in the source/config-as-code/manifests/migrations/tests classes (exclude non-code from the size, but remember it for the report):
+`none` (0 code) / `small` (≲50 lines or ≲3 files) / `medium` (≲~400 lines or ≲~15 files) / `large` (more).
 
-**3.3. Blast radius** — насколько изменение аффектит остальной код:
-- `wide` — затронуты manifests зависимостей, migrations, auth/permissions/security пути, публичный/экспортируемый API, shared/common/core/lib/packages модули, ИЛИ у изменённых модулей высокий fan-in. Fan-in оценивай через код-граф, если `CODE_GRAPH` есть: `codegraph impact <symbol>` / `codegraph callers <symbol>` или `graphify explain "<Symbol>"` / `graphify path`; иначе — `grep -r` по импортам (фолбэк).
-- `isolated` — новый самодостаточный leaf-файл / тест / конфиг / док без потребителей.
-- иначе `local`.
+**3.3. Blast radius** — how much the change affects the rest of the code:
+- `wide` — touches dependency manifests, migrations, auth/permissions/security paths, public/exported API, shared/common/core/lib/packages modules, OR the changed modules have high fan-in. Estimate fan-in via the code graph when `CODE_GRAPH` is set: `codegraph impact <symbol>` / `codegraph callers <symbol>` or `graphify explain "<Symbol>"` / `graphify path`; otherwise `grep -r` over imports (fallback).
+- `isolated` — a new self-contained leaf file / test / config / doc with no consumers.
+- otherwise `local`.
 
-**3.4. Назначь тир** (флаги `deep`/`minimal` имеют приоритет над авто-классификацией):
-- **T0 trivial** — `none` кода (только non-code).
+**3.4. Assign a tier** (the `deep`/`minimal` flags override auto-classification):
+- **T0 trivial** — `none` code (non-code only).
 - **T1 minimal** — `small` + `isolated`.
-- **T2 standard** — `small`/`medium` + `local`, либо `medium` + `isolated`.
-- **T3 deep** — `large`, ИЛИ `blast=wide` (при любом размере), ИЛИ структурное изменение.
+- **T2 standard** — `small`/`medium` + `local`, or `medium` + `isolated`.
+- **T3 deep** — `large`, OR `blast=wide` (at any size), OR a structural change.
 
-**3.5. Маппинг тира → измерения и источники:**
+**3.5. Tier → dimensions and sources:**
 
-| Тир | DIMS (Opus-агенты) | Консультанты | Sceptic |
+| Tier | DIMS (Opus agents) | Consultants | Sceptic |
 |---|---|---|---|
-| T0 trivial | — (полную панель не запускаем) | — | off |
+| T0 trivial | — (no full panel) | — | off |
 | T1 minimal | impact | codex | off |
-| T2 standard | impact + quality (+ tests если есть тесты) | codex + opencode | off |
-| T3 deep | impact + quality + architecture (+ tests если есть тесты) | codex + opencode | off (sceptic по флагу) |
+| T2 standard | impact + quality (+ tests if tests present) | codex + opencode | off |
+| T3 deep | impact + quality + architecture (+ tests if tests present) | codex + opencode | off (sceptic via flag) |
 
-Модификаторы поверх тира:
-- `arch`-флаг добавляет architecture в любом тире; tests добавляются только при наличии тест-файлов в diff.
-- `codex-only` убирает opencode на любом тире; `sceptic` включает sceptic-проход (раздел 8) на любом тире.
-- **T0:** не запускай агентов/консультантов. Сделай лёгкий проход сам (Opus): бегло проверь non-code на грубые ошибки (битый JSON/YAML, очевидные опечатки в конфигах) и выдай КОРОТКИЙ отчёт с классификацией и пометкой «no code-impacting changes — full panel skipped (override: `deep`)». Не молчи о пропущенном.
+Modifiers on top of the tier:
+- the `arch` flag adds architecture at any tier; tests are added only when test files are present in the diff.
+- `codex-only` removes opencode at any tier; `sceptic` enables the sceptic pass (section 8) at any tier.
+- **T0:** do not run agents/consultants. Do a light pass yourself (Opus): quickly check the non-code for gross errors (broken JSON/YAML, obvious config typos) and emit a SHORT report with the classification and a note "no code-impacting changes — full panel skipped (override: `deep`)". Don't stay silent about what was skipped.
 
-Зафиксируй `TIER`, `DIMS` и набор консультантов — они управляют разделом 5. Покажи классификацию пользователю до запуска (одной строкой).
+Record `TIER`, `DIMS`, and the consultant set — they drive section 5. Show the classification to the user before launching (one line).
 
-## 4. Общий бриф (МИНИМАЛЬНЫЙ и НЕ наводящий)
-Один бриф для codex/opencode (Opus-агенты получают свой scope отдельно). Сохраняет независимость: **не** перечисляй конкретные гипотезы и **не** давай примеров находок. Бриф содержит:
-- Абсолютный путь к `$WD/diff.patch` + разрешение читать репо для контекста.
-- Если `CODE_GRAPH` есть — укажи консультантам использовать его CLI для поиска связей/влияния вместо широкого grep: codegraph `callers`/`callees`/`impact`/`node`/`search`, либо graphify `explain`/`path`/`query` (матчинг подстрочный, без синонимов). Граф НЕ строить; для новых символов из diff — сам diff.
-- **Только применимые измерения** из `DIMS` с краткой рубрикой каждого (1–3 строки сути):
-  - *architecture* — границы шаров/модулей, протекание абстракций, соответствие парадигмы, управляемость сложности (essential vs accidental).
-  - *quality* — конвенции проекта, дюпликация/reuse, AI-slop, целостность контрактов в production-коде, контроль скоупа.
-  - *impact* — корректность, регрессии и влияние на смежные/зависимые части, безопасность, безопасность миграций/деплоя.
-  - *tests* — защищают ли тесты критичное поведение, пропущенные сценарии, корректность mock/fixture, слой тестов.
-- Рубрику severity: **P0** блокер (неверное поведение, безопасность, потеря данных, краш, breaking change); **P1** важное, не блокер; **P2** мелочи.
-- Enum категорий: `security|correctness|perf|maintainability|tests|style`.
-- Требование выдать находки строго по схеме (см. ниже), каждой проставить `dimension` из `DIMS`.
+## 4. Shared brief (MINIMAL and NON-leading)
+One brief for codex/opencode (the Opus agents get their scope separately). It preserves source independence: do **not** list concrete hypotheses and do **not** give finding examples. The brief contains:
+- The absolute path to `$WD/diff.patch` + permission to read the repo for context.
+- The output language for the review (from `lang`, default English).
+- If `CODE_GRAPH` is set — tell the consultants to use its CLI to find relationships/impact instead of broad grep: codegraph `callers`/`callees`/`impact`/`node`/`search`, or graphify `explain`/`path`/`query` (substring matching, no synonyms). Do not build the graph; for new symbols from the diff use the diff itself.
+- **Only the applicable dimensions** from `DIMS`, each with a short rubric (1–3 lines of essence):
+  - *architecture* — layer/module boundaries, abstraction leakage, paradigm fit, complexity manageability (essential vs accidental).
+  - *quality* — project conventions, duplication/reuse, AI-slop, contract alignment in production code, scope control.
+  - *impact* — correctness, regressions and effect on adjacent/dependent parts, security, migration/deploy safety.
+  - *tests* — whether tests protect critical behavior, missing scenarios, mock/fixture correctness, test layering.
+- The severity rubric: **P0** blocker (wrong behavior, security, data loss, crash, breaking change); **P1** important, not a blocker; **P2** minor.
+- The category enum: `security|correctness|perf|maintainability|tests|style`.
+- A requirement to emit findings strictly per the schema (below), each tagged with a `dimension` from `DIMS`.
 
-Схема находок (запиши в `$WD/findings.schema.json` для codex):
+Findings schema (write it to `$WD/findings.schema.json` for codex):
 ```json
 {
   "type": "object",
@@ -118,19 +118,19 @@ argument-hint: "[<PR-url|owner/repo#N|#N>] [sceptic] [codex-only] [arch] [deep|m
 }
 ```
 
-## 5. Запуск ревью (независимые источники, параллельно)
+## 5. Run reviews (independent sources, in parallel)
 
-**Opus-лана — dimension-агенты.** Для КАЖДОГО измерения из `DIMS` запусти соответствующего субагента через Task (можно параллельно, в одном сообщении):
+Run only what the tier assigns (section 3.5): T0 — neither agents nor consultants (short report); T1 — impact agent + codex; T2/T3 — assigned agents + codex + opencode. `arch`/`tests`/`codex-only`/`sceptic` apply as modifiers.
+
+**Opus lane — dimension agents.** For EACH dimension in `DIMS`, run the matching subagent via Task (in parallel, in one message):
 - architecture → `Task(subagent_type="arch-reviewer")`
 - quality → `Task(subagent_type="quality-reviewer")`
 - impact → `Task(subagent_type="impact-reviewer")`
 - tests → `Task(subagent_type="test-reviewer")`
-Примечание: при установке как плагин агенты могут быть namespaced — если bare-имя не резолвится, используй `consensus-review:arch-reviewer`, `consensus-review:quality-reviewer`, `consensus-review:impact-reviewer`, `consensus-review:test-reviewer`.
-Передай каждому: путь к `$WD/diff.patch`, `REPO`, режим (PR/uncommitted/diff-only). Их структурированный вывод — это твоя (Opus) доля находок, каждая уже несёт своё `dimension`.
+Note: when installed as a plugin the agents may be namespaced — if a bare name does not resolve, use `consensus-review:arch-reviewer`, `consensus-review:quality-reviewer`, `consensus-review:impact-reviewer`, `consensus-review:test-reviewer`.
+Pass each one: the path to `$WD/diff.patch`, `REPO`, the mode (PR/uncommitted/diff-only), and the output language (from `lang`). Their structured output is your (Opus) share of the findings, each already carrying its `dimension`.
 
-**Запускай только то, что назначено тиром (раздел 3.5):** T0 — ни агентов, ни консультантов (короткий отчёт); T1 — impact-агент + codex; T2/T3 — назначенные агенты + codex + opencode. `arch`/`tests`/`codex-only`/`sceptic` применяются как модификаторы.
-
-**codex-лана** и **opencode-лана** (для T1 — только codex; для T2/T3 — оба; при `codex-only` opencode опусти) — ОДНИМ foreground Bash-вызовом (один shell владеет обоими процессами → `wait` валиден; раздельные background-вызовы не годятся, состояние shell не сохраняется).
+**codex lane** and **opencode lane** (T1 — codex only; T2/T3 — both; with `codex-only` omit opencode) — as a SINGLE foreground Bash call (one shell owns both processes → `wait` is valid; separate background calls won't work, shell state does not persist between calls).
 ```bash
 timeout 240 codex exec -s read-only -C "$REPO" --skip-git-repo-check \
   --output-schema "$WD/findings.schema.json" -o "$WD/codex.json" "$BRIEF" </dev/null \
@@ -140,41 +140,41 @@ timeout 240 opencode run --format json --dir "$REPO" "$BRIEF_OC" \
 wait $C; codex_rc=$?      # 124 = timeout
 wait $O; opencode_rc=$?
 ```
-- codex: `</dev/null` обязателен (иначе виснет на stdin); diff — файлом, не stdin; `--json` не нужен (форму задаёт `--output-schema`, `-o` пишет финальное сообщение в файл).
-- opencode: `-m` опусти (дефолт тула). В `BRIEF_OC` добавь: «Выведи находки строго JSON-массивом по схеме между маркерами `===FINDINGS_START===` и `===FINDINGS_END===`».
+- codex: `</dev/null` is mandatory (otherwise it hangs on stdin); pass the diff as a file, not via stdin; `--json` not needed (the final message shape is set by `--output-schema`, and `-o` writes that final message to the file).
+- opencode: omit `-m` (tool default). In `BRIEF_OC` add: "Output the findings strictly as a JSON array per the schema between the markers `===FINDINGS_START===` and `===FINDINGS_END===`".
 
-## 6. Сбор и нормализация
-- dimension-агенты: возьми их структурированные находки, приведи к общей схеме (поле `dimension` уже известно по агенту), `source = opus`.
-- codex: прочитай `$WD/codex.json` (валидный JSON по схеме). `codex_rc`: 124 → `timeout`, ≠0 → `failed`.
-- opencode (если не codex-only): распарси `$WD/opencode.out` как JSONL → собери `part.text` ВСЕХ событий `type:"text"` по порядку → склей → возьми **последний** блок между маркерами. Не распарсилось — `unparseable`, сохрани raw.
-- Каждой находке проставь `source` (`opus`/`codex`/`opencode`) и `dimension`.
-- **Floor-кейс:** если все внешние консультанты недоступны/упали (при codex-only — если упал codex) — строй отчёт только из Opus dimension-агентов с пометкой «single-source (Opus-only)», не прерывайся.
+## 6. Collect and normalize
+- dimension agents: take their structured findings, normalize to the common schema (the `dimension` field is known from the agent), `source = opus`.
+- codex: read `$WD/codex.json` (valid JSON per schema). `codex_rc`: 124 → `timeout`, ≠0 → `failed`.
+- opencode (unless codex-only): parse `$WD/opencode.out` as JSONL → concatenate `part.text` from ALL `type:"text"` events in order → join → take the **last** block between the markers. If it can't be parsed — mark opencode `unparseable`, keep the raw output.
+- Tag every finding with `source` (`opus`/`codex`/`opencode`) and `dimension`.
+- **Floor case:** if all external consultants are unavailable/failed (with codex-only — if codex failed) — build the report from the Opus dimension agents only, with a "single-source (Opus-only)" warning; do not abort.
 
-## 7. Синтез консенсуса (ты — арбитр)
-- **Дедуп** пересечений по (file, окрестность line, смысл) — в т.ч. между разными источниками И между измерениями (одна и та же проблема может всплыть как impact и как quality — слей, оставь более точное `dimension`). При сомнении не склеивай, помечай related.
-- **Agreement-бейдж** `[opus|codex|opencode]` — кто нашёл (слитые дубликаты объединяют источники).
-- Назначь **финальную severity** по impact-рубрике (решение за тобой; согласие источников влияет на уверенность).
-- Minority/спорные (1 источник) сохраняй с аннотацией, не выкидывай молча.
+## 7. Consensus synthesis (you are the arbiter)
+- **Dedup** overlapping findings by (file, line neighborhood, meaning) — across sources AND across dimensions (the same problem may surface as both impact and quality — merge, keep the more precise `dimension`). When in doubt, don't merge; mark as related.
+- **Agreement badge** `[opus|codex|opencode]` — who found it (merged duplicates combine their sources).
+- Assign the **final severity** per the impact rubric (the decision is yours; source agreement influences confidence).
+- Keep minority/disputed findings (single source) with an annotation; never drop them silently.
 
-## 8. Sceptic-проход (только если sceptic ON)
-По умолчанию **Opus-only** (без повторного обращения к консультантам):
-- Пытайся **опровергнуть** каждую находку (нет `file:line`, нет конкретного сценария вреда, нет репро).
-- **P0-guard:** P0 **никогда** не дропается жёстко — максимум понижение с аннотацией `disputed: unverified` (в приложение minority). Дропать можно только P1/P2.
-- **Без молчаливых дропов:** каждый отброшенный/пониженный пункт логируй в приложении.
-- Выжившие → `survived skeptic`.
+## 8. Sceptic pass (only if sceptic ON)
+By default **Opus-only** (no extra round-trip to the consultants):
+- Try to **refute** each finding (no `file:line`, no concrete harm scenario, no repro).
+- **P0 guard:** a P0 is NEVER hard-dropped — the worst case is a downgrade with annotation (→ P1 `disputed: unverified`) in the minority appendix. Only P1/P2 may be dropped.
+- **No silent drops:** log every dropped/downgraded item in the report appendix (what and why).
+- Survivors → `survived skeptic`.
 
-## 9. Отчёт
-Отсортируй P0→P1→P2 (внутри — по agreement desc, затем по dimension/файлу). Вывод в терминал **и** файл `<cwd>/.omc/reviews/review-<slug>-<YYYY-MM-DD>.md` (создай каталог; для remote-PR diff-only — в `.omc/reviews/` текущего каталога).
+## 9. Report
+Write the report in the selected output language (`lang`, default English). Sort P0→P1→P2 (within a tier — by agreement desc, then dimension/file). Print to the terminal **and** save to `<cwd>/.reviews/review-<slug>-<YYYY-MM-DD>.md` (create the dir; for the remote-PR diff-only case write to the invoking repo's `.reviews/`).
 
-Формат:
+Format:
 ```
-# Consensus Review — <таргет: PR #N url | uncommitted in <repo>>
-base→head: <…> | дата: <…> | sceptic: ON/OFF | codex-only: ON/OFF
-Классификация: tier=<T0..T3> | эффективный код: <~N строк / M файлов> | non-code исключено: <K строк (.bru/lock/docs)> | blast: <isolated|local|wide> | основания: <кратко>
-Измерения: <architecture? quality impact tests?>  (применённые / пропущенные с причиной)
-Источники: codex=<ok|timeout|failed|unavailable>, opencode=<ok|…|unparseable|skipped>, opus=ok
-Код-граф: <codegraph|graphify|нет> (использован для навигации/blast-radius)
-Итого: P0=<n> P1=<n> P2=<n>
+# Consensus Review — <target: PR #N url | uncommitted in <repo>>
+base→head: <…> | date: <…> | sceptic: ON/OFF | codex-only: ON/OFF | lang: <en|ua>
+Classification: tier=<T0..T3> | effective code: <~N lines / M files> | non-code excluded: <K lines (.bru/lock/docs)> | blast: <isolated|local|wide> | basis: <short>
+Dimensions: <architecture? quality impact tests?>  (applied / skipped with reason)
+Sources: codex=<ok|timeout|failed|unavailable>, opencode=<ok|…|unparseable|skipped>, opus=ok
+Code graph: <codegraph|graphify|none> (used for navigation/blast-radius)
+Totals: P0=<n> P1=<n> P2=<n>
 
 ## P0
 ### <title>  `file:line`  [opus|codex|opencode]  (dimension/category)<, survived skeptic>
@@ -184,25 +184,25 @@ base→head: <…> | дата: <…> | sceptic: ON/OFF | codex-only: ON/OFF
 ## P1
 ## P2
 
-## Сводка по измерениям
-| Измерение | Статус | P0 | P1 | P2 |
+## Dimension summary
+| Dimension | Status | P0 | P1 | P2 |
 |---|---|---|---|---|
-| architecture | применено/пропущено(причина) | n | n | n |
+| architecture | applied/skipped(reason) | n | n | n |
 | quality | … | | | |
 | impact | … | | | |
-| tests | применено/пропущено(нет тестов) | | | |
+| tests | applied/skipped(no tests) | | | |
 
 ## Minority / Disputed
-<находки из 1 источника + пониженные/спорные, с аннотацией>
+<single-source findings + downgraded/disputed, with annotation>
 
 ## Dropped / Downgraded (sceptic)
-<что отброшено/понижено и почему — только при sceptic ON>
+<what was dropped/downgraded and why — only when sceptic ON>
 
-## Доступность источников
-<timeout/failed/unavailable/unparseable/skipped, diff-only режим и т.п.>
+## Source availability
+<timeout/failed/unavailable/unparseable/skipped, diff-only mode, etc.>
 ```
 
-## Жёсткие правила
-- **Read-only:** не редактируй код, не коммить, не пушь, не комменти PR, не запускай фиксы. Единственная запись — файл отчёта в `.omc/reviews/`.
-- Рабочие файлы — только в `$WD` (mktemp вне репо).
-- Никогда не «теряй» источник или измерение молча — пропуски и недоступность всегда в отчёте (раздел «Сводка по измерениям» и «Доступность источников»).
+## Hard rules
+- **Read-only:** do not edit code, commit, push, comment on the PR, or run fixes. The only write is the report file under `.reviews/`.
+- Working files only in `$WD` (mktemp outside the repo).
+- Never "lose" a source or dimension silently — skips and unavailability always appear in the report ("Dimension summary" and "Source availability" sections).
