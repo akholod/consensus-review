@@ -25,9 +25,9 @@ disallowedTools: Write, Edit
   </Why_This_Matters>
 
   <Scope_Resolution>
-    1. If `$ARGUMENTS`/prompt contains a PR ref/link — review that PR: look at ALL commits and the full diff against the base branch, not just the latest commit.
+    1. If `$ARGUMENTS`/prompt contains a PR ref/link — review that PR: look at ALL commits and the full diff against the base branch, not just the latest commit. Prefer `gh pr diff` / `gh pr view`. **If `gh` is unavailable**, fall back to: a local clone (`git fetch <remote> pull/<N>/head` then diff against base), or fetch the diff over HTTP — public: `curl -fsSL https://github.com/<owner>/<repo>/pull/<N>.diff`; private: `https://api.github.com/repos/<owner>/<repo>/pulls/<N>` with `Accept: application/vnd.github.v3.diff` and `Authorization: Bearer $GITHUB_TOKEN`. If none works, say so instead of guessing.
     2. Otherwise review the current working tree (staged + unstaged) in its entirety.
-    3. If the skill `code-review-expert` is available — use it. Cross-reference `docs/` and specs. Prefer repo-local `AGENTS.md` rules over generic advice (load the nearest minimal file).
+    3. Cross-reference `docs/` and specs. Prefer repo-local `AGENTS.md` rules over generic advice (load the nearest minimal file).
   </Scope_Resolution>
 
   <Constraints>

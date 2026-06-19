@@ -2,7 +2,7 @@
 
 Multi-model **consensus code review** for Claude Code. Opus acts as **arbiter** and merges its own review with two independent external consultants — [`codex`](https://github.com/openai/codex) and [`opencode`](https://opencode.ai) — across four dimensions (architecture / quality / impact / tests). It triages the change by size **and** blast-radius first (so a 2000-line dump of Bruno configs doesn't run the whole panel), ranks findings **P0–P2**, and supports a **sceptic** pass. Strictly **read-only** — the only write is a report under `.reviews/`.
 
-> **No `oh-my-claudecode` required.** This is a standalone plugin. The only hard needs are the external CLIs below. (If the built-in `code-review-expert` skill is present it's used opportunistically, but it's optional.)
+> **No `oh-my-claudecode` required.** This is a standalone plugin — the only hard needs are the external CLIs below. **`codegraph` is strongly recommended:** its `impact`/`callers` gives fast, precise blast-radius, which is a killer feature for review.
 
 ## Install
 
@@ -25,7 +25,7 @@ Marketplace = `crv`, plugin = `consensus-review`. Commands install namespaced (`
 | `codex` | for the codex lane (the baseline external consultant) | see openai/codex; `codex login` |
 | `opencode` | optional (skip with `codex-only`) | see opencode.ai |
 | `gh` | only for PR-by-URL/number mode | GitHub CLI, authenticated |
-| `codegraph` | **recommended** — its `impact`/`callers` powers fast, precise blast-radius | `npm i -g @colbymchenry/codegraph` then `codegraph init` |
+| `codegraph` | **strongly recommended** — its `impact`/`callers` powers fast, precise blast-radius | `npm i -g @colbymchenry/codegraph` then `codegraph init` |
 | `graphify` | optional — `explain`/`path` for module maps | `uv tool install graphifyy` (pip pkg is `graphifyy`) |
 
 Code graphs are **auto-detected and used, never built** by this plugin. None present → reviewers fall back to grep (absence is never a finding). Detection: `.codegraph/codegraph.db` / `graphify-out/graph.json`.

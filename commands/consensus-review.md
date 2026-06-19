@@ -28,6 +28,10 @@ Work dir **outside the repo**: `WD=$(mktemp -d)` (in `/tmp`, not under the repo 
 - `gh pr diff <target> [-R …] > "$WD/diff.patch"`
 - `gh pr view <target> [-R …] --json title,baseRefName,headRefName,url` (metadata only, **no** `body`).
 - `REPO` = the current clone if it matches the PR; otherwise **diff-only mode** (note it in the report).
+- **If `gh` is unavailable/unauthenticated** (first parse `owner/repo` + `N` from the URL or `owner/repo#N`):
+  1. If a local clone of that repo exists: `git fetch <remote> pull/<N>/head` then `git diff <baseRef>...FETCH_HEAD > "$WD/diff.patch"`.
+  2. Else fetch the diff over HTTP — public: `curl -fsSL "https://github.com/<owner>/<repo>/pull/<N>.diff" > "$WD/diff.patch"`; private: `curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3.diff" "https://api.github.com/repos/<owner>/<repo>/pulls/<N>" > "$WD/diff.patch"` (metadata from the `.../pulls/<N>` JSON when a token is set). This path is **diff-only** — note it.
+  3. If none works (bare `#N` with no remote, or no network) → stop and report that PR mode needs `gh`, a local clone, or a fetchable diff.
 
 **Uncommitted mode:**
 - `git diff HEAD > "$WD/diff.patch"`; untracked via `git status --porcelain`.
