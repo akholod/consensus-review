@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "consensus-review",
+  "version": "0.1.0",
+  "description": "Multi-model consensus code review (Opus arbiter + codex + opencode) across 4 dimensions with size/blast-radius triage, P0–P2 severity, sceptic mode, and code-graph awareness.",
+  "author": {
+    "name": "Andrii Kokhanevich",
+    "email": "andrey.kokhanevich@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "code-review",
+    "consensus",
+    "codex",
+    "opencode",
+    "multi-agent",
+    "review"
+  ],
+  "commands": "./commands/",
+  "agents": "./agents/"
+}
