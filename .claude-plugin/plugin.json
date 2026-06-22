@@ -18,6 +18,5 @@
     "multi-agent",
     "review"
   ],
-  "commands": "./commands/",
-  "agents": "./agents/"
+  "commands": "./commands/"
 }
