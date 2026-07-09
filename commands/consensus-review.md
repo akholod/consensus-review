@@ -1,6 +1,6 @@
 ---
 description: Consensus code review (Opus arbiter + codex + opencode) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; modes [sceptic] [codex-only]
-argument-hint: "[<PR-url|owner/repo#N|#N>] [sceptic|sceptic=strict] [codex-only] [arch] [deep|minimal] [lang=en|ua]"
+argument-hint: "[<PR-url|owner/repo#N|#N>] [no-sceptic|sceptic=strict] [codex-only] [arch] [deep|minimal] [lang=en|ua]"
 ---
 
 You are the **Opus arbiter** of a consensus review. Review runs by **dimensions** (what
@@ -13,7 +13,7 @@ Arguments: `$ARGUMENTS`
 
 ## 0. Parse arguments
 - A PR URL / `owner/repo#N` / `#N` in the args → **PR mode**. Otherwise → **uncommitted mode**.
-- `sceptic` (or `--sceptic`) → **sceptic ON**: an **independent verifier** refutes findings (section 8). `sceptic=strict` → additionally use codex + opencode as refuters with a majority vote.
+- **Sceptic is ON by default.** `no-sceptic` (or `--no-sceptic`) → disable the sceptic pass. `sceptic=strict` → additionally use codex + opencode as refuters with a majority vote. The independent verifier (section 8) only fires when there are P0/P1 findings, so trivial/clean reviews pay nothing.
 - `codex-only` (or `--codex-only`) → **codex-only ON**: opencode is not used (handy if it is not installed/authenticated).
 - `arch` (or `--arch`) → force the architecture dimension even if the change is not structural.
 - `deep` / `full` → force the maximum tier (full panel + both consultants), skipping auto-classification.
@@ -72,14 +72,14 @@ Goal — don't run the whole panel where it isn't warranted (e.g. a 2000-line PR
 
 | Tier | DIMS (Opus agents) | Consultants | Sceptic |
 |---|---|---|---|
-| T0 trivial | — (no full panel) | — | off |
-| T1 minimal | impact | codex | off |
-| T2 standard | impact + quality (+ tests if tests present) | codex + opencode | off |
-| T3 deep | impact + quality + architecture (+ tests if tests present) | codex + opencode | off (sceptic via flag) |
+| T0 trivial | — (no full panel) | — | — |
+| T1 minimal | impact | codex | on (P0/P1) |
+| T2 standard | impact + quality (+ tests if tests present) | codex + opencode | on (P0/P1) |
+| T3 deep | impact + quality + architecture (+ tests if tests present) | codex + opencode | on (P0/P1) |
 
 Modifiers on top of the tier:
 - the `arch` flag adds architecture at any tier; tests are added only when test files are present in the diff.
-- `codex-only` removes opencode at any tier; `sceptic` enables the sceptic pass (section 8) at any tier.
+- `codex-only` removes opencode at any tier; the sceptic pass (section 8) runs **by default** on any P0/P1 findings — `no-sceptic` disables it, `sceptic=strict` upgrades it.
 - **T0:** do not run agents/consultants. Do a light pass yourself (Opus): quickly check the non-code for gross errors (broken JSON/YAML, obvious config typos) and emit a SHORT report with the classification and a note "no code-impacting changes — full panel skipped (override: `deep`)". Don't stay silent about what was skipped.
 
 Record `TIER`, `DIMS`, and the consultant set — they drive section 5. Show the classification to the user before launching (one line).
@@ -126,7 +126,7 @@ Findings schema (write it to `$WD/findings.schema.json` for codex):
 
 ## 5. Run reviews (independent sources, in parallel)
 
-Run only what the tier assigns (section 3.5): T0 — neither agents nor consultants (short report); T1 — impact agent + codex; T2/T3 — assigned agents + codex + opencode. `arch`/`tests`/`codex-only`/`sceptic` apply as modifiers.
+Run only what the tier assigns (section 3.5): T0 — neither agents nor consultants (short report); T1 — impact agent + codex; T2/T3 — assigned agents + codex + opencode. `arch`/`tests`/`codex-only`/`no-sceptic`/`sceptic=strict` apply as modifiers.
 
 **Opus lane — dimension agents.** For EACH dimension in `DIMS`, run the matching subagent via Task (in parallel, in one message):
 - architecture → `Task(subagent_type="arch-reviewer")`
@@ -163,7 +163,7 @@ wait $O; opencode_rc=$?
 - Assign the **final severity** per the impact rubric (the decision is yours; source agreement influences confidence).
 - Keep minority/disputed findings (single source) with an annotation; never drop them silently.
 
-## 8. Sceptic pass (only if sceptic ON) — INDEPENDENT verification
+## 8. Sceptic pass (ON by default; skip only if `no-sceptic`) — INDEPENDENT verification
 To avoid confirmation bias, the sceptic pass is performed by an **independent verifier agent with fresh context** — NOT by you (the arbiter), and NOT by the agent that produced the finding. You only apply its verdicts.
 - Collect the P0/P1 findings (P2 isn't worth verifying). Spawn `finding-verifier` via Task (batched — pass the whole list in one call; split into a few calls if large), giving it ONLY: the path to `$WD/diff.patch`, `REPO`, and the findings (id, title, `file:line`, severity, dimension, claimed `failure_scenario`, source, rationale). Do NOT pass your synthesis reasoning. Namespaced fallback: `consensus-review:finding-verifier`.
 - `sceptic=strict`: additionally enlist codex and opencode as refuters (re-run each with an "argue why each finding is NOT real" brief) and take a **majority vote** across {finding-verifier, codex, opencode} per finding.
