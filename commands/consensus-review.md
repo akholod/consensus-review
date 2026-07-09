@@ -1,6 +1,6 @@
 ---
 description: Consensus code review (Opus arbiter + codex + opencode) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; modes [sceptic] [codex-only]
-argument-hint: "[<PR-url|owner/repo#N|#N>] [sceptic] [codex-only] [arch] [deep|minimal] [lang=en|ua]"
+argument-hint: "[<PR-url|owner/repo#N|#N>] [sceptic|sceptic=strict] [codex-only] [arch] [deep|minimal] [lang=en|ua]"
 ---
 
 You are the **Opus arbiter** of a consensus review. Review runs by **dimensions** (what
@@ -13,7 +13,7 @@ Arguments: `$ARGUMENTS`
 
 ## 0. Parse arguments
 - A PR URL / `owner/repo#N` / `#N` in the args → **PR mode**. Otherwise → **uncommitted mode**.
-- `sceptic` (or `--sceptic`) → **sceptic ON**.
+- `sceptic` (or `--sceptic`) → **sceptic ON**: an **independent verifier** refutes findings (section 8). `sceptic=strict` → additionally use codex + opencode as refuters with a majority vote.
 - `codex-only` (or `--codex-only`) → **codex-only ON**: opencode is not used (handy if it is not installed/authenticated).
 - `arch` (or `--arch`) → force the architecture dimension even if the change is not structural.
 - `deep` / `full` → force the maximum tier (full panel + both consultants), skipping auto-classification.
@@ -94,7 +94,7 @@ One brief for codex/opencode (the Opus agents get their scope separately). It pr
   - *quality* — project conventions, duplication/reuse, AI-slop, contract alignment in production code, scope control.
   - *impact* — correctness, regressions and effect on adjacent/dependent parts, security, migration/deploy safety.
   - *tests* — whether tests protect critical behavior, missing scenarios, mock/fixture correctness, test layering.
-- The severity rubric: **P0** blocker (wrong behavior, security, data loss, crash, breaking change); **P1** important, not a blocker; **P2** minor.
+- The severity rubric: **P0** blocker (wrong behavior, security, data loss, crash, breaking change); **P1** important, not a blocker; **P2** minor. **Evidence bar:** every P0/P1 must carry a concrete `failure_scenario` (specific input/state → wrong output/harm, or a genuinely reachable security/data path) and a `confidence`; without a concrete scenario, cap the finding at P2. Do not inflate severity; pure style/nitpicks are P2 only.
 - The category enum: `security|correctness|perf|maintainability|tests|style`.
 - A requirement to emit findings strictly per the schema (below), each tagged with a `dimension` from `DIMS`.
 
@@ -113,6 +113,8 @@ Findings schema (write it to `$WD/findings.schema.json` for codex):
         "dimension": {"type": "string", "enum": ["architecture","quality","impact","tests"]},
         "category": {"type": "string", "enum": ["security","correctness","perf","maintainability","tests","style"]},
         "rationale": {"type": "string"},
+        "failure_scenario": {"type": "string"},
+        "confidence": {"type": "string", "enum": ["low","medium","high"]},
         "suggested_fix": {"type": "string"}
       },
       "required": ["title","file","severity","dimension","rationale"]
@@ -155,17 +157,22 @@ wait $O; opencode_rc=$?
 - **Floor case:** if all external consultants are unavailable/failed (with codex-only — if codex failed) — build the report from the Opus dimension agents only, with a "single-source (Opus-only)" warning; do not abort.
 
 ## 7. Consensus synthesis (you are the arbiter)
+- **You do NOT author findings yourself.** Findings come only from the independent dimension agents + codex + opencode (each a separate context). You merge/dedup/rank; you never grade your own review — the sceptic pass (§8) is run by a separate independent verifier to avoid confirmation bias.
 - **Dedup** overlapping findings by (file, line neighborhood, meaning) — across sources AND across dimensions (the same problem may surface as both impact and quality — merge, keep the more precise `dimension`). When in doubt, don't merge; mark as related.
 - **Agreement badge** `[opus|codex|opencode]` — who found it (merged duplicates combine their sources).
 - Assign the **final severity** per the impact rubric (the decision is yours; source agreement influences confidence).
 - Keep minority/disputed findings (single source) with an annotation; never drop them silently.
 
-## 8. Sceptic pass (only if sceptic ON)
-By default **Opus-only** (no extra round-trip to the consultants):
-- Try to **refute** each finding (no `file:line`, no concrete harm scenario, no repro).
-- **P0 guard:** a P0 is NEVER hard-dropped — the worst case is a downgrade with annotation (→ P1 `disputed: unverified`) in the minority appendix. Only P1/P2 may be dropped.
-- **No silent drops:** log every dropped/downgraded item in the report appendix (what and why).
-- Survivors → `survived skeptic`.
+## 8. Sceptic pass (only if sceptic ON) — INDEPENDENT verification
+To avoid confirmation bias, the sceptic pass is performed by an **independent verifier agent with fresh context** — NOT by you (the arbiter), and NOT by the agent that produced the finding. You only apply its verdicts.
+- Collect the P0/P1 findings (P2 isn't worth verifying). Spawn `finding-verifier` via Task (batched — pass the whole list in one call; split into a few calls if large), giving it ONLY: the path to `$WD/diff.patch`, `REPO`, and the findings (id, title, `file:line`, severity, dimension, claimed `failure_scenario`, source, rationale). Do NOT pass your synthesis reasoning. Namespaced fallback: `consensus-review:finding-verifier`.
+- `sceptic=strict`: additionally enlist codex and opencode as refuters (re-run each with an "argue why each finding is NOT real" brief) and take a **majority vote** across {finding-verifier, codex, opencode} per finding.
+- Apply the verdicts:
+  - `refuted` → drop (P1/P2, logged) or, for P0, move to **Unverified — needs confirmation** with the refutation reason.
+  - `unconfirmed` → downgrade; single-source-unconfirmed → **Unconfirmed (single-source)**; a P0 → **Unverified — needs confirmation** (not counted in Totals P0).
+  - `confirmed` → keep; mark `survived skeptic` and cite the verifier's evidence.
+- **P0 is never silently dropped** — it is either `confirmed` (stays P0, with evidence) or moved to the Unverified bucket with a reason.
+- **No silent drops:** log every drop/downgrade/move together with the verifier verdict.
 
 ## 9. Report
 Write the report in the selected output language (`lang`, default English). Sort P0→P1→P2 (within a tier — by agreement desc, then dimension/file). Print to the terminal **and** save to `<cwd>/.reviews/review-<slug>-<YYYY-MM-DD>.md` (create the dir; for the remote-PR diff-only case write to the invoking repo's `.reviews/`).
@@ -196,11 +203,14 @@ Totals: P0=<n> P1=<n> P2=<n>
 | impact | … | | | |
 | tests | applied/skipped(no tests) | | | |
 
-## Minority / Disputed
-<single-source findings + downgraded/disputed, with annotation>
+## Unconfirmed (single-source)
+<findings from only one of opus/codex/opencode not independently grounded (populated more aggressively under sceptic); with annotation>
+
+## Unverified — needs confirmation
+<P0s whose failure scenario was not concretely grounded (sceptic) — NOT counted as confirmed P0 in Totals>
 
 ## Dropped / Downgraded (sceptic)
-<what was dropped/downgraded and why — only when sceptic ON>
+<dropped P1/P2 + downgrades, each with the reason — only when sceptic ON>
 
 ## Source availability
 <timeout/failed/unavailable/unparseable/skipped, diff-only mode, etc.>

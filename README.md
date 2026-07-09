@@ -34,7 +34,7 @@ Code graphs are **auto-detected and used, never built** by this plugin. None pre
 
 | Command | Purpose |
 |---------|---------|
-| `/consensus-review [<PR>] [sceptic] [codex-only] [arch] [deep\|minimal] [lang=en\|ua]` | Orchestrated consensus review with triage |
+| `/consensus-review [<PR>] [sceptic\|sceptic=strict] [codex-only] [arch] [deep\|minimal] [lang=en\|ua]` | Orchestrated consensus review with triage |
 | `/impact-review [<scope>]` | Correctness + regressions + adjacent parts + security/migrations |
 | `/quality-review [<scope>]` | Maintainability, conventions, AI-slop, duplication, contracts |
 | `/test-review [<scope>]` | Test quality, mock/fixture drift, critical-flow coverage |
@@ -47,7 +47,8 @@ Code graphs are **auto-detected and used, never built** by this plugin. None pre
 
 | Flag | Effect |
 |------|--------|
-| `sceptic` | Adversarial pass that tries to refute findings (P0s are never silently dropped — only downgraded with a logged reason) |
+| `sceptic` | An **independent verifier** (fresh context, not the reviewers or the arbiter) refutes each P0/P1 with evidence; unconfirmed findings move to Unconfirmed/Unverified buckets; P0s never silently dropped |
+| `sceptic=strict` | Also enlists codex + opencode as refuters and takes a majority vote per finding |
 | `codex-only` | Use only codex as the external consultant (skip opencode) |
 | `arch` | Force the architecture dimension even if the change isn't structural |
 | `deep` / `full` | Force the full panel + both consultants (skip triage) |
@@ -68,7 +69,7 @@ Code graphs are **auto-detected and used, never built** by this plugin. None pre
 
 3. **Review** — applicable dimension agents run read-only (Opus lane); codex + opencode each review independently from a minimal, non-leading brief. All three may use the code graph for navigation.
 4. **Consensus** — Opus dedups, tags each finding with `dimension` + an agreement badge `[opus|codex|opencode]`, assigns final **P0** (blocker) / **P1** (important) / **P2** (minor).
-5. **Sceptic** (optional) — Opus-only refutation; P0s protected; all drops logged.
+5. **Sceptic** (optional) — an **independent verifier agent** (fresh context, separate from the reviewers *and* the arbiter, so it can't rubber-stamp its own findings) refutes each P0/P1 with evidence; `sceptic=strict` adds a codex+opencode majority vote. P0s are never silently dropped; unconfirmed findings move to explicit buckets; all drops logged.
 6. **Report** — terminal + `<cwd>/.reviews/review-<slug>-<date>.md` with classification header, per-dimension summary, minority/disputed + dropped appendices, source availability.
 
 ## Notes
