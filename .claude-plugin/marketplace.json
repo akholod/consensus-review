@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "crv",
-  "description": "Consensus code-review plugin for Claude Code (Opus + codex + opencode).",
+  "description": "Consensus code-review plugin for Claude Code (Opus + codex, optional pi advisor).",
   "owner": {
     "name": "Andrii Kokhanevich",
     "email": "andrey.kokhanevich@gmail.com"
@@ -10,18 +10,18 @@
     {
       "name": "consensus-review",
       "description": "Multi-model consensus code review across architecture/quality/impact/tests with triage, P0–P2, sceptic mode, and code-graph awareness.",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "source": "./",
       "category": "productivity",
       "tags": [
         "code-review",
         "consensus",
         "codex",
-        "opencode",
+        "pi",
         "multi-agent",
         "review"
       ]
     }
   ],
-  "version": "0.3.0"
+  "version": "0.4.0"
 }

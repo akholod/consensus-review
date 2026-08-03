@@ -1,11 +1,12 @@
 ---
-description: Consensus code review (Opus arbiter + codex + opencode) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; modes [sceptic] [codex-only]
-argument-hint: "[<PR-url|owner/repo#N|#N>] [no-sceptic|sceptic=strict] [codex-only] [arch] [deep|minimal] [lang=en|ua]"
+description: Consensus code review (Opus arbiter + codex, optional pi advisor) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; modes [sceptic] [extra-advisor]
+argument-hint: "[<PR-url|owner/repo#N|#N>] [no-sceptic|sceptic=strict] [extra-advisor[=<model>]] [arch] [deep|minimal] [lang=en|ua]"
 ---
 
 You are the **Opus arbiter** of a consensus review. Review runs by **dimensions** (what
-to check) using **independent** reviewers (who checks): your dimension agents + `codex` +
-`opencode`. Merge everything into a single consensus report with P0–P2 findings.
+to check) using **independent** reviewers (who checks): your dimension agents + `codex`,
+plus the optional extra advisor `pi` ([pi.dev](https://pi.dev)) when asked for.
+Merge everything into a single consensus report with P0–P2 findings.
 This is a **read-only** review: do not fix, commit, push, or comment on the PR.
 The only write is the markdown report file.
 
@@ -13,10 +14,12 @@ Arguments: `$ARGUMENTS`
 
 ## 0. Parse arguments
 - A PR URL / `owner/repo#N` / `#N` in the args → **PR mode**. Otherwise → **uncommitted mode**.
-- **Sceptic is ON by default.** `no-sceptic` (or `--no-sceptic`) → disable the sceptic pass. `sceptic=strict` → additionally use codex + opencode as refuters with a majority vote. The independent verifier (section 8) only fires when there are P0/P1 findings, so trivial/clean reviews pay nothing.
-- `codex-only` (or `--codex-only`) → **codex-only ON**: opencode is not used (handy if it is not installed/authenticated).
+- **Sceptic is ON by default.** `no-sceptic` (or `--no-sceptic`) → disable the sceptic pass. `sceptic=strict` → additionally use the consultants as refuters with a majority vote. The independent verifier (section 8) only fires when there are P0/P1 findings, so trivial/clean reviews pay nothing.
+- **`codex` is the only consultant by default.** `extra-advisor` (or `--extra-advisor`) → **EXTRA=on**: also run `pi` as a second, independent consultant. Optional model: `extra-advisor=<model>` (e.g. `extra-advisor=anthropic/claude-sonnet-4-5`, `extra-advisor=sonnet:high`, `extra-advisor=gemini-2.5-pro`) → passed to `pi --model`. Without a model, pi uses its configured default.
+  - **Independence check:** the value of a second consultant is a *different* model. If pi's resolved model is the same engine codex runs (`openai-codex` / `gpt-5.x`), the extra lane adds little — say so in the report (section 9) and suggest `extra-advisor=<other-model>`. pi reports its own `provider`/`model` in the JSON output, so read it from there rather than guessing.
+- `codex-only` (or `--codex-only`) is a **legacy no-op** — codex-only is now the default; accept it silently.
 - `arch` (or `--arch`) → force the architecture dimension even if the change is not structural.
-- `deep` / `full` → force the maximum tier (full panel + both consultants), skipping auto-classification.
+- `deep` / `full` → force the maximum tier (full panel + every enabled consultant), skipping auto-classification. It does **not** imply `extra-advisor` — combine them if you want pi too.
 - `minimal` → force the minimal tier (impact + codex), skipping auto-classification.
 - `lang=en|ua` → output language for the review. **Default `en`** (English). `lang=ua` → Ukrainian. Code identifiers, paths, and technical terms always stay in their original form. Pass the chosen language to the dimension agents and into the consultant brief.
 
@@ -39,7 +42,7 @@ Work dir **outside the repo**: `WD=$(mktemp -d)` (in `/tmp`, not under the repo 
 - `REPO` = the root of the current repository.
 
 ## 2. Pre-flight health-check
-`codex --version`; if **codex-only OFF** — also `opencode --version`. An unavailable tool is marked `unavailable` and its lane is skipped (don't wait for the timeout). With codex-only, opencode is not checked (status: `skipped (codex-only)`).
+`codex --version`; if **EXTRA is on** — also `pi --version`. An unavailable tool is marked `unavailable` and its lane is skipped (don't wait for the timeout). Without `extra-advisor`, pi is not checked (status: `skipped (no extra-advisor)`).
 
 **Code graph (if the review runs in the project dir).** Check for a prebuilt code graph: `.codegraph/codegraph.db` (codegraph) or `graphify-out/graph.json` (graphify). If present — set `CODE_GRAPH=codegraph|graphify` and use it downstream (triage blast-radius + consultant brief + the dimension agents pick it up themselves). **Detect-and-use only; do NOT build the graph** (building graphify costs tokens). No graph → plain grep, that's fine.
 
@@ -74,21 +77,22 @@ Goal — don't run the whole panel where it isn't warranted (e.g. a 2000-line PR
 |---|---|---|---|
 | T0 trivial | — (no full panel) | — | — |
 | T1 minimal | impact | codex | on (P0/P1) |
-| T2 standard | impact + quality (+ tests if tests present) | codex + opencode | on (P0/P1) |
-| T3 deep | impact + quality + architecture (+ tests if tests present) | codex + opencode | on (P0/P1) |
+| T2 standard | impact + quality (+ tests if tests present) | codex | on (P0/P1) |
+| T3 deep | impact + quality + architecture (+ tests if tests present) | codex | on (P0/P1) |
 
 Modifiers on top of the tier:
 - the `arch` flag adds architecture at any tier; tests are added only when test files are present in the diff.
-- `codex-only` removes opencode at any tier; the sceptic pass (section 8) runs **by default** on any P0/P1 findings — `no-sceptic` disables it, `sceptic=strict` upgrades it.
+- `extra-advisor` adds pi as a second consultant at any tier (including T1; not T0 — T0 runs nothing).
+- the sceptic pass (section 8) runs **by default** on any P0/P1 findings — `no-sceptic` disables it, `sceptic=strict` upgrades it.
 - **T0:** do not run agents/consultants. Do a light pass yourself (Opus): quickly check the non-code for gross errors (broken JSON/YAML, obvious config typos) and emit a SHORT report with the classification and a note "no code-impacting changes — full panel skipped (override: `deep`)". Don't stay silent about what was skipped.
 
 Record `TIER`, `DIMS`, and the consultant set — they drive section 5. Show the classification to the user before launching (one line).
 
 ## 4. Shared brief (MINIMAL and NON-leading)
-One brief for codex/opencode (the Opus agents get their scope separately). It preserves source independence: do **not** list concrete hypotheses and do **not** give finding examples. The brief contains:
+One brief for the consultants (codex, and pi when EXTRA is on; the Opus agents get their scope separately). It preserves source independence: do **not** list concrete hypotheses and do **not** give finding examples. The brief contains:
 - The absolute path to `$WD/diff.patch` + permission to read the repo for context.
 - The output language for the review (from `lang`, default English).
-- If `CODE_GRAPH` is set — tell the consultants to use its CLI to find relationships/impact instead of broad grep: codegraph `callers`/`callees`/`impact`/`node`/`search`, or graphify `explain`/`path`/`query` (substring matching, no synonyms). Do not build the graph; for new symbols from the diff use the diff itself.
+- If `CODE_GRAPH` is set — tell **codex** to use its CLI to find relationships/impact instead of broad grep: codegraph `callers`/`callees`/`impact`/`node`/`search`, or graphify `explain`/`path`/`query` (substring matching, no synonyms). Do not build the graph; for new symbols from the diff use the diff itself. **pi runs without a shell** (read-only toolset, section 5) — do not tell it to run graph CLIs; it navigates with read/grep/find/ls.
 - **Only the applicable dimensions** from `DIMS`, each with a short rubric (1–3 lines of essence):
   - *architecture* — layer/module boundaries, abstraction leakage, paradigm fit, complexity manageability (essential vs accidental).
   - *quality* — project conventions, duplication/reuse, AI-slop, contract alignment in production code, scope control.
@@ -126,7 +130,7 @@ Findings schema (write it to `$WD/findings.schema.json` for codex):
 
 ## 5. Run reviews (independent sources, in parallel)
 
-Run only what the tier assigns (section 3.5): T0 — neither agents nor consultants (short report); T1 — impact agent + codex; T2/T3 — assigned agents + codex + opencode. `arch`/`tests`/`codex-only`/`no-sceptic`/`sceptic=strict` apply as modifiers.
+Run only what the tier assigns (section 3.5): T0 — neither agents nor consultants (short report); T1 — impact agent + codex; T2/T3 — assigned agents + codex. `arch`/`tests`/`extra-advisor`/`no-sceptic`/`sceptic=strict` apply as modifiers.
 
 **Opus lane — dimension agents.** For EACH dimension in `DIMS`, run the matching subagent via Task (in parallel, in one message):
 - architecture → `Task(subagent_type="arch-reviewer")`
@@ -136,37 +140,47 @@ Run only what the tier assigns (section 3.5): T0 — neither agents nor consulta
 Note: when installed as a plugin the agents may be namespaced — if a bare name does not resolve, use `consensus-review:arch-reviewer`, `consensus-review:quality-reviewer`, `consensus-review:impact-reviewer`, `consensus-review:test-reviewer`.
 Pass each one: the path to `$WD/diff.patch`, `REPO`, the mode (PR/uncommitted/diff-only), and the output language (from `lang`). Their structured output is your (Opus) share of the findings, each already carrying its `dimension`.
 
-**codex lane** and **opencode lane** (T1 — codex only; T2/T3 — both; with `codex-only` omit opencode) — as a SINGLE foreground Bash call (one shell owns both processes → `wait` is valid; separate background calls won't work, shell state does not persist between calls).
+**codex lane** (always) and **pi lane** (only with `extra-advisor`) — as a SINGLE foreground Bash call (one shell owns both processes → `wait` is valid; separate background calls won't work, shell state does not persist between calls).
 ```bash
 timeout 240 codex exec -s read-only -C "$REPO" --skip-git-repo-check \
   --output-schema "$WD/findings.schema.json" -o "$WD/codex.json" "$BRIEF" </dev/null \
   > "$WD/codex.log" 2>&1 & C=$!
-timeout 240 opencode run --format json --dir "$REPO" "$BRIEF_OC" \
-  > "$WD/opencode.out" 2>&1 & O=$!
+P=""                      # pi lane runs ONLY with extra-advisor — never start it otherwise
+if [ "$EXTRA" = on ]; then
+  # add --model "$EXTRA_MODEL" only when extra-advisor=<model> was given
+  ( cd "$REPO" && timeout 240 pi -p --mode json --tools read,grep,find,ls \
+      ${EXTRA_MODEL:+--model "$EXTRA_MODEL"} "$BRIEF_PI" </dev/null ) \
+    > "$WD/pi.out" 2>&1 & P=$!
+fi
 wait $C; codex_rc=$?      # 124 = timeout
-wait $O; opencode_rc=$?
+if [ -n "$P" ]; then wait $P; pi_rc=$?; fi
 ```
 - codex: `</dev/null` is mandatory (otherwise it hangs on stdin); pass the diff as a file, not via stdin; `--json` not needed (the final message shape is set by `--output-schema`, and `-o` writes that final message to the file).
-- opencode: omit `-m` (tool default). In `BRIEF_OC` add: "Output the findings strictly as a JSON array per the schema between the markers `===FINDINGS_START===` and `===FINDINGS_END===`".
+- pi: has **no `--dir`/`-C` flag** — run it inside `( cd "$REPO" && … )` so the subshell's cwd doesn't leak into the rest of the call. `-p` = non-interactive, `--mode json` = JSONL events on stdout.
+- pi read-only enforcement is the **toolset**: `--tools read,grep,find,ls` (no `edit`, no `write`, no `bash`) — pi has no sandbox flag, so never add `bash` here. `$WD` is outside the repo, so also pass the diff **inline in the brief** or via `@` (`pi @"$WD/diff.patch" …`) rather than relying on the path being readable from the repo cwd — `read` resolves relative to cwd but accepts absolute paths, so the absolute `$WD/diff.patch` path in the brief is fine.
+- pi has no output-schema flag. In `$BRIEF_PI` add: "Output the findings strictly as a JSON array per the schema between the markers `===FINDINGS_START===` and `===FINDINGS_END===`".
 
 ## 6. Collect and normalize
 - dimension agents: take their structured findings, normalize to the common schema (the `dimension` field is known from the agent), `source = opus`.
 - codex: read `$WD/codex.json` (valid JSON per schema). `codex_rc`: 124 → `timeout`, ≠0 → `failed`.
-- opencode (unless codex-only): parse `$WD/opencode.out` as JSONL → concatenate `part.text` from ALL `type:"text"` events in order → join → take the **last** block between the markers. If it can't be parsed — mark opencode `unparseable`, keep the raw output.
-- Tag every finding with `source` (`opus`/`codex`/`opencode`) and `dimension`.
-- **Floor case:** if all external consultants are unavailable/failed (with codex-only — if codex failed) — build the report from the Opus dimension agents only, with a "single-source (Opus-only)" warning; do not abort.
+- pi (only with `extra-advisor`): parse `$WD/pi.out` as JSONL. The final answer is the last assistant message — take the `agent_end` event (or the last `turn_end`) and concatenate its text parts:
+  `jq -r 'select(.type=="agent_end") | .messages[-1].content[] | select(.type=="text") | .text' "$WD/pi.out"`
+  Then take the **last** block between the markers. `pi_rc`: 124 → `timeout`, ≠0 → `failed`; markers missing/unparseable → `unparseable`, keep the raw output.
+  Also read pi's actual model from the same events (`.message.provider` / `.message.model`) — report it in section 9 and apply the independence check from section 0.
+- Tag every finding with `source` (`opus`/`codex`/`pi`) and `dimension`.
+- **Floor case:** if all external consultants are unavailable/failed — build the report from the Opus dimension agents only, with a "single-source (Opus-only)" warning; do not abort.
 
 ## 7. Consensus synthesis (you are the arbiter)
-- **You do NOT author findings yourself.** Findings come only from the independent dimension agents + codex + opencode (each a separate context). You merge/dedup/rank; you never grade your own review — the sceptic pass (§8) is run by a separate independent verifier to avoid confirmation bias.
+- **You do NOT author findings yourself.** Findings come only from the independent dimension agents + codex (+ pi) — each a separate context. You merge/dedup/rank; you never grade your own review — the sceptic pass (§8) is run by a separate independent verifier to avoid confirmation bias.
 - **Dedup** overlapping findings by (file, line neighborhood, meaning) — across sources AND across dimensions (the same problem may surface as both impact and quality — merge, keep the more precise `dimension`). When in doubt, don't merge; mark as related.
-- **Agreement badge** `[opus|codex|opencode]` — who found it (merged duplicates combine their sources).
+- **Agreement badge** `[opus|codex|pi]` — who found it (merged duplicates combine their sources).
 - Assign the **final severity** per the impact rubric (the decision is yours; source agreement influences confidence).
 - Keep minority/disputed findings (single source) with an annotation; never drop them silently.
 
 ## 8. Sceptic pass (ON by default; skip only if `no-sceptic`) — INDEPENDENT verification
 To avoid confirmation bias, the sceptic pass is performed by an **independent verifier agent with fresh context** — NOT by you (the arbiter), and NOT by the agent that produced the finding. You only apply its verdicts.
 - Collect the P0/P1 findings (P2 isn't worth verifying). Spawn `finding-verifier` via Task (batched — pass the whole list in one call; split into a few calls if large), giving it ONLY: the path to `$WD/diff.patch`, `REPO`, and the findings (id, title, `file:line`, severity, dimension, claimed `failure_scenario`, source, rationale). Do NOT pass your synthesis reasoning. Namespaced fallback: `consensus-review:finding-verifier`.
-- `sceptic=strict`: additionally enlist codex and opencode as refuters (re-run each with an "argue why each finding is NOT real" brief) and take a **majority vote** across {finding-verifier, codex, opencode} per finding.
+- `sceptic=strict`: additionally enlist the consultants as refuters (re-run each with an "argue why each finding is NOT real" brief) and take a **majority vote** per finding across {finding-verifier, codex} — plus pi when `extra-advisor` is on. With an even voter set (2, i.e. no extra advisor) a **tie is not a confirmation**: treat it as `unconfirmed` and apply the downgrade rules below.
 - Apply the verdicts:
   - `refuted` → drop (P1/P2, logged) or, for P0, move to **Unverified — needs confirmation** with the refutation reason.
   - `unconfirmed` → downgrade; single-source-unconfirmed → **Unconfirmed (single-source)**; a P0 → **Unverified — needs confirmation** (not counted in Totals P0).
@@ -180,15 +194,15 @@ Write the report in the selected output language (`lang`, default English). Sort
 Format:
 ```
 # Consensus Review — <target: PR #N url | uncommitted in <repo>>
-base→head: <…> | date: <…> | sceptic: ON/OFF | codex-only: ON/OFF | lang: <en|ua>
+base→head: <…> | date: <…> | sceptic: ON/OFF | extra-advisor: ON (pi, <provider/model>)/OFF | lang: <en|ua>
 Classification: tier=<T0..T3> | effective code: <~N lines / M files> | non-code excluded: <K lines (.bru/lock/docs)> | blast: <isolated|local|wide> | basis: <short>
 Dimensions: <architecture? quality impact tests?>  (applied / skipped with reason)
-Sources: codex=<ok|timeout|failed|unavailable>, opencode=<ok|…|unparseable|skipped>, opus=ok
+Sources: codex=<ok|timeout|failed|unavailable>, pi=<ok|…|unparseable|skipped (no extra-advisor)>, opus=ok
 Code graph: <codegraph|graphify|none> (used for navigation/blast-radius)
 Totals: P0=<n> P1=<n> P2=<n>
 
 ## P0
-### <title>  `file:line`  [opus|codex|opencode]  (dimension/category)<, survived skeptic>
+### <title>  `file:line`  [opus|codex|pi]  (dimension/category)<, survived skeptic>
 <rationale>
 **Fix:** <suggested_fix>
 ...
@@ -204,7 +218,7 @@ Totals: P0=<n> P1=<n> P2=<n>
 | tests | applied/skipped(no tests) | | | |
 
 ## Unconfirmed (single-source)
-<findings from only one of opus/codex/opencode not independently grounded (populated more aggressively under sceptic); with annotation>
+<findings from only one of opus/codex/pi not independently grounded (populated more aggressively under sceptic); with annotation>
 
 ## Unverified — needs confirmation
 <P0s whose failure scenario was not concretely grounded (sceptic) — NOT counted as confirmed P0 in Totals>
@@ -213,7 +227,8 @@ Totals: P0=<n> P1=<n> P2=<n>
 <dropped P1/P2 + downgrades, each with the reason — only when sceptic ON>
 
 ## Source availability
-<timeout/failed/unavailable/unparseable/skipped, diff-only mode, etc.>
+<timeout/failed/unavailable/unparseable/skipped, diff-only mode, etc.
+ with extra-advisor: pi's resolved provider/model, plus a note when it is the same engine as codex (openai-codex/gpt-5.x) — the lane then adds little independence, suggest extra-advisor=<other-model>>
 ```
 
 ## Hard rules
