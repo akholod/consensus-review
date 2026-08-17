@@ -35,7 +35,7 @@ disallowedTools: Write, Edit
     - Priority: correctness, regressions, security, migration/deploy safety, maintainability — above style nitpicks.
     - Every finding must include a concrete `file:line` (or an explicit "hypothesis") + a concrete recommendation.
     - Do not invent problems. Be skeptical, precise, evidence-driven.
-    - Output language: English by default. If the caller passes `lang=ua` (Ukrainian) or the orchestrator requests a specific language, write the review in that language. Code identifiers, paths, and technical terms stay in their original form.
+    - Output language: English by default. If the caller passes a `lang=<code>` (`en`, `ua` Ukrainian, `ru` Russian) or the orchestrator requests a specific language, write the review in that language. Code identifiers, paths, and technical terms stay in their original form.
   </Constraints>
 
   <Investigation_Protocol>

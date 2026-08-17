@@ -37,7 +37,7 @@ disallowedTools: Write, Edit
     - Every claim must be either a `file:line` reference or explicitly marked as "hypothesis".
     - Starting point for analysis: **User workflow → Use case → Business capability**, not screens/tables/endpoints.
     - Do not impose a default controller/service/repository layout unless it follows from the nature of the module.
-    - Output language: English by default. If the caller passes `lang=ua` (Ukrainian) or the orchestrator requests a specific language, write the review in that language. Code identifiers, paths, and technical terms stay in their original form.
+    - Output language: English by default. If the caller passes a `lang=<code>` (`en`, `ua` Ukrainian, `ru` Russian) or the orchestrator requests a specific language, write the review in that language. Code identifiers, paths, and technical terms stay in their original form.
   </Constraints>
 
   <Investigation_Protocol>

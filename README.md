@@ -34,16 +34,18 @@ Code graphs are **auto-detected and used, never built** by this plugin. None pre
 
 | Command | Purpose |
 |---------|---------|
-| `/consensus-review [<PR>] [sceptic=off\|basic\|strict] [extra-advisor[=<model>]] [arch] [deep\|minimal] [lang=en\|ua]` | Orchestrated consensus review with triage |
+| `/consensus-review [<PR>] [deep\|minimal] [dims=<list>\|arch] [sceptic=off\|basic\|strict] [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped\|full\|off] [out=<path>\|no-file] [lang=en\|ua\|ru]` | Orchestrated consensus review with triage |
 | `/impact-review [<scope>]` | Correctness + regressions + adjacent parts + security/migrations |
 | `/quality-review [<scope>]` | Maintainability, conventions, AI-slop, duplication, contracts |
 | `/test-review [<scope>]` | Test quality, mock/fixture drift, critical-flow coverage |
 | `/arch-review [<scope>]` | Architectural impact of the change (diff-scoped) |
 | `/architecture-audit` | Full **whole-project** architecture audit (standalone, heavier) |
 
-`<scope>`/`<PR>`: empty = uncommitted working tree; a PR URL / `owner/repo#N` / `#N`; a git range (`main..HEAD`); a path/glob. Standalone commands also take `lang=en|ua`.
+`<scope>`/`<PR>`: empty = uncommitted working tree; a PR URL / `owner/repo#N` / `#N`; a git range (`main..HEAD`); a path/glob. Standalone commands also take `lang=en|ua|ru`.
 
 ### `consensus-review` flags
+
+Every flag is accepted with or without a leading `--`. Depth (`deep`/`minimal`) and lanes (`dims=`/`arch`) are **orthogonal axes**: `minimal arch` is a shallow architecture-aware pass, not a contradiction. Unrecognized tokens are ignored but echoed in the report header as `Ignored args`, so a typo never passes for a default.
 
 | Flag | Effect |
 |------|--------|
@@ -51,10 +53,15 @@ Code graphs are **auto-detected and used, never built** by this plugin. None pre
 | `sceptic=basic` | Verifier only — no refuter re-runs, no vote (the pre-0.5 default) |
 | `sceptic=off` | Disable the sceptic pass entirely (`no-sceptic` is a kept alias) |
 | `extra-advisor[=<model>]` | Add `pi` as a **second** external consultant (off by default — codex alone otherwise). `extra-advisor=<model>` picks pi's model, e.g. `extra-advisor=sonnet:high` |
-| `arch` | Force the architecture dimension even if the change isn't structural |
-| `deep` / `full` | Force the full panel + both consultants (skip triage) |
-| `minimal` | Force the minimal tier (impact + codex only) |
-| `lang=en\|ua` | Output language — English (default) or Ukrainian |
+| `arch` | Alias for `dims=+architecture` — force the architecture lane even if the change isn't structural |
+| `dims=<list>` | Set the lanes explicitly. Absolute (`dims=impact,quality`) replaces the tier's set; relative (`dims=+tests,-quality`) adjusts it. `dims=+tests` is the only way to review tests when the diff has no test files |
+| `deep` / `full` | Force the maximum tier (full panel, skip triage). Wins over `minimal` if both are given |
+| `minimal` | Force the minimal tier (shallow exploration budget) |
+| `timeout=<sec>` | Per-consultant wall clock for codex/pi. Default `240`, clamped to `[30, 1800]` — raise it on a large PR instead of losing the lane to a timeout |
+| `p2=grouped\|full\|off` | P2 presentation. `grouped` (default) shows 7 and rolls the rest up by theme; `full` lists all; `off` suppresses the body but keeps the count |
+| `out=<path>` | Report destination (directory or exact file). Default `<cwd>/.reviews/review-<slug>-<date>.md` |
+| `no-file` | Terminal output only — the run performs zero writes on disk |
+| `lang=en\|ua\|ru` | Output language — English (default), Ukrainian, or Russian |
 
 ## How it works
 

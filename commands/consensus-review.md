@@ -1,6 +1,6 @@
 ---
-description: Consensus code review (Opus arbiter + codex, optional pi advisor) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; strict sceptic by default; modes [sceptic=off|basic] [extra-advisor]
-argument-hint: "[<PR-url|owner/repo#N|#N>] [sceptic=off|basic|strict] [extra-advisor[=<model>]] [arch] [deep|minimal] [lang=en|ua]"
+description: Consensus code review (Opus arbiter + codex, optional pi advisor) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; strict sceptic by default; every flag also accepted with a leading --
+argument-hint: "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>|arch] [sceptic=off|basic|strict] [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped|full|off] [out=<path>|no-file] [lang=en|ua|ru]"
 ---
 
 You are the **Opus arbiter** of a consensus review. Review runs by **dimensions** (what
@@ -8,12 +8,29 @@ to check) using **independent** reviewers (who checks): your dimension agents + 
 plus the optional extra advisor `pi` ([pi.dev](https://pi.dev)) when asked for.
 Merge everything into a single consensus report with P0–P2 findings.
 This is a **read-only** review: do not fix, commit, push, or comment on the PR.
-The only write is the markdown report file.
+The only write is the markdown report file — and none at all with `no-file`.
 
 Arguments: `$ARGUMENTS`
 
 ## 0. Parse arguments
+
+**Flag syntax — one rule for all of them.** Every flag is accepted with or without a leading `--` (`arch` ≡ `--arch`, `dims=…` ≡ `--dims=…`); values attach with `=`, never a space; matching is case-insensitive. Do not special-case individual flags.
+
+**Unknown tokens are ignored but never swallowed.** Collect anything unrecognized and echo it in the report header as `Ignored args: <…>`. A typo like `sceptic=strct` or `dimz=impact` must surface — silently falling back to the default is how a user ends up believing they ran something they did not. (This is also where the retired `codex-only` flag now lands: codex-only is the default, so the flag has no meaning and is simply reported as ignored.)
+
+**Two orthogonal axes.** Depth and lanes are separate knobs, so most "conflicting" combinations are not conflicts at all:
+- **Depth** (`TIER`) — how much exploration each lane pays for: `minimal` | `deep`/`full` | auto-classified (default, §3).
+- **Lanes** (`DIMS`) — which dimensions run: `dims=…` | `arch` | derived from the tier (§3.5).
+
+Resolution rules, in full:
+- Within the depth axis only: if both `minimal` and `deep` are given, **`deep` wins** — an explicit escalation beats an explicit de-escalation — and the loser goes into `Ignored args` so the user sees which one applied.
+- Across the axes there is nothing to resolve. `minimal arch` is a legitimate request for a shallow architecture-aware pass (T1 exploration budget, lanes impact + architecture). `deep arch` makes `arch` a no-op, because T3 already includes architecture — report it as ignored rather than pretending it changed anything.
+
 - A PR URL / `owner/repo#N` / `#N` in the args → **PR mode**. Otherwise → **uncommitted mode**.
+- `deep` / `full` → force the maximum tier (full panel + every enabled consultant), skipping auto-classification. Does **not** imply `extra-advisor` — combine them if you want pi too.
+- `minimal` → force the minimal tier, skipping auto-classification.
+- `dims=<list>` → set the lanes explicitly, overriding what the tier would pick. **Absolute** form replaces the set (`dims=impact,quality`); **relative** form adjusts it (`dims=+tests,-quality`). Names: `architecture` (or `arch`), `quality`, `impact`, `tests` — comma-separated, no spaces. An absolute list that resolves to zero lanes is an error: say so and stop, rather than running a review with no reviewers. `dims=+tests` is the only way to get a test review when the diff itself contains no test files — the case where a change is covered by an existing suite it affects only indirectly.
+- `arch` → alias for `dims=+architecture`.
 - **Sceptic is ON and STRICT by default.** Canonical knob: `sceptic=off|basic|strict`, default `strict`.
   - `strict` (default) — the independent verifier **plus** the consultants re-run as refuters, with a majority vote per finding (§8).
   - `basic` — the independent verifier only: no refuter re-runs, no vote.
@@ -21,11 +38,11 @@ Arguments: `$ARGUMENTS`
   The pass only fires when there are P0/P1 findings, so trivial/clean reviews pay nothing at any setting. Strict costs one extra codex run on the reviews that do have P0/P1 — and note the vote arithmetic in §8: with the default two-voter set a tie is not a confirmation, so strict-by-default means findings need both voters to survive as stated.
 - **`codex` is the only consultant by default.** `extra-advisor` (or `--extra-advisor`) → **EXTRA=on**: also run `pi` as a second, independent consultant. Optional model: `extra-advisor=<model>` (e.g. `extra-advisor=anthropic/claude-sonnet-4-5`, `extra-advisor=sonnet:high`, `extra-advisor=gemini-2.5-pro`) → passed to `pi --model`. Without a model, pi uses its configured default.
   - **Independence check:** the value of a second consultant is a *different* model. If pi's resolved model is the same engine codex runs (`openai-codex` / `gpt-5.x`), the extra lane adds little — say so in the report (section 9) and suggest `extra-advisor=<other-model>`. pi reports its own `provider`/`model` in the JSON output, so read it from there rather than guessing.
-- `codex-only` (or `--codex-only`) is a **legacy no-op** — codex-only is now the default; accept it silently.
-- `arch` (or `--arch`) → force the architecture dimension even if the change is not structural.
-- `deep` / `full` → force the maximum tier (full panel + every enabled consultant), skipping auto-classification. It does **not** imply `extra-advisor` — combine them if you want pi too.
-- `minimal` → force the minimal tier (impact + codex), skipping auto-classification.
-- `lang=en|ua` → output language for the review. **Default `en`** (English). `lang=ua` → Ukrainian. Code identifiers, paths, and technical terms always stay in their original form. Pass the chosen language to the dimension agents and into the consultant brief.
+- `timeout=<sec>` → per-consultant wall clock for the codex and pi lanes. Default `240`, clamped to `[30, 1800]`. A lane that hits it is reported as `timeout` and its findings are lost, so raise this on a large PR instead of silently reviewing with one fewer source.
+- `p2=<mode>` → how P2 is presented in the report (§9). `grouped` (default) — up to 7 individually, the rest rolled up by theme. `full` — every P2 individually. `off` — omit the P2 body, but keep the count in `Totals` and one summary line, because a suppressed section must still be visibly suppressed.
+- `out=<path>` → where the report file goes. A value ending in `/`, or naming an existing directory, is treated as a directory and the default filename is used inside it; anything else is the exact file path. Default: `<cwd>/.reviews/review-<slug>-<YYYY-MM-DD>.md`.
+- `no-file` → do not write a report file at all, terminal output only. With this flag the review performs **zero** writes anywhere on disk (`$WD` under `/tmp` aside).
+- `lang=<code>` → output language for the review: `en` (default), `ua` (Ukrainian), `ru` (Russian). Code identifiers, paths, and technical terms always stay in their original form. Pass the chosen language to the dimension agents and into the consultant brief.
 
 ## 1. Resolve diff and context
 Work dir **outside the repo**: `WD=$(mktemp -d)` (in `/tmp`, not under the repo — otherwise it pollutes `git status`).
@@ -88,7 +105,7 @@ Goal — don't run the whole panel where it isn't warranted (e.g. a 2000-line PR
 | T3 deep | impact + quality + architecture (+ tests if tests present) | codex | strict (P0/P1) |
 
 Modifiers on top of the tier:
-- the `arch` flag adds architecture at any tier; tests are added only when test files are present in the diff.
+- `dims=` overrides the lanes at any tier (`arch` is the alias for `dims=+architecture`); without it, tests are added only when test files are present in the diff.
 - `extra-advisor` adds pi as a second consultant at any tier (including T1; not T0 — T0 runs nothing).
 - the sceptic pass (section 8) runs **strict by default** on any P0/P1 findings — `sceptic=basic` drops the refuter vote, `sceptic=off` (alias `no-sceptic`) disables it.
 - **T0:** do not run agents/consultants. Do a light pass yourself (Opus): quickly check the non-code for gross errors (broken JSON/YAML, obvious config typos) and emit a SHORT report with the classification and a note "no code-impacting changes — full panel skipped (override: `deep`)". Don't stay silent about what was skipped.
@@ -141,7 +158,7 @@ Findings schema (write it to `$WD/findings.schema.json` for codex) — **copy it
 
 ## 5. Run reviews (independent sources, in parallel)
 
-Run only what the tier assigns (section 3.5): T0 — neither agents nor consultants (short report); T1 — impact agent + codex; T2/T3 — assigned agents + codex. `arch`, `extra-advisor`, `sceptic=off|basic` and `deep`/`minimal` apply as modifiers. There is **no `tests` flag** — the tests dimension is added automatically whenever the diff contains test files.
+Run only what the tier assigns (section 3.5): T0 — neither agents nor consultants (short report); T1 — impact agent + codex; T2/T3 — assigned agents + codex. `dims=`/`arch`, `extra-advisor`, `sceptic=off|basic`, `timeout=` and `deep`/`minimal` apply as modifiers (§0). The tests dimension is added automatically whenever the diff contains test files — `dims=+tests` forces it when it does not.
 
 **Opus lane — dimension agents.** For EACH dimension in `DIMS`, run the matching subagent via Task (in parallel, in one message):
 - architecture → `Task(subagent_type="arch-reviewer")`
@@ -153,13 +170,14 @@ Pass each one: the path to `$WD/diff.patch`, `REPO`, the mode (PR/uncommitted/di
 
 **codex lane** (always) and **pi lane** (only with `extra-advisor`) — as a SINGLE foreground Bash call (one shell owns both processes → `wait` is valid; separate background calls won't work, shell state does not persist between calls).
 ```bash
-timeout 240 codex exec -s read-only -C "$REPO" --skip-git-repo-check \
+T=${TIMEOUT:-240}          # from timeout=<sec>, clamped to [30,1800]
+timeout "$T" codex exec -s read-only -C "$REPO" --skip-git-repo-check \
   --output-schema "$WD/findings.schema.json" -o "$WD/codex.json" "$BRIEF" </dev/null \
   > "$WD/codex.log" 2>&1 & C=$!
 P=""                      # pi lane runs ONLY with extra-advisor — never start it otherwise
 if [ "$EXTRA" = on ]; then
   # add --model "$EXTRA_MODEL" only when extra-advisor=<model> was given
-  ( cd "$REPO" && timeout 240 pi -p --mode json --tools read,grep,find,ls \
+  ( cd "$REPO" && timeout "$T" pi -p --mode json --tools read,grep,find,ls \
       ${EXTRA_MODEL:+--model "$EXTRA_MODEL"} "$BRIEF_PI" </dev/null ) \
     > "$WD/pi.out" 2>&1 & P=$!
 fi
@@ -200,12 +218,13 @@ To avoid confirmation bias, the sceptic pass is performed by an **independent ve
 - **No silent drops:** log every drop/downgrade/move together with the verifier verdict.
 
 ## 9. Report
-Write the report in the selected output language (`lang`, default English). Sort P0→P1→P2 (within a tier — by agreement desc, then dimension/file). Print to the terminal **and** save to `<cwd>/.reviews/review-<slug>-<YYYY-MM-DD>.md` (create the dir; for the remote-PR diff-only case write to the invoking repo's `.reviews/`).
+Write the report in the selected output language (`lang`, default English). Sort P0→P1→P2 (within a tier — by agreement desc, then dimension/file). Print to the terminal **and** save the file, unless `no-file` was given (terminal only, zero writes). Destination: `out=<path>` when set (directory value → default filename inside it; otherwise the exact path), else `<cwd>/.reviews/review-<slug>-<YYYY-MM-DD>.md` (create the dir; for the remote-PR diff-only case write to the invoking repo's `.reviews/`). State the destination — or "not written (`no-file`)" — in the last line of the terminal output.
 
 Format:
 ```
 # Consensus Review — <target: PR #N url | uncommitted in <repo>>
-base→head: <…> | date: <…> | sceptic: STRICT/BASIC/OFF | extra-advisor: ON (pi, <provider/model>)/OFF | lang: <en|ua>
+base→head: <…> | date: <…> | sceptic: STRICT/BASIC/OFF | extra-advisor: ON (pi, <provider/model>)/OFF | timeout: <sec> | p2: <grouped|full|off> | lang: <en|ua|ru>
+Ignored args: <unrecognized or overridden tokens, or "none">
 Classification: tier=<T0..T3> | effective code: <~N lines / M files> | non-code excluded: <K lines (.bru/lock/docs)> | blast: <isolated|local|wide> | basis: <short>
 Dimensions: <architecture? quality impact tests?>  (applied / skipped with reason)
 Sources: codex=<ok|timeout|failed: <reason from codex.log>|unavailable>, pi=<ok|…|unparseable|skipped (no extra-advisor)>, opus=ok
@@ -219,10 +238,12 @@ Totals: P0=<n> P1=<n> P2=<n>
 ...
 ## P1
 ## P2
-<Up to 7 entries individually, highest confidence first. Everything beyond that is grouped by theme, one line per theme:
- `- <theme> ×<N> — file:line, file:line, … (confidence: <low|medium|high>)`.
- `low`-confidence P2s always go into the grouped lines, never into the individual list.
- Grouping is presentation only: the count and every file must appear, so nothing is dropped silently.>
+<Per `p2=<mode>` (§0):
+ - `grouped` (default): up to 7 entries individually, highest confidence first; everything beyond that grouped by theme, one line each —
+   `- <theme> ×<N> — file:line, file:line, … (confidence: <low|medium|high>)`. `low`-confidence P2s always go to the grouped lines, never the individual list.
+ - `full`: every P2 individually, no grouping.
+ - `off`: no entries at all, just one line — `<N> P2 findings suppressed (p2=off)`.
+ In every mode this is presentation only: `Totals` keeps the true count, and in `grouped` every file still appears. Nothing is dropped silently.>
 
 ## Dimension summary
 | Dimension | Status | P0 | P1 | P2 |
@@ -247,6 +268,6 @@ Totals: P0=<n> P1=<n> P2=<n>
 ```
 
 ## Hard rules
-- **Read-only:** do not edit code, commit, push, comment on the PR, or run fixes. The only write is the report file under `.reviews/`.
+- **Read-only:** do not edit code, commit, push, comment on the PR, or run fixes. The only write is the report file (`.reviews/` by default, or `out=<path>`) — and with `no-file` there is no write at all.
 - Working files only in `$WD` (mktemp outside the repo).
 - Never "lose" a source or dimension silently — skips and unavailability always appear in the report ("Dimension summary" and "Source availability" sections).
