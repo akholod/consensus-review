@@ -62,14 +62,17 @@ Goal — don't run the whole panel where it isn't warranted (e.g. a 2000-line PR
 
 **3.3. Blast radius** — how much the change affects the rest of the code:
 - `wide` — touches dependency manifests, migrations, auth/permissions/security paths, public/exported API, shared/common/core/lib/packages modules, OR the changed modules have high fan-in. Estimate fan-in via the code graph when `CODE_GRAPH` is set: `codegraph impact <symbol>` / `codegraph callers <symbol>` or `graphify explain "<Symbol>"` / `graphify path`; otherwise `grep -r` over imports (fallback).
-- `isolated` — a new self-contained leaf file / test / config / doc with no consumers.
+- `isolated` — a new self-contained leaf file / test / config / doc with no consumers, **or** an edit confined to a single file whose changed symbols have no consumers outside it (module-private helpers, internal-only code). Check consumers before assuming `local` — "existing file" alone does not make a change `local`, and treating it that way keeps the cheap tier permanently unreachable.
 - otherwise `local`.
+- **high-risk paths** (a subset of `wide`, tracked separately): migrations, auth/permissions/security, dependency manifests. Their failure mode does not scale with line count, so 3.4 keeps them at the top tier at any size.
 
 **3.4. Assign a tier** (the `deep`/`minimal` flags override auto-classification):
 - **T0 trivial** — `none` code (non-code only).
 - **T1 minimal** — `small` + `isolated`.
-- **T2 standard** — `small`/`medium` + `local`, or `medium` + `isolated`.
-- **T3 deep** — `large`, OR `blast=wide` (at any size), OR a structural change.
+- **T2 standard** — `small`/`medium` + `local`, or `medium` + `isolated`, or `small` + `wide` when no high-risk path is touched.
+- **T3 deep** — `large`, OR a structural change, OR `wide` at `medium`+ size, OR — at any size — a **high-risk path** (migrations, auth/permissions/security, dependency manifests).
+
+**Proportionality (do not skip this reasoning).** Blast radius decides *which* lane you cannot skip; effective size decides *how many* lanes are worth paying for. A 20-line edit to a shared module needs consumer tracing (`impact`) — it does not need an architecture verdict, and a full panel there spends four independent Opus repo sweeps to re-read the same 20 lines. High-risk paths are the deliberate exception: a 3-line auth or migration change stays T3.
 
 **3.5. Tier → dimensions and sources:**
 
@@ -141,7 +144,7 @@ Run only what the tier assigns (section 3.5): T0 — neither agents nor consulta
 - impact → `Task(subagent_type="impact-reviewer")`
 - tests → `Task(subagent_type="test-reviewer")`
 Note: when installed as a plugin the agents may be namespaced — if a bare name does not resolve, use `consensus-review:arch-reviewer`, `consensus-review:quality-reviewer`, `consensus-review:impact-reviewer`, `consensus-review:test-reviewer`.
-Pass each one: the path to `$WD/diff.patch`, `REPO`, the mode (PR/uncommitted/diff-only), and the output language (from `lang`). Their structured output is your (Opus) share of the findings, each already carrying its `dimension`.
+Pass each one: the path to `$WD/diff.patch`, `REPO`, the mode (PR/uncommitted/diff-only), the output language (from `lang`), and **`TIER` with an exploration budget** — T1/T2 means "the diff plus its nearest context and direct consumers; do not sweep the repository", T3 means the full protocol. Each agent explores independently (that is what buys source independence), so an unbounded brief multiplies the same repo walk by the number of lanes. Their structured output is your (Opus) share of the findings, each already carrying its `dimension`.
 
 **codex lane** (always) and **pi lane** (only with `extra-advisor`) — as a SINGLE foreground Bash call (one shell owns both processes → `wait` is valid; separate background calls won't work, shell state does not persist between calls).
 ```bash
