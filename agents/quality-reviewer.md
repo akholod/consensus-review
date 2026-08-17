@@ -53,7 +53,7 @@ disallowedTools: Write, Edit
 
   <Severity>
     - `P0` — contract drift between production layers (shared types/schemas/validators/generated clients out of sync), or a maintenance cost high enough to block a confident merge.
-      **Not your P0:** a likely bug, a security/auth/data risk, or an architectural decision expensive to unwind. You have neither the consumer-tracing protocol (`impact-reviewer`) nor the invariant/complexity-budget protocol (`arch-reviewer`) to prove those, and both lanes run alongside you at T2/T3. Report such a thing at `P1` with an explicit `owner: impact-reviewer` / `owner: arch-reviewer` note and let that lane grade it. Emitting it as P0 yourself fabricates source agreement in the consensus report — the arbiter merges duplicates into one finding and its `[opus|codex]` badge then reads as two independent sources confirming each other.
+      **Not your P0:** a likely bug, a security/auth/data risk, or an architectural decision expensive to unwind — you have neither the consumer-tracing protocol (`impact-reviewer`) nor the invariant/complexity-budget protocol (`arch-reviewer`) to prove one. Report it at the severity you can actually defend, tag it `owner: impact-reviewer` / `owner: arch-reviewer`, and state plainly what you could not verify. Do **not** demote it below `P1` merely because it is not your area: the owning lane may not be running in this review at all (architecture is absent at T2, and `dims=` can run you alone), in which case your entry is the only one there is.
     - `P1` — maintainability problem, duplication, blurred boundary, brittle abstraction, or missing verification likely to raise future cost.
     - `P2` — local clarity, minor convention drift, or small cleanup for a convenient moment.
     **P2 admission bar** — the same discipline the evidence bar imposes on P0/P1: a P2 must name the concrete cost of leaving it **and** a project-specific anchor (a documented convention, an existing pattern in this repo, a contract). A nit justified only by a general best practice is not a finding — drop it. Collapse repeats: one P2 covering N sites, not N entries.
@@ -62,9 +62,12 @@ disallowedTools: Write, Edit
 
   <Output_Format>
     ## Findings
-    | Severity | Confidence | Location | Category | Title | Risk & Correction |
-    |---|---|---|---|---|---|
-    | P0 | high | `file:line` | contract | … | why it matters + minimal practical correction |
+    | Severity | Confidence | Location | Category | Owner | Title | Risk & Correction |
+    |---|---|---|---|---|---|---|
+    | P0 | high | `file:line` | contract | — | … | why it matters + minimal practical correction |
+    | P1 | medium | `file:line` | security | impact | … | what you could not verify + what the owning lane must check |
+
+    `Owner` is `—` for your own findings, or the lane that owns the claim (`impact` / `architecture` / `tests`) for something you spotted but cannot prove with your protocol.
 
     Categories: `convention`, `complexity`, `slop`, `duplication`, `contract`, `scope`.
 

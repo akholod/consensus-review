@@ -146,9 +146,10 @@ Findings schema (write it to `$WD/findings.schema.json` for codex) — **copy it
         "rationale": {"type": "string"},
         "failure_scenario": {"type": ["string","null"]},
         "confidence": {"type": "string", "enum": ["low","medium","high"]},
-        "suggested_fix": {"type": ["string","null"]}
+        "suggested_fix": {"type": ["string","null"]},
+        "owner": {"type": ["string","null"], "enum": ["architecture","quality","impact","tests",null]}
       },
-      "required": ["title","file","line","severity","dimension","category","rationale","failure_scenario","confidence","suggested_fix"]
+      "required": ["title","file","line","severity","dimension","category","rationale","failure_scenario","confidence","suggested_fix","owner"]
     }}
   },
   "required": ["findings"]
@@ -196,13 +197,14 @@ if [ -n "$P" ]; then wait $P; pi_rc=$?; fi
   `jq -r 'select(.type=="agent_end") | .messages[-1].content[] | select(.type=="text") | .text' "$WD/pi.out"`
   Then take the **last** block between the markers. `pi_rc`: 124 → `timeout`, ≠0 → `failed`; markers missing/unparseable → `unparseable`, keep the raw output.
   Also read pi's actual model from the same events (`.message.provider` / `.message.model`) — report it in section 9 and apply the independence check from section 0.
-- Tag every finding with `source` (`opus`/`codex`/`pi`) and `dimension`.
+- Tag every finding with `source` (`opus`/`codex`/`pi`) and `dimension`, and **preserve `owner`** when the reporting lane set it — normalizing it away is what turns the §7 owner rule into a no-op.
 - **Floor case:** if all external consultants are unavailable/failed — build the report from the Opus dimension agents only, with a "single-source (Opus-only)" warning; do not abort.
 
 ## 7. Consensus synthesis (you are the arbiter)
 - **You do NOT author findings yourself.** Findings come only from the independent dimension agents + codex (+ pi) — each a separate context. You merge/dedup/rank; you never grade your own review — the sceptic pass (§8) is run by a separate independent verifier to avoid confirmation bias.
 - **Dedup** overlapping findings by (file, line neighborhood, meaning) — across sources AND across dimensions (the same problem may surface as both impact and quality — merge, keep the more precise `dimension`). When in doubt, don't merge; mark as related.
-- **Agreement badge** `[opus|codex|pi]` — who found it (merged duplicates combine their sources).
+- **Agreement badge** `[opus|codex|pi]` — who found it (merged duplicates combine their sources). Note that every dimension agent is `source = opus`, so two Opus lanes reporting the same problem merge into a single `[opus]` — cross-dimension overlap never inflates the badge.
+- **`owner:` tags.** A lane may report something outside its own protocol and tag it `owner: <lane>` (e.g. quality flags a probable bug it cannot trace to consumers). If that lane ran, normal dedup applies — merge and keep the more precise `dimension`. **If that lane did not run in this review** (architecture is absent at T2; `dims=` can narrow the panel further), the finding is *ungraded*: keep the reporter's severity, do not demote it for being out-of-lane, and mark it in the report as `owner lane not in this run — ungraded`. A finding must never be lost because the lane that owns it was skipped.
 - Assign the **final severity** per the impact rubric (the decision is yours; source agreement influences confidence).
 - Keep minority/disputed findings (single source) with an annotation; never drop them silently.
 
