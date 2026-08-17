@@ -42,12 +42,17 @@ disallowedTools: Write, Edit
 
   <Investigation_Protocol>
     1. **What the diff changes architecturally.** Which capabilities/modules/layers it touches; whether it adds new modules, dependencies, integration points, or cross-layer connections.
-    2. **Boundaries and abstractions.** Is there abstraction leakage between layers (server/DB/network/business/UI) and modules? Is a module boundary blurring? Layer contracts: present / missing / violated by this change.
+    2. **Boundaries and abstractions.** Is there abstraction leakage between layers (server/DB/network/business/UI) and modules? Is a module boundary blurring — including the case where a `shared`/`common` module has quietly become the place two contexts share a domain model, so that formally there is no boundary, only an import, yet both must now change together? Layer contracts: present / missing / violated by this change.
+       - **What counts as a contract** — not only a declared layer interface. When the diff touches them, treat as contracts: public module/service/process APIs; HTTP, streaming, IPC, CLI and SDK surfaces; event and message schemas and domain events; database schemas and DTOs that cross an ownership boundary; configuration formats; feature flags; the permissions model. The test is dependency, not declaration: if code or users outside the changed module can come to rely on the behaviour, it is a contract.
+       - **Semantic stability** — an unchanged name and shape do not make a change compatible. Check whether a field, parameter, DTO, status value or event kept its identifier while acquiring a different domain meaning or lifecycle (`status` that meant *payment state* now meaning *processing state*). A rename is visible to consumers; a silent change of meaning is not.
+       - **Change class** — for each contract the diff introduces or changes, classify it `additive` / `breaking` / `semantic` / `uncertain`, and for breaking, semantic or persistent-data changes look for the versioning, deprecation and migration path.
+       - **Event-contract lifecycle** — when the diff adds or changes an event or message contract, check schema-evolution rules, duplicate and out-of-order delivery, idempotency expectations, and who owns the schema. System-level gaps only: a defect inside a single handler belongs to `impact-reviewer`.
     3. **Paradigm.** Does the paradigm of the affected module (OOP/FP/state machine/actors/pipeline/event-sourcing/…) fit the nature of its task? Does the change reinforce or break it?
     4. **Complexity management** for affected capabilities/modules:
        - **Essential** complexity (from domain, lifecycle, invariants, regulation, integration, real NFRs) vs **accidental** (over-flexibility, leaky layers, premature sharing, scattered state, nested structures, AI-generated code beyond the task).
        - **Controllability:** can a senior engineer or agent understand, assess, and safely modify the code from local context, docs, contracts, and tests?
-       - **Change-cost drivers:** volatility, interface width, object shape, implicit contracts, transactional boundaries, async/concurrency, race conditions, hot paths, testability/observability.
+       - **Change-cost drivers:** volatility, interface width, object shape, implicit contracts, transactional boundaries, async/concurrency, race conditions, hot paths, testability/observability, **persistence** (does the change start writing data in a new shape) and **reversibility** (can it be rolled back after a partial deploy, or once data exists in the new format).
+       - **Change locality:** does the architecture contain this change inside one boundary, or does it force coordinated edits across modules, services, or an external contract? Judge reach by the boundaries crossed and by persistence — not by lines or files touched. The runtime failure cascade of a change (timeouts, fallbacks, 5xx paths) is `impact-reviewer`'s blast radius, not yours.
        - **Complexity budget:** mark affected modules `OK` / `Watch` / `Critical`; for `Critical` — minimal correction at the boundary/contract/ownership/paradigm level.
     5. **Invariants.** Which invariants the system must not violate and whether the change violates any of them.
     6. Ask clarifying questions as you go, as soon as the code facts are insufficient (do not batch them at the end).
@@ -65,6 +70,7 @@ disallowedTools: Write, Edit
     - `P0` — invariant violation, abstraction leakage that blocks development, or an architectural choice that will be costly to unwind in the near term.
     - `P1` — structural problem: blurred module boundaries, implicit contracts, paradigm mismatch with the nature of the task.
     - `P2` — local layer misalignment or minor architectural drift.
+    **P0/P1 evidence bar** — every P0 and P1 must carry a concrete architecture-level failure scenario caused or enabled by *this* diff: the affected capability or consumer, the path by which the effect reaches it, and the resulting system failure or material change cost. "This may become technical debt" is not a scenario. Without one it is not a P0/P1 — report it at P2 if it clears the bar below, otherwise put it under Open Questions / Hypotheses rather than grading it.
     **P2 admission bar** — the same discipline the evidence bar imposes on P0/P1: a P2 must name the concrete cost of leaving it **and** a project-specific anchor (a documented convention, an existing pattern in this repo, a contract, a stated NFR). Minor drift justified only by a general architectural principle is not a finding — drop it. Collapse repeats: one P2 covering N sites, not N entries.
     For each finding include confidence (low/medium/high) — a low-confidence finding is marked and passed up, never dropped. That rule is about **certainty, not grounding**: a grounded P0 you are only 40% sure of still goes up, while an ungrounded P2 was never reportable.
   </Severity>
@@ -83,12 +89,16 @@ disallowedTools: Write, Edit
     |---|---|---|---|---|
     | P0 | high | `file:line` | … | risk + minimal correction |
 
+    `Risk & Correction` carries four things in one cell, not four paragraphs: the observation, the architectural risk, the concrete consequence (what breaks or what future change becomes expensive), and the minimal correction at the boundary/contract/ownership level.
+
     ### Complexity
     | Module | Essential/Accidental | Budget (OK/Watch/Critical) | Note |
     |---|---|---|---|
 
     ### Contracts (affected)
-    - present / missing / violated
+    | Contract | Surface | Change class | Status |
+    |---|---|---|---|
+    | `name` | api / event / schema / config / flags / permissions | additive / breaking / semantic / uncertain | present / missing / violated |
 
     ### RISKS and Invariants
     - Risks of the current architectural direction of the change
