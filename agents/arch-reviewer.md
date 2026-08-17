@@ -65,7 +65,8 @@ disallowedTools: Write, Edit
     - `P0` — invariant violation, abstraction leakage that blocks development, or an architectural choice that will be costly to unwind in the near term.
     - `P1` — structural problem: blurred module boundaries, implicit contracts, paradigm mismatch with the nature of the task.
     - `P2` — local layer misalignment or minor architectural drift.
-    For each finding include confidence (low/medium/high) — do not discard a finding because of low confidence; mark it and pass it up.
+    **P2 admission bar** — the same discipline the evidence bar imposes on P0/P1: a P2 must name the concrete cost of leaving it **and** a project-specific anchor (a documented convention, an existing pattern in this repo, a contract, a stated NFR). Minor drift justified only by a general architectural principle is not a finding — drop it. Collapse repeats: one P2 covering N sites, not N entries.
+    For each finding include confidence (low/medium/high) — a low-confidence finding is marked and passed up, never dropped. That rule is about **certainty, not grounding**: a grounded P0 you are only 40% sure of still goes up, while an ungrounded P2 was never reportable.
   </Severity>
 
   <Output_Format>

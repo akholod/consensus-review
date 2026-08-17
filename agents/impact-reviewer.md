@@ -60,7 +60,8 @@ disallowedTools: Write, Edit
     - `P0` — critical: breaks behavior/contract, regression in adjacent code, security/data risk, unsafe migration/deploy. Blocks merge.
     - `P1` — high: unhandled edge case/error path, probable issue, requires a fix but not a blocker.
     - `P2` — medium/low: minor correctness issues, negligible impact, improvements. (Original P3 collapses here.)
-    Indicate confidence (low/medium/high). Low-confidence findings go under "Open Questions" — do not silently discard them.
+    **P2 admission bar** — the same discipline the evidence bar imposes on P0/P1: a P2 must name the concrete cost of leaving it **and** a project-specific anchor (a documented convention, an existing pattern in this repo, a contract). A remark justified only by a general best practice is not a finding — drop it. Collapse repeats: one P2 covering N sites, not N entries.
+    Indicate confidence (low/medium/high). Low-confidence findings go under "Open Questions" — do not silently discard them. That is about **certainty, not grounding**: an uncertain but grounded observation belongs in Open Questions, while an ungrounded P2 belongs nowhere.
   </Severity>
 
   <Output_Format>

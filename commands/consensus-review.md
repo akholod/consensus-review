@@ -1,6 +1,6 @@
 ---
-description: Consensus code review (Opus arbiter + codex, optional pi advisor) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; modes [sceptic] [extra-advisor]
-argument-hint: "[<PR-url|owner/repo#N|#N>] [no-sceptic|sceptic=strict] [extra-advisor[=<model>]] [arch] [deep|minimal] [lang=en|ua]"
+description: Consensus code review (Opus arbiter + codex, optional pi advisor) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; strict sceptic by default; modes [sceptic=off|basic] [extra-advisor]
+argument-hint: "[<PR-url|owner/repo#N|#N>] [sceptic=off|basic|strict] [extra-advisor[=<model>]] [arch] [deep|minimal] [lang=en|ua]"
 ---
 
 You are the **Opus arbiter** of a consensus review. Review runs by **dimensions** (what
@@ -14,7 +14,11 @@ Arguments: `$ARGUMENTS`
 
 ## 0. Parse arguments
 - A PR URL / `owner/repo#N` / `#N` in the args → **PR mode**. Otherwise → **uncommitted mode**.
-- **Sceptic is ON by default.** `no-sceptic` (or `--no-sceptic`) → disable the sceptic pass. `sceptic=strict` → additionally use the consultants as refuters with a majority vote. The independent verifier (section 8) only fires when there are P0/P1 findings, so trivial/clean reviews pay nothing.
+- **Sceptic is ON and STRICT by default.** Canonical knob: `sceptic=off|basic|strict`, default `strict`.
+  - `strict` (default) — the independent verifier **plus** the consultants re-run as refuters, with a majority vote per finding (§8).
+  - `basic` — the independent verifier only: no refuter re-runs, no vote.
+  - `off` — no sceptic pass at all. `no-sceptic` / `--no-sceptic` is a kept alias for `sceptic=off`.
+  The pass only fires when there are P0/P1 findings, so trivial/clean reviews pay nothing at any setting. Strict costs one extra codex run on the reviews that do have P0/P1 — and note the vote arithmetic in §8: with the default two-voter set a tie is not a confirmation, so strict-by-default means findings need both voters to survive as stated.
 - **`codex` is the only consultant by default.** `extra-advisor` (or `--extra-advisor`) → **EXTRA=on**: also run `pi` as a second, independent consultant. Optional model: `extra-advisor=<model>` (e.g. `extra-advisor=anthropic/claude-sonnet-4-5`, `extra-advisor=sonnet:high`, `extra-advisor=gemini-2.5-pro`) → passed to `pi --model`. Without a model, pi uses its configured default.
   - **Independence check:** the value of a second consultant is a *different* model. If pi's resolved model is the same engine codex runs (`openai-codex` / `gpt-5.x`), the extra lane adds little — say so in the report (section 9) and suggest `extra-advisor=<other-model>`. pi reports its own `provider`/`model` in the JSON output, so read it from there rather than guessing.
 - `codex-only` (or `--codex-only`) is a **legacy no-op** — codex-only is now the default; accept it silently.
@@ -79,14 +83,14 @@ Goal — don't run the whole panel where it isn't warranted (e.g. a 2000-line PR
 | Tier | DIMS (Opus agents) | Consultants | Sceptic |
 |---|---|---|---|
 | T0 trivial | — (no full panel) | — | — |
-| T1 minimal | impact | codex | on (P0/P1) |
-| T2 standard | impact + quality (+ tests if tests present) | codex | on (P0/P1) |
-| T3 deep | impact + quality + architecture (+ tests if tests present) | codex | on (P0/P1) |
+| T1 minimal | impact | codex | strict (P0/P1) |
+| T2 standard | impact + quality (+ tests if tests present) | codex | strict (P0/P1) |
+| T3 deep | impact + quality + architecture (+ tests if tests present) | codex | strict (P0/P1) |
 
 Modifiers on top of the tier:
 - the `arch` flag adds architecture at any tier; tests are added only when test files are present in the diff.
 - `extra-advisor` adds pi as a second consultant at any tier (including T1; not T0 — T0 runs nothing).
-- the sceptic pass (section 8) runs **by default** on any P0/P1 findings — `no-sceptic` disables it, `sceptic=strict` upgrades it.
+- the sceptic pass (section 8) runs **strict by default** on any P0/P1 findings — `sceptic=basic` drops the refuter vote, `sceptic=off` (alias `no-sceptic`) disables it.
 - **T0:** do not run agents/consultants. Do a light pass yourself (Opus): quickly check the non-code for gross errors (broken JSON/YAML, obvious config typos) and emit a SHORT report with the classification and a note "no code-impacting changes — full panel skipped (override: `deep`)". Don't stay silent about what was skipped.
 
 Record `TIER`, `DIMS`, and the consultant set — they drive section 5. Show the classification to the user before launching (one line).
@@ -101,7 +105,8 @@ One brief for the consultants (codex, and pi when EXTRA is on; the Opus agents g
   - *quality* — project conventions, duplication/reuse, AI-slop, contract alignment in production code, scope control.
   - *impact* — correctness, regressions and effect on adjacent/dependent parts, security, migration/deploy safety.
   - *tests* — whether tests protect critical behavior, missing scenarios, mock/fixture correctness, test layering.
-- The severity rubric: **P0** blocker (wrong behavior, security, data loss, crash, breaking change); **P1** important, not a blocker; **P2** minor. **Evidence bar:** every P0/P1 must carry a concrete `failure_scenario` (specific input/state → wrong output/harm, or a genuinely reachable security/data path) and a `confidence`; without a concrete scenario, cap the finding at P2. Do not inflate severity; pure style/nitpicks are P2 only.
+- The severity rubric: **P0** blocker (wrong behavior, security, data loss, crash, breaking change); **P1** important, not a blocker; **P2** minor. **Evidence bar:** every P0/P1 must carry a concrete `failure_scenario` (specific input/state → wrong output/harm, or a genuinely reachable security/data path) and a `confidence`; without a concrete scenario the finding is **not** a P0/P1 — it goes to the **Unverified — needs confirmation** bucket (§9), *not* into P2. Do not inflate severity; pure style/nitpicks are P2 only.
+- **P2 admission bar.** A P2 must name the concrete cost of leaving it **and** a project-specific anchor (a documented convention, an existing pattern in this repo, a contract). A remark justified only by a general best practice is not a finding. Collapse repeats into one P2 covering N sites. P2 is for grounded small cleanups — it is not the landfill for claims that failed the P0/P1 evidence bar, which is what turns it into twenty entries of noise.
 - The category enum: `security|correctness|perf|maintainability|tests|style`.
 - A requirement to emit findings strictly per the schema (below), each tagged with a `dimension` from `DIMS`.
 
@@ -136,7 +141,7 @@ Findings schema (write it to `$WD/findings.schema.json` for codex) — **copy it
 
 ## 5. Run reviews (independent sources, in parallel)
 
-Run only what the tier assigns (section 3.5): T0 — neither agents nor consultants (short report); T1 — impact agent + codex; T2/T3 — assigned agents + codex. `arch`/`tests`/`extra-advisor`/`no-sceptic`/`sceptic=strict` apply as modifiers.
+Run only what the tier assigns (section 3.5): T0 — neither agents nor consultants (short report); T1 — impact agent + codex; T2/T3 — assigned agents + codex. `arch`, `extra-advisor`, `sceptic=off|basic` and `deep`/`minimal` apply as modifiers. There is **no `tests` flag** — the tests dimension is added automatically whenever the diff contains test files.
 
 **Opus lane — dimension agents.** For EACH dimension in `DIMS`, run the matching subagent via Task (in parallel, in one message):
 - architecture → `Task(subagent_type="arch-reviewer")`
@@ -183,10 +188,10 @@ if [ -n "$P" ]; then wait $P; pi_rc=$?; fi
 - Assign the **final severity** per the impact rubric (the decision is yours; source agreement influences confidence).
 - Keep minority/disputed findings (single source) with an annotation; never drop them silently.
 
-## 8. Sceptic pass (ON by default; skip only if `no-sceptic`) — INDEPENDENT verification
+## 8. Sceptic pass (STRICT by default; `sceptic=basic` softens it, `sceptic=off` skips it) — INDEPENDENT verification
 To avoid confirmation bias, the sceptic pass is performed by an **independent verifier agent with fresh context** — NOT by you (the arbiter), and NOT by the agent that produced the finding. You only apply its verdicts.
 - Collect the P0/P1 findings (P2 isn't worth verifying). Spawn `finding-verifier` via Task (batched — pass the whole list in one call; split into a few calls if large), giving it ONLY: the path to `$WD/diff.patch`, `REPO`, and the findings (id, title, `file:line`, severity, dimension, claimed `failure_scenario`, source, rationale). Do NOT pass your synthesis reasoning. Namespaced fallback: `consensus-review:finding-verifier`.
-- `sceptic=strict`: additionally enlist the consultants as refuters (re-run each with an "argue why each finding is NOT real" brief) and take a **majority vote** per finding across {finding-verifier, codex} — plus pi when `extra-advisor` is on. With an even voter set (2, i.e. no extra advisor) a **tie is not a confirmation**: treat it as `unconfirmed` and apply the downgrade rules below.
+- **Strict — the default.** Additionally enlist the consultants as refuters (re-run each with an "argue why each finding is NOT real" brief) and take a **majority vote** per finding across {finding-verifier, codex} — plus pi when `extra-advisor` is on. With an even voter set (2 — the default, without an extra advisor) a **tie is not a confirmation**: treat it as `unconfirmed` and apply the downgrade rules below. `sceptic=basic` skips this paragraph entirely and applies the verifier verdicts as-is.
 - Apply the verdicts:
   - `refuted` → drop (P1/P2, logged) or, for P0, move to **Unverified — needs confirmation** with the refutation reason.
   - `unconfirmed` → downgrade; single-source-unconfirmed → **Unconfirmed (single-source)**; a P0 → **Unverified — needs confirmation** (not counted in Totals P0).
@@ -200,7 +205,7 @@ Write the report in the selected output language (`lang`, default English). Sort
 Format:
 ```
 # Consensus Review — <target: PR #N url | uncommitted in <repo>>
-base→head: <…> | date: <…> | sceptic: ON/OFF | extra-advisor: ON (pi, <provider/model>)/OFF | lang: <en|ua>
+base→head: <…> | date: <…> | sceptic: STRICT/BASIC/OFF | extra-advisor: ON (pi, <provider/model>)/OFF | lang: <en|ua>
 Classification: tier=<T0..T3> | effective code: <~N lines / M files> | non-code excluded: <K lines (.bru/lock/docs)> | blast: <isolated|local|wide> | basis: <short>
 Dimensions: <architecture? quality impact tests?>  (applied / skipped with reason)
 Sources: codex=<ok|timeout|failed: <reason from codex.log>|unavailable>, pi=<ok|…|unparseable|skipped (no extra-advisor)>, opus=ok
@@ -214,6 +219,10 @@ Totals: P0=<n> P1=<n> P2=<n>
 ...
 ## P1
 ## P2
+<Up to 7 entries individually, highest confidence first. Everything beyond that is grouped by theme, one line per theme:
+ `- <theme> ×<N> — file:line, file:line, … (confidence: <low|medium|high>)`.
+ `low`-confidence P2s always go into the grouped lines, never into the individual list.
+ Grouping is presentation only: the count and every file must appear, so nothing is dropped silently.>
 
 ## Dimension summary
 | Dimension | Status | P0 | P1 | P2 |
@@ -230,7 +239,7 @@ Totals: P0=<n> P1=<n> P2=<n>
 <P0s whose failure scenario was not concretely grounded (sceptic) — NOT counted as confirmed P0 in Totals>
 
 ## Dropped / Downgraded (sceptic)
-<dropped P1/P2 + downgrades, each with the reason — only when sceptic ON>
+<dropped P1/P2 + downgrades, each with the reason — only when sceptic is on (basic or strict)>
 
 ## Source availability
 <timeout/failed/unavailable/unparseable/skipped, diff-only mode, etc.

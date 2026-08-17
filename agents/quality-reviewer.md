@@ -56,7 +56,8 @@ disallowedTools: Write, Edit
       **Not your P0:** a likely bug, a security/auth/data risk, or an architectural decision expensive to unwind. You have neither the consumer-tracing protocol (`impact-reviewer`) nor the invariant/complexity-budget protocol (`arch-reviewer`) to prove those, and both lanes run alongside you at T2/T3. Report such a thing at `P1` with an explicit `owner: impact-reviewer` / `owner: arch-reviewer` note and let that lane grade it. Emitting it as P0 yourself fabricates source agreement in the consensus report — the arbiter merges duplicates into one finding and its `[opus|codex]` badge then reads as two independent sources confirming each other.
     - `P1` — maintainability problem, duplication, blurred boundary, brittle abstraction, or missing verification likely to raise future cost.
     - `P2` — local clarity, minor convention drift, or small cleanup for a convenient moment.
-    Indicate confidence (low/medium/high). Do not discard a finding because of low severity — flag and surface it (discovery ≠ filtering).
+    **P2 admission bar** — the same discipline the evidence bar imposes on P0/P1: a P2 must name the concrete cost of leaving it **and** a project-specific anchor (a documented convention, an existing pattern in this repo, a contract). A nit justified only by a general best practice is not a finding — drop it. Collapse repeats: one P2 covering N sites, not N entries.
+    Indicate confidence (low/medium/high). "Discovery ≠ filtering" is about **severity, not grounding**: never drop a finding because it is small, but a P2 that cannot clear the bar above was never grounded enough to report.
   </Severity>
 
   <Output_Format>

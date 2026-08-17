@@ -1,6 +1,6 @@
 # consensus-review
 
-Multi-model **consensus code review** for Claude Code. Opus acts as **arbiter** and merges its own review with an independent external consultant — [`codex`](https://github.com/openai/codex) — across four dimensions (architecture / quality / impact / tests), with an optional second advisor [`pi`](https://pi.dev) behind the `extra-advisor` flag. It triages the change by size **and** blast-radius first (so a 2000-line dump of Bruno configs doesn't run the whole panel), ranks findings **P0–P2**, and runs an independent **sceptic** verifier by default. Strictly **read-only** — the only write is a report under `.reviews/`.
+Multi-model **consensus code review** for Claude Code. Opus acts as **arbiter** and merges its own review with an independent external consultant — [`codex`](https://github.com/openai/codex) — across four dimensions (architecture / quality / impact / tests), with an optional second advisor [`pi`](https://pi.dev) behind the `extra-advisor` flag. It triages the change by size **and** blast-radius first (so a 2000-line dump of Bruno configs doesn't run the whole panel), ranks findings **P0–P2**, and runs an independent **sceptic** verifier by default (strict: verifier + consultant refuters with a majority vote). Strictly **read-only** — the only write is a report under `.reviews/`.
 
 > **No `oh-my-claudecode` required.** This is a standalone plugin — the only hard needs are the external CLIs below. **`codegraph` is strongly recommended:** its `impact`/`callers` gives fast, precise blast-radius, which is a killer feature for review.
 
@@ -34,7 +34,7 @@ Code graphs are **auto-detected and used, never built** by this plugin. None pre
 
 | Command | Purpose |
 |---------|---------|
-| `/consensus-review [<PR>] [no-sceptic\|sceptic=strict] [extra-advisor[=<model>]] [arch] [deep\|minimal] [lang=en\|ua]` | Orchestrated consensus review with triage |
+| `/consensus-review [<PR>] [sceptic=off\|basic\|strict] [extra-advisor[=<model>]] [arch] [deep\|minimal] [lang=en\|ua]` | Orchestrated consensus review with triage |
 | `/impact-review [<scope>]` | Correctness + regressions + adjacent parts + security/migrations |
 | `/quality-review [<scope>]` | Maintainability, conventions, AI-slop, duplication, contracts |
 | `/test-review [<scope>]` | Test quality, mock/fixture drift, critical-flow coverage |
@@ -47,9 +47,9 @@ Code graphs are **auto-detected and used, never built** by this plugin. None pre
 
 | Flag | Effect |
 |------|--------|
-| _(default)_ | **Sceptic runs by default** — an **independent verifier** (fresh context, not the reviewers or the arbiter) refutes each P0/P1 with evidence; unconfirmed findings move to Unconfirmed/Unverified buckets; P0s never silently dropped. Fires only when there are P0/P1 findings, so clean/trivial reviews pay nothing. |
-| `no-sceptic` | Disable the sceptic verification pass |
-| `sceptic=strict` | Also enlists the consultants as refuters and takes a majority vote per finding (a tie is not a confirmation) |
+| _(default)_ | **Sceptic runs strict by default** — an **independent verifier** (fresh context, not the reviewers or the arbiter) refutes each P0/P1 with evidence **and** the consultants are re-run as refuters for a majority vote per finding (a tie is not a confirmation, so with the default two voters a finding needs both to survive). Unconfirmed findings move to Unconfirmed/Unverified buckets; P0s never silently dropped. Fires only when there are P0/P1 findings, so clean/trivial reviews pay nothing. |
+| `sceptic=basic` | Verifier only — no refuter re-runs, no vote (the pre-0.5 default) |
+| `sceptic=off` | Disable the sceptic pass entirely (`no-sceptic` is a kept alias) |
 | `extra-advisor[=<model>]` | Add `pi` as a **second** external consultant (off by default — codex alone otherwise). `extra-advisor=<model>` picks pi's model, e.g. `extra-advisor=sonnet:high` |
 | `arch` | Force the architecture dimension even if the change isn't structural |
 | `deep` / `full` | Force the full panel + both consultants (skip triage) |
@@ -72,7 +72,7 @@ Code graphs are **auto-detected and used, never built** by this plugin. None pre
 
 3. **Review** — applicable dimension agents run read-only (Opus lane); codex (and pi, with `extra-advisor`) review independently from a minimal, non-leading brief. The Opus agents and codex may use the code graph for navigation; pi runs with a shell-less read-only toolset (`read,grep,find,ls`), so it navigates by reading and grepping.
 4. **Consensus** — Opus dedups, tags each finding with `dimension` + an agreement badge `[opus|codex|pi]`, assigns final **P0** (blocker) / **P1** (important) / **P2** (minor).
-5. **Sceptic** (optional) — an **independent verifier agent** (fresh context, separate from the reviewers *and* the arbiter, so it can't rubber-stamp its own findings) refutes each P0/P1 with evidence; `sceptic=strict` adds a majority vote across the consultants. P0s are never silently dropped; unconfirmed findings move to explicit buckets; all drops logged.
+5. **Sceptic** (strict by default) — an **independent verifier agent** (fresh context, separate from the reviewers *and* the arbiter, so it can't rubber-stamp its own findings) refutes each P0/P1 with evidence; strict (the default) adds a majority vote across the consultants; `sceptic=basic` keeps the verifier alone. P0s are never silently dropped; unconfirmed findings move to explicit buckets; all drops logged.
 6. **Report** — terminal + `<cwd>/.reviews/review-<slug>-<date>.md` with classification header, per-dimension summary, unconfirmed/unverified + dropped appendices, source availability.
 
 ## Notes

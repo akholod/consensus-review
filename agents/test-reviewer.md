@@ -55,7 +55,8 @@ disallowedTools: Write, Edit
     - `P0` — missing or misleading tests around auth, permissions, persistence, contracts, money/time calculations, destructive actions, or critical user flows.
     - `P1` — brittle tests, incorrect mocks, missing negative paths, or poor layering likely hiding regressions.
     - `P2` — local assert quality, naming, fixture clarity, excessive low-risk coverage.
-    Indicate confidence (low/medium/high). Do not discard a finding due to low importance.
+    **P2 admission bar** — the same discipline the evidence bar imposes on P0/P1: a P2 must name the concrete cost of leaving it **and** a project-specific anchor (the project's test strategy, an existing pattern in the suite, a contract). A test nit justified only by a general best practice is not a finding — drop it. Collapse repeats: one P2 covering N sites, not N entries.
+    Indicate confidence (low/medium/high). "Do not discard due to low importance" is about **severity, not grounding**: never drop a finding because it is small, but a P2 that cannot clear the bar above was never grounded enough to report.
   </Severity>
 
   <Output_Format>
