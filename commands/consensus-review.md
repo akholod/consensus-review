@@ -102,31 +102,34 @@ One brief for the consultants (codex, and pi when EXTRA is on; the Opus agents g
 - The category enum: `security|correctness|perf|maintainability|tests|style`.
 - A requirement to emit findings strictly per the schema (below), each tagged with a `dimension` from `DIMS`.
 
-Findings schema (write it to `$WD/findings.schema.json` for codex):
+Findings schema (write it to `$WD/findings.schema.json` for codex) — **copy it verbatim**:
 ```json
 {
   "type": "object",
+  "additionalProperties": false,
   "properties": {
     "findings": { "type": "array", "items": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "title": {"type": "string"},
         "file": {"type": "string"},
-        "line": {"type": "string"},
+        "line": {"type": ["string","null"]},
         "severity": {"type": "string", "enum": ["P0","P1","P2"]},
         "dimension": {"type": "string", "enum": ["architecture","quality","impact","tests"]},
         "category": {"type": "string", "enum": ["security","correctness","perf","maintainability","tests","style"]},
         "rationale": {"type": "string"},
-        "failure_scenario": {"type": "string"},
+        "failure_scenario": {"type": ["string","null"]},
         "confidence": {"type": "string", "enum": ["low","medium","high"]},
-        "suggested_fix": {"type": "string"}
+        "suggested_fix": {"type": ["string","null"]}
       },
-      "required": ["title","file","severity","dimension","rationale"]
+      "required": ["title","file","line","severity","dimension","category","rationale","failure_scenario","confidence","suggested_fix"]
     }}
   },
   "required": ["findings"]
 }
 ```
+**Do not "simplify" this schema.** `--output-schema` goes to OpenAI structured outputs in strict mode, which rejects the whole run with `invalid_json_schema` (HTTP 400, before any work is done) unless *every* object carries `"additionalProperties": false` **and** its `required` lists *every* key in `properties`. Optional fields are therefore expressed as nullable (`["string","null"]`), not by omission from `required` — a finding with no line/scenario/fix emits `null` there.
 
 ## 5. Run reviews (independent sources, in parallel)
 
@@ -162,7 +165,7 @@ if [ -n "$P" ]; then wait $P; pi_rc=$?; fi
 
 ## 6. Collect and normalize
 - dimension agents: take their structured findings, normalize to the common schema (the `dimension` field is known from the agent), `source = opus`.
-- codex: read `$WD/codex.json` (valid JSON per schema). `codex_rc`: 124 → `timeout`, ≠0 → `failed`.
+- codex: read `$WD/codex.json` (valid JSON per schema); treat `null` in `line`/`failure_scenario`/`suggested_fix` as "not provided". `codex_rc`: 124 → `timeout`, ≠0 → `failed` (on failure `$WD/codex.json` is not written at all — never read a missing/empty file as "zero findings"). When `failed`, grab the reason from the log (`grep -m1 -o '"message": *"[^"]*"' "$WD/codex.log"`, else its last lines) and put that one line in the section-9 status — a rejected schema or bad auth is a config bug to fix, not a clean review.
 - pi (only with `extra-advisor`): parse `$WD/pi.out` as JSONL. The final answer is the last assistant message — take the `agent_end` event (or the last `turn_end`) and concatenate its text parts:
   `jq -r 'select(.type=="agent_end") | .messages[-1].content[] | select(.type=="text") | .text' "$WD/pi.out"`
   Then take the **last** block between the markers. `pi_rc`: 124 → `timeout`, ≠0 → `failed`; markers missing/unparseable → `unparseable`, keep the raw output.
@@ -197,7 +200,7 @@ Format:
 base→head: <…> | date: <…> | sceptic: ON/OFF | extra-advisor: ON (pi, <provider/model>)/OFF | lang: <en|ua>
 Classification: tier=<T0..T3> | effective code: <~N lines / M files> | non-code excluded: <K lines (.bru/lock/docs)> | blast: <isolated|local|wide> | basis: <short>
 Dimensions: <architecture? quality impact tests?>  (applied / skipped with reason)
-Sources: codex=<ok|timeout|failed|unavailable>, pi=<ok|…|unparseable|skipped (no extra-advisor)>, opus=ok
+Sources: codex=<ok|timeout|failed: <reason from codex.log>|unavailable>, pi=<ok|…|unparseable|skipped (no extra-advisor)>, opus=ok
 Code graph: <codegraph|graphify|none> (used for navigation/blast-radius)
 Totals: P0=<n> P1=<n> P2=<n>
 
