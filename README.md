@@ -1,6 +1,6 @@
 # consensus-review
 
-Multi-model **consensus code review** for Claude Code. Opus acts as **arbiter** and merges its own review with an independent external consultant — [`codex`](https://github.com/openai/codex) — across four dimensions (architecture / quality / impact / tests), with an optional second advisor [`pi`](https://pi.dev) behind the `extra-advisor` flag. It triages the change by size **and** blast-radius first (so a 2000-line dump of Bruno configs doesn't run the whole panel), ranks findings **P0–P2**, and runs an independent **sceptic** verifier by default (strict: verifier + consultant refuters with a majority vote). Strictly **read-only** — the only write is a report under `.reviews/`.
+Multi-model **consensus code review** for Claude Code. Opus acts as **arbiter** and merges its own review with an independent external consultant — [`codex`](https://github.com/openai/codex) — across four dimensions (architecture / quality / impact / tests), with an optional second advisor [`pi`](https://pi.dev) behind the `extra-advisor` flag. It triages the change by size **and** blast-radius first (so a 2000-line dump of Bruno configs doesn't run the whole panel), ranks findings **P0–P2**, and runs an independent **sceptic** verifier by default (strict: verifier + consultant refuters with a majority vote). Strictly **read-only** — the only write is the report (`.reviews/` by default, `out=<path>` to redirect, `no-file` for none at all).
 
 > **No `oh-my-claudecode` required.** This is a standalone plugin — the only hard needs are the external CLIs below. **`codegraph` is strongly recommended:** its `impact`/`callers` gives fast, precise blast-radius, which is a killer feature for review.
 
@@ -72,19 +72,23 @@ Every flag is accepted with or without a leading `--`. Depth (`deep`/`minimal`) 
    |------|---------|-------------|-------------|
    | **T0** | only non-code | — (skipped) | — |
    | **T1** | small + isolated | impact | codex |
-   | **T2** | small/medium + local | impact + quality (+ tests if present) | codex |
-   | **T3** | large / wide blast / structural | + architecture | codex |
+   | **T2** | small/medium + local · medium + isolated · **small + wide** (no high-risk path) | impact + quality (+ tests if present) | codex |
+   | **T3** | large · structural · wide at medium+ · **any size touching a high-risk path** | + architecture | codex |
+
+   **Proportionality:** blast radius decides *which* lane you cannot skip, effective size decides *how many* lanes are worth paying for. A 20-line edit to a shared module needs consumer tracing (impact), not an architecture verdict. The exception is **high-risk paths** — migrations, auth/permissions/security, dependency manifests — which stay T3 at any size, because their failure mode does not scale with line count. `isolated` also covers an edit confined to one file whose changed symbols have no consumers outside it, so small local edits can reach T1 instead of piling up at T2.
 
    `extra-advisor` adds `pi` as a second consultant at any tier above T0.
 
 3. **Review** — applicable dimension agents run read-only (Opus lane); codex (and pi, with `extra-advisor`) review independently from a minimal, non-leading brief. The Opus agents and codex may use the code graph for navigation; pi runs with a shell-less read-only toolset (`read,grep,find,ls`), so it navigates by reading and grepping.
-4. **Consensus** — Opus dedups, tags each finding with `dimension` + an agreement badge `[opus|codex|pi]`, assigns final **P0** (blocker) / **P1** (important) / **P2** (minor).
+4. **Consensus** — Opus dedups, tags each finding with `dimension` + an agreement badge `[opus|codex|pi]`, assigns final **P0** (blocker) / **P1** (important) / **P2** (minor). Two rules keep the severities honest:
+   - **Evidence bar / admission bar.** Every P0/P1 needs a concrete failure scenario; one that cannot produce it goes to *Unverified*, **not** down into P2. Every P2 in turn must name the concrete cost of leaving it *and* a project-specific anchor (a documented convention, an existing pattern, a contract) — a remark justified only by a general best practice is not a finding. Without both halves P2 becomes a landfill for unproven claims, which is what turns it into twenty entries of noise.
+   - **`owner:` tags.** A lane may report something outside its own protocol (quality spotting a probable bug it cannot trace to consumers) and tag the owning lane. If that lane ran, normal dedup applies; if it did not — architecture is absent at T2, and `dims=` can narrow the panel further — the finding keeps the reporter's severity and is marked *ungraded*. A finding is never lost because the lane that owns it was skipped.
 5. **Sceptic** (strict by default) — an **independent verifier agent** (fresh context, separate from the reviewers *and* the arbiter, so it can't rubber-stamp its own findings) refutes each P0/P1 with evidence; strict (the default) adds a majority vote across the consultants; `sceptic=basic` keeps the verifier alone. P0s are never silently dropped; unconfirmed findings move to explicit buckets; all drops logged.
-6. **Report** — terminal + `<cwd>/.reviews/review-<slug>-<date>.md` with classification header, per-dimension summary, unconfirmed/unverified + dropped appendices, source availability.
+6. **Report** — terminal + `<cwd>/.reviews/review-<slug>-<date>.md` (or `out=<path>`; nothing written with `no-file`), with classification header, per-dimension summary, unconfirmed/unverified + dropped appendices, and source availability. P2 is grouped by default: up to 7 entries individually, the rest rolled up per theme with counts and files — presentation only, `Totals` always keeps the true count.
 
 ## Notes
 
-- Cost scales with tier; triage and omitting `extra-advisor`/`deep` keep it down.
+- Cost scales with tier. Triage does most of the work; `minimal` forces the floor, and omitting `extra-advisor`/`deep` keeps it down. Strict sceptic (the default) adds one extra codex run, but only on reviews that actually produced P0/P1 findings.
 - **Pick a different model for `extra-advisor`.** A second consultant is only worth its cost if it is a *different* model — if `pi` is configured to run the same engine as `codex` (`openai-codex` / `gpt-5.x`, a common default), the extra lane mostly echoes codex. Use `extra-advisor=<model>` (e.g. `sonnet:high`, `gemini-2.5-pro`) or set another default in `~/.pi/agent/settings.json`. The report prints pi's resolved provider/model and flags the collision.
 - A code graph reflects its last build (usually committed state): used for existing/surrounding code, the diff itself for brand-new symbols.
 
