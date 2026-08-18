@@ -20,7 +20,7 @@ Environment: `claude` CLI **2.1.234 (Claude Code)**, model `sonnet`, node v24.16
 
 *Result:* **REFUTED.** `cache_read_input_tokens` is identical (30501) in all three runs — that figure is the CLI's own static system/tool preamble, which is cached independently of our content. `cache_creation_input_tokens` stays at ~31.4k on **every** run, i.e. the supplied static prefix is re-written to cache each time and never read back. There is no cross-process reuse of the review context.
 
-*Consequence, per the plan's own fallback:* keep process isolation and the accepted pass minima, and absorb the cost. Do **not** switch to a shared conversation. Recorded cost is ~**$0.20 per pass** for an 8k-token static context with negligible output — so the per-pass context cost is real and multiplies by the pass count. This is the dominant cost term and Phase 3 must measure it against `/consensus-review`.
+*Consequence, per the plan's own fallback:* keep process isolation and the accepted pass minima, and absorb the cost. Do **not** switch to a shared conversation. Recorded cost is ~**$0.20 per pass** (`total_cost_usd` as the CLI reports it — the API-price valuation of the tokens, which is a bill on an API plan and usage-limit consumption on a subscription) for an 8k-token static context with negligible output — so the per-pass context cost is real and multiplies by the pass count. This is the dominant cost term and Phase 3 must measure it against `/consensus-review`.
 
 ---
 

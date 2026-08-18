@@ -120,7 +120,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/loop-review.mjs" [--pr=<n>] [--range=<a..b>] [--
 
 **Custom instructions.** `.claude/review-instructions.json` or `.gitlab/duo/mr-review-instructions.yaml`, matched per changed file (positive globs, then `!` exclusions), so rules for untouched areas never enter the context. They are untrusted advisory input and cannot relax read-only, budgets, the severity bars, the stopping rule, or escalation.
 
-**Cost.** Measured at roughly $0.28–0.35 per review on a small diff (2–3 passes plus verification). Note that the static context is **not** cached across passes — see `docs/loop-review-measurements.md`, where that hypothesis was tested and refuted.
+**Cost.** Roughly **$0.28** per review on a small clean diff (2 passes) and **$0.70–0.88** when there are findings (3 passes plus verification). Those are `total_cost_usd` as the CLI reports it — the API-price valuation of the tokens used. On an API plan that is a bill; on a claude.ai subscription it is drawn against your usage limit instead. Either way it scales with the pass count, because the static context is **not** cached across passes — see `docs/loop-review-measurements.md`, where that hypothesis was tested and refuted.
 
 **Machine-readable output.** `--json` prints the whole run state to stdout — terminal state and
 its reasons, every finding with its verdict, every cell with its evidence and verification, each
