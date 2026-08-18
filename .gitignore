@@ -7,6 +7,9 @@ Thumbs.db
 .vscode/
 *.swp
 
+# OMC runtime state (sessions, PRD, progress) — operational, not part of the plugin
+.omc/
+
 # Local review artifacts (in case the repo is itself reviewed)
 .reviews/
 graphify-out/
