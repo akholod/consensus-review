@@ -5,7 +5,7 @@ import {
   applyPass, applyVerdicts, shouldContinue, spend, runLoop,
 } from "../../src/loop-review/loop.mjs"
 import { newRunState, makeCell, SURFACE, RISK, TERMINAL, PASS_STATE } from "../../src/loop-review/schema.mjs"
-import { honestVerifier, cellsOnlyVerifier } from "../helpers.mjs"
+import { honestVerifier, cellsOnlyVerifier } from "../../testkit/helpers.mjs"
 
 const cells = () => [makeCell(SURFACE.SOURCE, RISK.CORRECTNESS, ["a.js"])]
 const mandatoryCells = () => [

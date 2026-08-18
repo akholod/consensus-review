@@ -6,7 +6,7 @@
   "description": "Runtime for the /loop-review command. The plugin itself is markdown; this package carries only the deterministic loop runtime and its tests.",
   "engines": { "node": ">=20" },
   "scripts": {
-    "test": "node --test \"test/**/*.test.mjs\"",
+    "test": "node --test",
     "check:contracts": "node scripts/gen-contracts.mjs --check",
     "check:compat": "node scripts/compat-check.mjs"
   },

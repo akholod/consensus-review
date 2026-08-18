@@ -18,7 +18,7 @@ jobs:
           node-version: ${{ matrix.node }}
       # Zero dependencies by design — nothing to install.
       - name: Unit and e2e tests
-        run: node --test "test/**/*.test.mjs"
+        run: node --test
       - name: Contract parity (no hand-edited schema drift)
         run: node scripts/gen-contracts.mjs --check
 

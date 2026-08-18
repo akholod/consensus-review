@@ -7,8 +7,8 @@ import { buildContext, loadInstructions } from "../../src/loop-review/context.mj
 import { runLoop } from "../../src/loop-review/loop.mjs"
 import { renderReport } from "../../src/loop-review/report.mjs"
 import { TERMINAL, PASS_POLICY, isReportable } from "../../src/loop-review/schema.mjs"
-import { FIXTURES, MANDATORY_SEEDED, verifierFor } from "./seeded/fixtures.mjs"
-import { cellsOnlyVerifier } from "../helpers.mjs"
+import { FIXTURES, MANDATORY_SEEDED, verifierFor } from "../../testkit/seeded-fixtures.mjs"
+import { cellsOnlyVerifier } from "../../testkit/helpers.mjs"
 
 const REPO = process.cwd()
 
@@ -132,7 +132,7 @@ instructions:
 import { PASS_STATE } from "../../src/loop-review/schema.mjs"
 
 const okPass = (payload) => ({ state: PASS_STATE.OK, payload, usage: {}, ms: 1, detail: "" })
-import { honestVerifier } from "../helpers.mjs"
+import { honestVerifier } from "../../testkit/helpers.mjs"
 
 test("ADVERSARIAL: a pass that reports nothing while fabricating coverage cannot reach CLEAN", async () => {
   // The seeded P0 in SD-02 is simply never reported, and the pass claims coverage using anchors

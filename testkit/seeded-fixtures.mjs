@@ -2,7 +2,7 @@
 // orchestration can be replayed deterministically, offline, with no model involved.
 // Recall against a live model is measured separately — transcripts cannot establish it.
 
-import { PASS_STATE, TERMINAL } from "../../../src/loop-review/schema.mjs"
+import { PASS_STATE, TERMINAL } from "../src/loop-review/schema.mjs"
 
 const diff = (path, body) => `diff --git a/${path} b/${path}
 index 1111111..2222222 100644
