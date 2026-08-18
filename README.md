@@ -2,6 +2,8 @@
 
 Multi-model **consensus code review** for Claude Code. Opus acts as **arbiter** and merges its own review with an independent external consultant — [`codex`](https://github.com/openai/codex) — across four dimensions (architecture / quality / impact / tests), with an optional second advisor [`pi`](https://pi.dev) behind the `extra-advisor` flag. It triages the change by size **and** blast-radius first (so a 2000-line dump of Bruno configs doesn't run the whole panel), ranks findings **P0–P2**, and runs an independent **sceptic** verifier by default (strict: verifier + consultant refuters with a majority vote). Strictly **read-only** — the only write is the report (`.reviews/` by default, `out=<path>` to redirect, `no-file` for none at all).
 
+It ships two review strategies. `/consensus-review` is the **parallel** one — several independent reviewers plus an external consultant, merged by an arbiter, for multi-source agreement. `/loop-review` is the **sequential** one — the context is built once and reviewed in several differentiated passes, each told what is already covered but never *why*, because review models hyperfocus on one theme and miss what sits beside it. Use consensus-review when you want agreement; use loop-review when you want coverage per token.
+
 > **No `oh-my-claudecode` required.** This is a standalone plugin — the only hard needs are the external CLIs below. **`codegraph` is strongly recommended:** its `impact`/`callers` gives fast, precise blast-radius, which is a killer feature for review.
 
 ## Install
@@ -40,6 +42,7 @@ Code graphs are **auto-detected and used, never built** by this plugin. None pre
 | `/test-review [<scope>]` | Test quality, mock/fixture drift, critical-flow coverage |
 | `/arch-review [<scope>]` | Architectural impact of the change (diff-scoped) |
 | `/architecture-audit` | Full **whole-project** architecture audit (standalone, heavier) |
+| `/loop-review [--pr=<n>\|--range=<a..b>] [--model=<m>] [--timeout=<sec>] [--out=<path>\|--no-file] [--json]` | Sequential, coverage-directed cyclic review (see below) |
 
 `<scope>`/`<PR>`: empty = uncommitted working tree; a PR URL / `owner/repo#N` / `#N`; a git range (`main..HEAD`); a path/glob. Standalone commands also take `lang=en|ua|ru`.
 
@@ -85,6 +88,46 @@ Every flag is accepted with or without a leading `--`. Depth (`deep`/`minimal`) 
    - **`owner:` tags.** A lane may report something outside its own protocol (quality spotting a probable bug it cannot trace to consumers) and tag the owning lane. If that lane ran, normal dedup applies; if it did not — architecture is absent at T2, and `dims=` can narrow the panel further — the finding keeps the reporter's severity and is marked *ungraded*. A finding is never lost because the lane that owns it was skipped.
 5. **Sceptic** (strict by default) — an **independent verifier agent** (fresh context, separate from the reviewers *and* the arbiter, so it can't rubber-stamp its own findings) refutes each P0/P1 with evidence; strict (the default) adds a majority vote across the consultants; `sceptic=basic` keeps the verifier alone. P0s are never silently dropped; unconfirmed findings move to explicit buckets; all drops logged.
 6. **Report** — terminal + `<cwd>/.reviews/review-<slug>-<date>.md` (or `out=<path>`; nothing written with `no-file`), with classification header, per-dimension summary, unconfirmed/unverified + dropped appendices, and source availability. P2 is grouped by default: up to 7 entries individually, the rest rolled up per theme with counts and files — presentation only, `Totals` always keeps the true count.
+
+## `/loop-review` — the sequential strategy
+
+Where `/consensus-review` runs a panel in parallel, `/loop-review` builds the review context **once** and makes several **differentiated discovery passes** over it. Each later pass receives compact fingerprints of what has already been claimed, what has been refuted, and which risk cells are still open — and **never** the previous pass's reasoning. Withholding the reasoning is the mechanism, not an oversight: persuasive context is what makes the next pass restate the dominant theme instead of looking elsewhere.
+
+**It reports; it never repairs.** `/loop-review` finds problems and writes a report. It does not
+edit code, stage, commit, push, or comment on a pull request. This is enforced at the process
+level, not by asking nicely: each review pass is spawned with `--disallowed-tools` covering
+`Edit`, `Write`, `NotebookEdit`, `Bash`, `Task`, `Read`, `Grep`, `Glob`, `WebFetch` and
+`WebSearch`, so the model performing the review has no tool with which to change anything. The
+runtime itself contains no mutating git or `gh` command; `gh pr diff` is the only forge call and
+it reads. Fixing is a separate, human-initiated step — apply the changes, then run the review
+again on the new diff.
+
+Its **one** write is the report file (`.reviews/loop-review-<hash>.md` by default, `--out=<path>`
+to redirect, `--no-file` for no write at all). Working files live in a temp directory outside the
+repository.
+
+It is implemented as a runtime rather than a prompt, because its central promise — that `CLEAN` means something — is a control-flow guarantee:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/loop-review.mjs" [--pr=<n>] [--range=<a..b>] [--no-file]
+```
+
+**Terminal states.** `CLEAN` · `FINDINGS` · `INCONCLUSIVE` · `ESCALATE` (exit `2`). `CLEAN` requires the full conjunction: the minimum passes completed, no failed or truncated pass, every mandatory cell covered *with evidence* and independently verified, every actionable finding adjudicated, budget intact, the diff unchanged throughout, and a final pass that produced nothing new. A failed, truncated, stale or under-covered run cannot report `CLEAN` — enforced in code, not by instruction.
+
+**Pass policy** (fixed, not tunable at run time): 0–1 pass for docs/generated/formatting-only; **≥2** for any non-trivial code diff; **≥3** when the change touches auth, permissions, migrations, destructive data, a public contract or crosses services; hard maximum **4** before escalation.
+
+**Coverage cells** are `changed surface × risk category`, derived from the changed paths. A pass must return an evidence record per cell — anchors it actually inspected and checks it actually ran. A cell claimed as covered with no anchors is rejected: dispatch is not coverage.
+
+**Custom instructions.** `.claude/review-instructions.json` or `.gitlab/duo/mr-review-instructions.yaml`, matched per changed file (positive globs, then `!` exclusions), so rules for untouched areas never enter the context. They are untrusted advisory input and cannot relax read-only, budgets, the severity bars, the stopping rule, or escalation.
+
+**Cost.** Measured at roughly $0.28–0.35 per review on a small diff (2–3 passes plus verification). Note that the static context is **not** cached across passes — see `docs/loop-review-measurements.md`, where that hypothesis was tested and refuted.
+
+**Machine-readable output.** `--json` prints the whole run state to stdout — terminal state and
+its reasons, every finding with its verdict, every cell with its evidence and verification, each
+pass with its state, model and token usage, and the totals. Nothing is written to a log file; if
+you want the run recorded, redirect that stdout yourself.
+
+**Shared contracts.** Both commands use one finding schema (`contracts/finding.schema.json`) and one set of severity bars (`contracts/severity-bars.md`). The schema embedded in `commands/consensus-review.md` is generated from the canonical file by `scripts/gen-contracts.mjs`, and CI fails if the two drift.
 
 ## Notes
 
