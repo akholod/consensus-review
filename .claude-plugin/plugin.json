@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "consensus-review",
-  "version": "0.7.0",
-  "description": "Multi-model consensus code review (Opus arbiter + codex, optional pi advisor) across 4 dimensions with size/blast-radius triage, P0–P2 severity with evidence and admission bars, strict sceptic by default, and code-graph awareness.",
+  "version": "0.8.0",
+  "description": "Two code-review strategies sharing one contract: /consensus-review (parallel multi-source panel with an Opus arbiter, codex consultant and strict sceptic) and /loop-review (sequential coverage-directed passes with evidence-backed cells and a CLEAN verdict enforced in code). Strictly read-only.",
   "author": {
     "name": "Andrii Kokhanevich",
     "email": "andrey.kokhanevich@gmail.com"
