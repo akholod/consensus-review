@@ -17,3 +17,4 @@ Record each release's result here.
 | Date | Plugin version | claude CLI | compat-check |
 |---|---|---|---|
 | 2026-08-18 | 0.7.0 (pre-loop-review) | 2.1.234 | fixtures captured; adapter interpretation pinned |
+| 2026-08-18 | 0.8.0 | 2.1.234 | green — all 5 checks passed |
