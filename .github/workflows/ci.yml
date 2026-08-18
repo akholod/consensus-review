@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["20", "22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # Zero dependencies by design — nothing to install.
+      - name: Unit and e2e tests
+        run: node --test "test/**/*.test.mjs"
+      - name: Contract parity (no hand-edited schema drift)
+        run: node scripts/gen-contracts.mjs --check
+
+  validate-plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate plugin manifests
+        run: |
+          npx --yes @anthropic-ai/claude-code@2.1.234 plugin validate .claude-plugin/plugin.json
+          npx --yes @anthropic-ai/claude-code@2.1.234 plugin validate .claude-plugin/marketplace.json
+
+# No live-model or authenticated calls run here by design. Adapter compatibility against a
+# real CLI is a release gate instead — see docs/RELEASING.md and scripts/compat-check.mjs.

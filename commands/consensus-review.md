@@ -128,33 +128,117 @@ One brief for the consultants (codex, and pi when EXTRA is on; the Opus agents g
 - A requirement to emit findings strictly per the schema (below), each tagged with a `dimension` from `DIMS`.
 
 Findings schema (write it to `$WD/findings.schema.json` for codex) — **copy it verbatim**:
+<!-- BEGIN GENERATED: contracts/finding.schema.json -->
 ```json
 {
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "findings": { "type": "array", "items": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "title": {"type": "string"},
-        "file": {"type": "string"},
-        "line": {"type": ["string","null"]},
-        "severity": {"type": "string", "enum": ["P0","P1","P2"]},
-        "dimension": {"type": "string", "enum": ["architecture","quality","impact","tests"]},
-        "category": {"type": "string", "enum": ["security","correctness","perf","maintainability","tests","style"]},
-        "rationale": {"type": "string"},
-        "failure_scenario": {"type": ["string","null"]},
-        "confidence": {"type": "string", "enum": ["low","medium","high"]},
-        "suggested_fix": {"type": ["string","null"]},
-        "owner": {"type": ["string","null"], "enum": ["architecture","quality","impact","tests",null]}
-      },
-      "required": ["title","file","line","severity","dimension","category","rationale","failure_scenario","confidence","suggested_fix","owner"]
-    }}
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "P0",
+              "P1",
+              "P2"
+            ]
+          },
+          "dimension": {
+            "type": "string",
+            "enum": [
+              "architecture",
+              "quality",
+              "impact",
+              "tests"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "security",
+              "correctness",
+              "perf",
+              "maintainability",
+              "tests",
+              "style"
+            ]
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "failure_scenario": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "suggested_fix": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "architecture",
+              "quality",
+              "impact",
+              "tests",
+              null
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "file",
+          "line",
+          "severity",
+          "dimension",
+          "category",
+          "rationale",
+          "failure_scenario",
+          "confidence",
+          "suggested_fix",
+          "owner"
+        ]
+      }
+    }
   },
-  "required": ["findings"]
+  "required": [
+    "findings"
+  ]
 }
 ```
+<!-- END GENERATED -->
 **Do not "simplify" this schema.** `--output-schema` goes to OpenAI structured outputs in strict mode, which rejects the whole run with `invalid_json_schema` (HTTP 400, before any work is done) unless *every* object carries `"additionalProperties": false` **and** its `required` lists *every* key in `properties`. Optional fields are therefore expressed as nullable (`["string","null"]`), not by omission from `required` — a finding with no line/scenario/fix emits `null` there.
 
 ## 5. Run reviews (independent sources, in parallel)

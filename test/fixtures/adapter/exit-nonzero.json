@@ -1,0 +1,6 @@
+{
+  "rc": 1,
+  "stdout": "",
+  "stderr": "error: unknown option '--no-such-flag'",
+  "note": "CLI rejected invocation; no envelope on stdout"
+}
