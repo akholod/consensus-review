@@ -1,0 +1,68 @@
+{
+  "is_error": false,
+  "duration_api_ms": 32585,
+  "num_turns": 1,
+  "stop_reason": "max_tokens",
+  "session_id": "96cb1fb3-7505-4d1c-a56b-d7a9d9ae366f",
+  "total_cost_usd": 0.1860441,
+  "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 22717,
+    "cache_read_input_tokens": 15637,
+    "output_tokens": 3003,
+    "output_tokens_details": {
+      "thinking_tokens": 2525
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 22717,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 3003,
+        "cache_read_input_tokens": 15637,
+        "cache_creation_input_tokens": 22717,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 22717
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-sonnet-5": {
+      "inputTokens": 2,
+      "outputTokens": 3003,
+      "cacheReadInputTokens": 15637,
+      "cacheCreationInputTokens": 22717,
+      "webSearchRequests": 0,
+      "costUSD": 0.1860441,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "canonicalModel": "claude-sonnet-5",
+      "provider": "firstParty"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "{\"findings\":[{\"title\":\"Refund validation guard removed — refunds no longer require order.paid\",\"file\":\"pay.js\",\"line\":\"10\",\"severity\":\"P0\",\"category\":\"correctness\",\"rationale\":\"The",
+  "ttft_ms": 28381,
+  "ttft_stream_ms": 1302,
+  "time_to_request_ms": 110,
+  "type": "result",
+  "duration_ms": 32767,
+  "uuid": "aa5f4622-0971-4a00-917a-c8bfed919cd7"
+}
