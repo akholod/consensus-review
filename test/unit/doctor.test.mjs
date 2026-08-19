@@ -175,3 +175,29 @@ test("a warning alone never fails the command", () => {
     assert.equal(report.ok, true, "warnings must not fail the run")
   })
 })
+
+test("optional tooling being absent must not fail the run", () => {
+  // CI caught this the hard way: `codex` is not installed on the runner, it was marked `fail`, and
+  // every doctor run failed. The severity rule is that only "cannot run, or is broken while you
+  // believe it works" is a failure — a consultant you never installed is a choice, and the floor
+  // case explicitly builds the report without it rather than aborting.
+  //
+  // Spawned with a stripped PATH rather than driven in-process, because the tool lookups are
+  // memoised per process and a real absent-tool environment is the thing under test.
+  const dir = mkdtempSync(join(tmpdir(), "doctor-nopath-"))
+  try {
+    for (const t of ["node", "git"]) {
+      const real = execFileSync("sh", ["-c", `command -v ${t}`], { encoding: "utf8" }).trim()
+      execFileSync("ln", ["-s", real, join(dir, t)])
+    }
+    const out = execFileSync("node", [join(ROOT, "scripts/doctor.mjs"), "--offline", "--json"], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: dir },
+    })
+    const report = JSON.parse(out)
+    assert.equal(report.ok, true, "a machine without codex/pi/gh/codegraph must still pass")
+    assert.equal(report.results.find((r) => r.label === "codex").status, "warn")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

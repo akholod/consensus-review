@@ -1,6 +1,6 @@
 {
   "name": "consensus-review",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "description": "Runtime for the /loop-review command. The plugin itself is markdown; this package carries only the deterministic loop runtime and its tests.",

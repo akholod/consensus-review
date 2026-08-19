@@ -23,6 +23,7 @@ Record each release's result here.
 | 2026-08-19 | 0.8.2 | 2.1.235 | green — all 6 checks passed, after the probe was rewritten (see below) |
 | 2026-08-19 | 0.8.3 | 2.1.235 | green — all 6 checks passed |
 | 2026-08-19 | 0.9.0 | 2.1.235 | green — all 6 checks passed |
+| 2026-08-19 | 0.9.1 | 2.1.235 | green — all 6 checks passed |
 
 ## 2026-08-19 — why the probe changed
 

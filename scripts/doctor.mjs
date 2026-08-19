@@ -77,9 +77,15 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false } 
   }
 
   // ── Consultants ──────────────────────────────────────────────────────────────────────────────
+  //
+  // Severity rule, applied throughout: `fail` means a review cannot run, or runs on something
+  // broken you believe is working. Merely running with fewer sources is `warn` — the floor case
+  // builds the report from the Claude lane alone and explicitly does not abort, so a consultant you
+  // never installed is a choice, not a fault. A consultant that IS installed and does not work is a
+  // fail, because that is the config bug you cannot see from the outside.
   {
     const codex = toolVersion("codex")
-    add("consultants", "codex", codex ? "ok" : "fail", codex ?? "not installed",
+    add("consultants", "codex", codex ? "ok" : "warn", codex ?? "not installed",
       codex ? "" : "every review runs single-source; the report says so in its Sources line, but nothing stops it")
 
     const pi = toolVersion("pi")
