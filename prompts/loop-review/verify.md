@@ -24,8 +24,16 @@ wrongly.
 
 Respond with ONLY a JSON object:
 
+<!-- BEGIN GENERATED: contracts/loop-payload.schema.json#/$defs/verifierPayload -->
 ```
-{"verdicts": [{"id": str, "verdict": "confirmed"|"unconfirmed"|"refuted",
-               "evidence": str, "suggested_severity": "P0"|"P1"|"P2"|null}],
- "cell_verdicts": [{"id": str, "verified": bool, "reason": str}]}
+{
+  "verdicts": [
+    {"id": str, "verdict": "confirmed"|"unconfirmed"|"refuted", "evidence": str,
+     "suggested_severity": "P0"|"P1"|"P2"|null}
+  ],
+  "cell_verdicts": [
+    {"id": str, "verified": bool, "reason": str}
+  ]
+}
 ```
+<!-- END GENERATED -->

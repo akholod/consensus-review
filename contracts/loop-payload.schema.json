@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "loop-review payload contract",
+  "description": "The two payload shapes /loop-review asks its passes for. Peer of finding.schema.json, not derived from it at run time. The prompt templates in prompts/loop-review/ are GENERATED from the two entrypoints; edit this file, never those blocks.",
+  "$defs": {
+    "loopFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": ["string", "null"] },
+        "severity": { "type": "string", "enum": ["P0", "P1", "P2"] },
+        "category": {
+          "type": "string",
+          "enum": ["security", "correctness", "perf", "maintainability", "tests", "style"]
+        },
+        "rationale": { "type": "string" },
+        "failure_scenario": { "type": ["string", "null"] },
+        "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+        "suggested_fix": { "type": ["string", "null"] }
+      },
+      "required": [
+        "title",
+        "file",
+        "line",
+        "severity",
+        "category",
+        "rationale",
+        "failure_scenario",
+        "confidence",
+        "suggested_fix"
+      ]
+    },
+    "evidenceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cell": { "type": "string" },
+        "status": { "type": "string", "enum": ["covered", "uncovered"] },
+        "anchors": { "type": "array", "items": { "type": "string" } },
+        "checks": { "type": "array", "items": { "type": "string" } },
+        "context_used": { "type": "string" },
+        "disposition": { "type": "string", "enum": ["none", "reported", "inconclusive"] },
+        "context_complete": { "type": "boolean" }
+      },
+      "required": [
+        "cell",
+        "status",
+        "anchors",
+        "checks",
+        "context_used",
+        "disposition",
+        "context_complete"
+      ]
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "verdict": { "type": "string", "enum": ["confirmed", "unconfirmed", "refuted"] },
+        "evidence": { "type": "string" },
+        "suggested_severity": { "type": ["string", "null"], "enum": ["P0", "P1", "P2", null] }
+      },
+      "required": ["id", "verdict", "evidence", "suggested_severity"]
+    },
+    "cellVerdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "verified": { "type": "boolean" },
+        "reason": { "type": "string" }
+      },
+      "required": ["id", "verified", "reason"]
+    },
+    "discoveryPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "findings": { "type": "array", "items": { "$ref": "#/$defs/loopFinding" } },
+        "cells": { "type": "array", "items": { "$ref": "#/$defs/evidenceRecord" } }
+      },
+      "required": ["findings", "cells"]
+    },
+    "verifierPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "verdicts": { "type": "array", "items": { "$ref": "#/$defs/verdict" } },
+        "cell_verdicts": { "type": "array", "items": { "$ref": "#/$defs/cellVerdict" } }
+      },
+      "required": ["verdicts", "cell_verdicts"]
+    }
+  },
+  "x-projection": {
+    "note": "loopFinding is a projection of the consensus finding. Every difference must be listed here; the check in scripts/gen-contracts.mjs fails on any other.",
+    "source": "contracts/finding.schema.json#/properties/findings/items",
+    "target": "#/$defs/loopFinding",
+    "omissions": ["dimension", "owner"]
+  },
+  "x-runtime": {
+    "note": "This schema states the contract the prompts ask for. The runtime validators deliberately disagree with it in the ways listed below, and test/unit/conformance.test.mjs asserts that this is EXACTLY the set that disagrees. Not encoded as JSON Schema keywords on purpose: doing so would need minLength/pattern/if-then and would grow the local validator for rules a direct assertion covers better.",
+    "tolerates": {
+      "note": "runtime accepts MORE than the schema",
+      "numeric-nullable-fields": {
+        "where": "validateFinding",
+        "fields": ["line", "failure_scenario", "suggested_fix"],
+        "detail": "a number is accepted where the schema says string|null. The prompt is never told this — it asks for the narrow contract. For failure_scenario the tolerance is reachable only at P2: at P0/P1 the actionable bar below demands a non-blank string, so a number is rejected there for that reason instead."
+      },
+      "extra-finding-properties": {
+        "where": "validateFinding",
+        "detail": "unknown properties are ignored, while the schema sets additionalProperties: false"
+      },
+      "uncovered-cell-omissions": {
+        "where": "validateEvidence",
+        "fields": ["context_used", "disposition"],
+        "detail": "required only when status is \"covered\"; the schema requires them unconditionally, as the prompt asks"
+      },
+      "absent-verifier-arrays": {
+        "where": "runLoop",
+        "fields": ["verdicts", "cell_verdicts"],
+        "detail": "an absent array is legal and defaults to []; only a present-but-not-array value is a malformed envelope"
+      }
+    },
+    "requires": {
+      "note": "runtime accepts LESS than the schema — the evidence bar, enforced in code",
+      "non-blank-strings": {
+        "where": "validateFinding",
+        "fields": ["title", "file", "rationale"],
+        "detail": "must be non-blank after trimming; the schema admits \"\" and \"   \""
+      },
+      "actionable-needs-scenario": {
+        "where": "validateFinding",
+        "fields": ["failure_scenario"],
+        "detail": "must be a non-blank string when severity is P0 or P1; the schema admits null at every severity"
+      },
+      "covered-cell-substance": {
+        "where": "validateEvidence",
+        "detail": "a covered cell needs at least one anchor and one check, all non-blank, a non-blank context_used, and at least one anchor that validAnchor accepts for the cell's own files and line bounds"
+      }
+    }
+  }
+}

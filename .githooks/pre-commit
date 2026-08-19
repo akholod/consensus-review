@@ -1,0 +1,12 @@
+#!/bin/sh
+# Opt-in hook. Enable with:
+#
+#   git config core.hooksPath .githooks
+#
+# It runs ONLY the deterministic checks — same answer for the same input, ~50ms, no model, no
+# network. The behavioural eval corpus is deliberately NOT here: a gate whose underlying measurement
+# varies run to run teaches everyone to pass --no-verify, and a bypassed gate is worse than no gate.
+# See docs/eval-layer-plan.md Decision 1.
+set -e
+node scripts/gen-contracts.mjs --check
+node scripts/lint-prompts.mjs

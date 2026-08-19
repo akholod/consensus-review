@@ -30,6 +30,7 @@ the diff genuinely warrants.
 
 Respond with ONLY a JSON object, no prose before or after:
 
+<!-- BEGIN GENERATED: contracts/loop-payload.schema.json#/$defs/discoveryPayload -->
 ```
 {
   "findings": [
@@ -45,3 +46,4 @@ Respond with ONLY a JSON object, no prose before or after:
   ]
 }
 ```
+<!-- END GENERATED -->

@@ -1,6 +1,6 @@
 {
   "name": "consensus-review",
-  "version": "0.7.0",
+  "version": "0.8.2",
   "private": true,
   "type": "module",
   "description": "Runtime for the /loop-review command. The plugin itself is markdown; this package carries only the deterministic loop runtime and its tests.",
@@ -8,7 +8,9 @@
   "scripts": {
     "test": "node --test",
     "check:contracts": "node scripts/gen-contracts.mjs --check",
-    "check:compat": "node scripts/compat-check.mjs"
+    "check:compat": "node scripts/compat-check.mjs",
+    "lint:prompts": "node scripts/lint-prompts.mjs",
+    "check:all": "node --test && node scripts/gen-contracts.mjs --check && node scripts/lint-prompts.mjs"
   },
   "license": "MIT"
 }
