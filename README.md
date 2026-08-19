@@ -71,7 +71,7 @@ Every flag is accepted with or without a leading `--`. Depth (`deep`/`minimal`) 
 1. **Resolve** the diff (PR via `gh pr diff`, or `git diff HEAD` + untracked) into a temp workdir outside the repo.
 2. **Triage** by *effective code size* (non-code like `.bru`, lock files, docs, fixtures, generated code is excluded) and *blast radius* (shared modules / contracts / manifests / migrations / auth / fan-in — fan-in measured via `codegraph impact`/`callers` when present). → a tier:
 
-   | Tier | Trigger | Opus agents | Consultants |
+   | Tier | Trigger | Claude agents | Consultants |
    |------|---------|-------------|-------------|
    | **T0** | only non-code | — (skipped) | — |
    | **T1** | small + isolated | impact | codex |
@@ -82,8 +82,8 @@ Every flag is accepted with or without a leading `--`. Depth (`deep`/`minimal`) 
 
    `extra-advisor` adds `pi` as a second consultant at any tier above T0.
 
-3. **Review** — applicable dimension agents run read-only (Opus lane); codex (and pi, with `extra-advisor`) review independently from a minimal, non-leading brief. The Opus agents and codex may use the code graph for navigation; pi runs with a shell-less read-only toolset (`read,grep,find,ls`), so it navigates by reading and grepping.
-4. **Consensus** — Opus dedups, tags each finding with `dimension` + an agreement badge `[opus|codex|pi]`, assigns final **P0** (blocker) / **P1** (important) / **P2** (minor). Two rules keep the severities honest:
+3. **Review** — applicable dimension agents run read-only (Claude lane); codex (and pi, with `extra-advisor`) review independently from a minimal, non-leading brief. The dimension agents and codex may use the code graph for navigation; pi runs with a shell-less read-only toolset (`read,grep,find,ls`), so it navigates by reading and grepping.
+4. **Consensus** — Opus dedups, tags each finding with `dimension` + an agreement badge `[claude|codex|pi]`, assigns final **P0** (blocker) / **P1** (important) / **P2** (minor). Two rules keep the severities honest:
    - **Evidence bar / admission bar.** Both bars live in every lane — the four agent prompts and the consultant brief alike, so they hold in the standalone commands too. Every P0/P1 needs a concrete failure scenario; one that cannot produce it goes to *Unverified*, **not** down into P2. Every P2 in turn must name the concrete cost of leaving it *and* a project-specific anchor (a documented convention, an existing pattern, a contract) — a remark justified only by a general best practice is not a finding. Without both halves P2 becomes a landfill for unproven claims, which is what turns it into twenty entries of noise.
    - **`owner:` tags.** A lane may report something outside its own protocol (quality spotting a probable bug it cannot trace to consumers) and tag the owning lane. If that lane ran, normal dedup applies; if it did not — architecture is absent at T2, and `dims=` can narrow the panel further — the finding keeps the reporter's severity and is marked *ungraded*. A finding is never lost because the lane that owns it was skipped.
 5. **Sceptic** (strict by default) — an **independent verifier agent** (fresh context, separate from the reviewers *and* the arbiter, so it can't rubber-stamp its own findings) refutes each P0/P1 with evidence; strict (the default) adds a majority vote across the consultants; `sceptic=basic` keeps the verifier alone. P0s are never silently dropped; unconfirmed findings move to explicit buckets; all drops logged.

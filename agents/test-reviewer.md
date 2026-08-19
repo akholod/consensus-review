@@ -1,7 +1,7 @@
 ---
 name: test-reviewer
 description: Review-only agent for test quality — whether tests protect critical behavior and catch realistic regressions; mock/fixture drift, test layering, missing critical scenarios. P0–P2.
-model: opus
+model: sonnet
 disallowedTools: Write, Edit
 ---
 

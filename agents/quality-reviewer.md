@@ -1,7 +1,7 @@
 ---
 name: quality-reviewer
 description: Review-only check for code maintainability and quality — conventions, local maintenance cost, AI-slop, reuse/duplication, production-code contract alignment, scope control. P0–P2. Architectural boundaries and the complexity budget belong to arch-reviewer.
-model: opus
+model: sonnet
 disallowedTools: Write, Edit
 ---
 

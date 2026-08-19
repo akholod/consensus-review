@@ -38,7 +38,7 @@ Resolution rules, in full:
   The pass only fires when there are P0/P1 findings, so trivial/clean reviews pay nothing at any setting. Strict costs one extra codex run on the reviews that do have P0/P1 — and note the vote arithmetic in §8: with the default two-voter set a tie is not a confirmation, so strict-by-default means findings need both voters to survive as stated.
 - **`codex` is the only consultant by default.** `extra-advisor` (or `--extra-advisor`) → **EXTRA=on**: also run `pi` as a second, independent consultant. Optional model: `extra-advisor=<model>` (e.g. `extra-advisor=anthropic/claude-sonnet-4-5`, `extra-advisor=sonnet:high`, `extra-advisor=gemini-2.5-pro`) → passed to `pi --model`. Without a model, pi uses its configured default.
   - **Independence check:** the value of a second consultant is a *different* model. If pi's resolved model is the same engine codex runs (`openai-codex` / `gpt-5.x`), the extra lane adds little — say so in the report (section 9) and suggest `extra-advisor=<other-model>`. pi reports its own `provider`/`model` in the JSON output, so read it from there rather than guessing.
-- `timeout=<sec>` → per-consultant wall clock for the codex and pi lanes. Default `240`, clamped to `[30, 1800]`. A lane that hits it is reported as `timeout` and its findings are lost, so raise this on a large PR instead of silently reviewing with one fewer source.
+- `timeout=<sec>` → per-consultant wall clock for the codex and pi lanes. Default `900`, clamped to `[30, 1800]`. A lane that hits it is reported as `timeout` and **its findings are lost**, so the cost of setting this too low is a whole source silently dropped from the review, not a slower review. The lanes run in parallel, so a higher ceiling costs nothing until something actually hangs. Measured: a codex consultant reading a small repository was still working at **600s**, so the old `240` default truncated ordinary runs.
 - `p2=<mode>` → how P2 is presented in the report (§9). `grouped` (default) — up to 7 individually, the rest rolled up by theme. `full` — every P2 individually. `off` — omit the P2 body, but keep the count in `Totals` and one summary line, because a suppressed section must still be visibly suppressed.
 - `out=<path>` → where the report file goes. A value ending in `/`, or naming an existing directory, is treated as a directory and the default filename is used inside it; anything else is the exact file path. Default: `<cwd>/.reviews/review-<slug>-<YYYY-MM-DD>.md`.
 - `no-file` → do not write a report file at all, terminal output only. With this flag the review performs **zero** writes anywhere on disk (`$WD` under `/tmp` aside).
@@ -93,11 +93,11 @@ Goal — don't run the whole panel where it isn't warranted (e.g. a 2000-line PR
 - **T2 standard** — `small`/`medium` + `local`, or `medium` + `isolated`, or `small` + `wide` when no high-risk path is touched.
 - **T3 deep** — `large`, OR a structural change, OR `wide` at `medium`+ size, OR — at any size — a **high-risk path** (migrations, auth/permissions/security, dependency manifests).
 
-**Proportionality (do not skip this reasoning).** Blast radius decides *which* lane you cannot skip; effective size decides *how many* lanes are worth paying for. A 20-line edit to a shared module needs consumer tracing (`impact`) — it does not need an architecture verdict, and a full panel there spends four independent Opus repo sweeps to re-read the same 20 lines. High-risk paths are the deliberate exception: a 3-line auth or migration change stays T3.
+**Proportionality (do not skip this reasoning).** Blast radius decides *which* lane you cannot skip; effective size decides *how many* lanes are worth paying for. A 20-line edit to a shared module needs consumer tracing (`impact`) — it does not need an architecture verdict, and a full panel there spends four independent repo sweeps to re-read the same 20 lines. High-risk paths are the deliberate exception: a 3-line auth or migration change stays T3.
 
 **3.5. Tier → dimensions and sources:**
 
-| Tier | DIMS (Opus agents) | Consultants | Sceptic |
+| Tier | DIMS (Claude agents) | Consultants | Sceptic |
 |---|---|---|---|
 | T0 trivial | — (no full panel) | — | — |
 | T1 minimal | impact | codex | strict (P0/P1) |
@@ -113,7 +113,7 @@ Modifiers on top of the tier:
 Record `TIER`, `DIMS`, and the consultant set — they drive section 5. Show the classification to the user before launching (one line).
 
 ## 4. Shared brief (MINIMAL and NON-leading)
-One brief for the consultants (codex, and pi when EXTRA is on; the Opus agents get their scope separately). It preserves source independence: do **not** list concrete hypotheses and do **not** give finding examples. The brief contains:
+One brief for the consultants (codex, and pi when EXTRA is on; the dimension agents get their scope separately). It preserves source independence: do **not** list concrete hypotheses and do **not** give finding examples. The brief contains:
 - The absolute path to `$WD/diff.patch` + permission to read the repo for context.
 - The output language for the review (from `lang`, default English).
 - If `CODE_GRAPH` is set — tell **codex** to use its CLI to find relationships/impact instead of broad grep: codegraph `callers`/`callees`/`impact`/`node`/`search`, or graphify `explain`/`path`/`query` (substring matching, no synonyms). Do not build the graph; for new symbols from the diff use the diff itself. **pi runs without a shell** (read-only toolset, section 5) — do not tell it to run graph CLIs; it navigates with read/grep/find/ls.
@@ -245,17 +245,28 @@ Findings schema (write it to `$WD/findings.schema.json` for codex) — **copy it
 
 Run only what the tier assigns (section 3.5): T0 — neither agents nor consultants (short report); T1 — impact agent + codex; T2/T3 — assigned agents + codex. `dims=`/`arch`, `extra-advisor`, `sceptic=off|basic`, `timeout=` and `deep`/`minimal` apply as modifiers (§0). The tests dimension is added automatically whenever the diff contains test files — `dims=+tests` forces it when it does not.
 
-**Opus lane — dimension agents.** For EACH dimension in `DIMS`, run the matching subagent via Task (in parallel, in one message):
+**Claude lane — dimension agents.** For EACH dimension in `DIMS`, run the matching subagent via Task (in parallel, in one message):
 - architecture → `Task(subagent_type="arch-reviewer")`
 - quality → `Task(subagent_type="quality-reviewer")`
 - impact → `Task(subagent_type="impact-reviewer")`
 - tests → `Task(subagent_type="test-reviewer")`
+
+**Model per dimension (set in each agent's frontmatter, not here).** `impact` and `architecture`
+run on Opus; `quality` and `tests` run on Sonnet. The split is by what the dimension actually does:
+tracing call sites and reasoning about regressions or future complexity is what the larger model is
+for, while convention alignment, duplication and mock drift are largely recognition against
+precedent the repo already sets. `finding-verifier` stays on Opus deliberately — a weaker reviewer
+misses findings, but a weaker sceptic lets **false** ones through, and one confirmed false P0 costs
+more trust than a missed bug costs coverage.
+
+This allocation is a judgement, not a measurement: the repository has no behavioural evals yet, so
+the effect on recall is unverified. Issue #1 (the eval corpus) is what would settle it.
 Note: when installed as a plugin the agents may be namespaced — if a bare name does not resolve, use `consensus-review:arch-reviewer`, `consensus-review:quality-reviewer`, `consensus-review:impact-reviewer`, `consensus-review:test-reviewer`.
-Pass each one: the path to `$WD/diff.patch`, `REPO`, the mode (PR/uncommitted/diff-only), the output language (from `lang`), and **`TIER` with an exploration budget** — T1/T2 means "the diff plus its nearest context and direct consumers; do not sweep the repository", T3 means the full protocol. Each agent explores independently (that is what buys source independence), so an unbounded brief multiplies the same repo walk by the number of lanes. Their structured output is your (Opus) share of the findings, each already carrying its `dimension`. The **same P0/P1 evidence bar and P2 admission bar** are built into each agent prompt, so every lane is held to one standard — the consultant brief in §4 is not a stricter rule for codex alone, and the standalone `/arch-review`-style commands keep the bar even without an orchestrator.
+Pass each one: the path to `$WD/diff.patch`, `REPO`, the mode (PR/uncommitted/diff-only), the output language (from `lang`), and **`TIER` with an exploration budget** — T1/T2 means "the diff plus its nearest context and direct consumers; do not sweep the repository", T3 means the full protocol. Each agent explores independently (that is what buys source independence), so an unbounded brief multiplies the same repo walk by the number of lanes. Their structured output is the Claude lane's share of the findings, each already carrying its `dimension`. The **same P0/P1 evidence bar and P2 admission bar** are built into each agent prompt, so every lane is held to one standard — the consultant brief in §4 is not a stricter rule for codex alone, and the standalone `/arch-review`-style commands keep the bar even without an orchestrator.
 
 **codex lane** (always) and **pi lane** (only with `extra-advisor`) — as a SINGLE foreground Bash call (one shell owns both processes → `wait` is valid; separate background calls won't work, shell state does not persist between calls).
 ```bash
-T=${TIMEOUT:-240}          # from timeout=<sec>, clamped to [30,1800]
+T=${TIMEOUT:-900}          # from timeout=<sec>, clamped to [30,1800]
 timeout "$T" codex exec -s read-only -C "$REPO" --skip-git-repo-check \
   --output-schema "$WD/findings.schema.json" -o "$WD/codex.json" "$BRIEF" </dev/null \
   > "$WD/codex.log" 2>&1 & C=$!
@@ -275,19 +286,19 @@ if [ -n "$P" ]; then wait $P; pi_rc=$?; fi
 - pi has no output-schema flag. In `$BRIEF_PI` add: "Output the findings strictly as a JSON array per the schema between the markers `===FINDINGS_START===` and `===FINDINGS_END===`".
 
 ## 6. Collect and normalize
-- dimension agents: take their structured findings, normalize to the common schema (the `dimension` field is known from the agent), `source = opus`.
+- dimension agents: take their structured findings, normalize to the common schema (the `dimension` field is known from the agent), `source = claude`.
 - codex: read `$WD/codex.json` (valid JSON per schema); treat `null` in `line`/`failure_scenario`/`suggested_fix` as "not provided". `codex_rc`: 124 → `timeout`, ≠0 → `failed` (on failure `$WD/codex.json` is not written at all — never read a missing/empty file as "zero findings"). When `failed`, grab the reason from the log (`grep -m1 -o '"message": *"[^"]*"' "$WD/codex.log"`, else its last lines) and put that one line in the section-9 status — a rejected schema or bad auth is a config bug to fix, not a clean review.
 - pi (only with `extra-advisor`): parse `$WD/pi.out` as JSONL. The final answer is the last assistant message — take the `agent_end` event (or the last `turn_end`) and concatenate its text parts:
   `jq -r 'select(.type=="agent_end") | .messages[-1].content[] | select(.type=="text") | .text' "$WD/pi.out"`
   Then take the **last** block between the markers. `pi_rc`: 124 → `timeout`, ≠0 → `failed`; markers missing/unparseable → `unparseable`, keep the raw output.
   Also read pi's actual model from the same events (`.message.provider` / `.message.model`) — report it in section 9 and apply the independence check from section 0.
-- Tag every finding with `source` (`opus`/`codex`/`pi`) and `dimension`, and **preserve `owner`** when the reporting lane set it — normalizing it away is what turns the §7 owner rule into a no-op.
-- **Floor case:** if all external consultants are unavailable/failed — build the report from the Opus dimension agents only, with a "single-source (Opus-only)" warning; do not abort.
+- Tag every finding with `source` (`claude`/`codex`/`pi`) and `dimension`, and **preserve `owner`** when the reporting lane set it — normalizing it away is what turns the §7 owner rule into a no-op.
+- **Floor case:** if all external consultants are unavailable/failed — build the report from the Claude dimension agents only, with a "single-source (Claude-only)" warning; do not abort.
 
 ## 7. Consensus synthesis (you are the arbiter)
 - **You do NOT author findings yourself.** Findings come only from the independent dimension agents + codex (+ pi) — each a separate context. You merge/dedup/rank; you never grade your own review — the sceptic pass (§8) is run by a separate independent verifier to avoid confirmation bias.
 - **Dedup** overlapping findings by (file, line neighborhood, meaning) — across sources AND across dimensions (the same problem may surface as both impact and quality — merge, keep the more precise `dimension`). When in doubt, don't merge; mark as related.
-- **Agreement badge** `[opus|codex|pi]` — who found it (merged duplicates combine their sources). Note that every dimension agent is `source = opus`, so two Opus lanes reporting the same problem merge into a single `[opus]` — cross-dimension overlap never inflates the badge.
+- **Agreement badge** `[claude|codex|pi]` — who found it (merged duplicates combine their sources). The token names the **lane, not the model**: every dimension agent is `source = claude` whichever model it runs on (§6), so two Claude lanes reporting the same problem merge into a single `[claude]` — cross-dimension overlap never inflates the badge.
 - **`owner:` tags.** A lane may report something outside its own protocol and tag it `owner: <lane>` (e.g. quality flags a probable bug it cannot trace to consumers). If that lane ran, normal dedup applies — merge and keep the more precise `dimension`. **If that lane did not run in this review** (architecture is absent at T2; `dims=` can narrow the panel further), the finding is *ungraded*: keep the reporter's severity, do not demote it for being out-of-lane, and mark it in the report as `owner lane not in this run — ungraded`. A finding must never be lost because the lane that owns it was skipped.
 - Assign the **final severity** per the impact rubric (the decision is yours; source agreement influences confidence).
 - Keep minority/disputed findings (single source) with an annotation; never drop them silently.
@@ -313,12 +324,12 @@ base→head: <…> | date: <…> | sceptic: STRICT/BASIC/OFF | extra-advisor: ON
 Ignored args: <unrecognized or overridden tokens, or "none">
 Classification: tier=<T0..T3> | effective code: <~N lines / M files> | non-code excluded: <K lines (.bru/lock/docs)> | blast: <isolated|local|wide> | basis: <short>
 Dimensions: <architecture? quality impact tests?>  (applied / skipped with reason)
-Sources: codex=<ok|timeout|failed: <reason from codex.log>|unavailable>, pi=<ok|…|unparseable|skipped (no extra-advisor)>, opus=ok
+Sources: codex=<ok|timeout|failed: <reason from codex.log>|unavailable>, pi=<ok|…|unparseable|skipped (no extra-advisor)>, claude=ok
 Code graph: <codegraph|graphify|none> (used for navigation/blast-radius)
 Totals: P0=<n> P1=<n> P2=<n>
 
 ## P0
-### <title>  `file:line`  [opus|codex|pi]  (dimension/category)<, survived skeptic>
+### <title>  `file:line`  [claude|codex|pi]  (dimension/category)<, survived skeptic>
 <rationale>
 **Fix:** <suggested_fix>
 ...
@@ -340,7 +351,7 @@ Totals: P0=<n> P1=<n> P2=<n>
 | tests | applied/skipped(no tests) | | | |
 
 ## Unconfirmed (single-source)
-<findings from only one of opus/codex/pi not independently grounded (populated more aggressively under sceptic); with annotation>
+<findings from only one of claude/codex/pi not independently grounded (populated more aggressively under sceptic); with annotation>
 
 ## Unverified — needs confirmation
 <P0s whose failure scenario was not concretely grounded (sceptic) — NOT counted as confirmed P0 in Totals>
