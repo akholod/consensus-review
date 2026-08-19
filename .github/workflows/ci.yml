@@ -21,6 +21,8 @@ jobs:
         run: node --test
       - name: Contract parity (no hand-edited schema drift)
         run: node scripts/gen-contracts.mjs --check
+      - name: Prompt and agent invariants
+        run: node scripts/lint-prompts.mjs
 
   validate-plugin:
     runs-on: ubuntu-latest
