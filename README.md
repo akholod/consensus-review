@@ -4,6 +4,8 @@ Multi-model **consensus code review** for Claude Code. Opus acts as **arbiter** 
 
 It ships two review strategies. `/consensus-review` is the **parallel** one — several independent reviewers plus an external consultant, merged by an arbiter, for multi-source agreement. `/loop-review` is the **sequential** one — the context is built once and reviewed in several differentiated passes, each told what is already covered but never *why*, because review models hyperfocus on one theme and miss what sits beside it. Use consensus-review when you want agreement; use loop-review when you want coverage per token.
 
+> **Check your setup with `/doctor`.** It reports what each missing or misconfigured piece would *silently* do to a review — an unavailable consultant does not stop a run, it just makes it quieter. Live probes are on by default (about a minute, two small model calls); `offline` skips them.
+>
 > **No `oh-my-claudecode` required.** This is a standalone plugin — the only hard needs are the external CLIs below. **`codegraph` is strongly recommended:** its `impact`/`callers` gives fast, precise blast-radius, which is a killer feature for review.
 
 ## Install

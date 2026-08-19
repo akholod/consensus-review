@@ -4,6 +4,8 @@
 
 1. **CI green** — `node --test`, `node scripts/gen-contracts.mjs --check`, `node scripts/lint-prompts.mjs`, and plugin validation, on Node 20/22/24. Deterministic; no model calls.
 2. **Adapter compatibility** — `node scripts/compat-check.mjs`. This one makes a real `claude -p` call, so it is not in CI. It proves the live CLI still returns the envelope `adapter.mjs` parses. **No release without a green run.**
+
+   The probe itself lives in `scripts/lib/probe.mjs`, shared with `scripts/doctor.mjs`. One set of probes, two entry points: the check that gates a release and the check a user runs cannot drift apart and start disagreeing about what a working setup looks like.
 3. **Version bump** in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
 
 ## Why the compatibility check is a release gate and not a CI job
@@ -20,6 +22,7 @@ Record each release's result here.
 | 2026-08-18 | 0.8.0 | 2.1.234 | green — all 5 checks passed |
 | 2026-08-19 | 0.8.2 | 2.1.235 | green — all 6 checks passed, after the probe was rewritten (see below) |
 | 2026-08-19 | 0.8.3 | 2.1.235 | green — all 6 checks passed |
+| 2026-08-19 | 0.9.0 | 2.1.235 | green — all 6 checks passed |
 
 ## 2026-08-19 — why the probe changed
 
