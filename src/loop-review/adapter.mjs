@@ -13,6 +13,19 @@ export const DENIED_TOOLS = Object.freeze([
   "Edit", "Write", "NotebookEdit", "TodoWrite",
 ])
 
+/**
+ * A pass runs with no MCP servers at all.
+ *
+ * `--disallowed-tools` names built-in tools only, so MCP tools are offered to a pass that is
+ * supposed to see nothing but its prebuilt context — and whether they are blocked depends on the
+ * user's own `permissions.allow`, not on anything this runtime controls. Measured: with a
+ * `mcp__codegraph__*` entry allowlisted, a pass called `codegraph_explore` (which returns verbatim
+ * repository source) with `permission_denials: []`. Isolation cannot rest on a setting the
+ * reviewed machine is free to change, so the servers are removed rather than the tools denied.
+ * Also drops ~3.7k tokens of tool schemas per call and the server startup on every spawn.
+ */
+export const NO_MCP = Object.freeze(["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}'])
+
 const ZERO_USAGE = Object.freeze({
   input_tokens: 0,
   output_tokens: 0,
@@ -130,15 +143,30 @@ export function interpret({ rc, stdout, timedOut, requireKey = "findings" }) {
 /**
  * Invoke the runner. Flags precede `-p` deliberately: `--disallowed-tools` is variadic and
  * swallows a trailing positional prompt (contracts/adapter.md).
+ *
+ * `systemPrefix` carries the part of the request that is byte-identical on every call of a run
+ * (the diff and its context). It goes to `--append-system-prompt`, NOT into `prompt`, because the
+ * whole `-p` message is a single prompt-cache block: with the prefix inside it, the varying
+ * negative-space tail invalidates the prefix too and the diff is re-uploaded on every pass.
+ * The saving scales with prefix size: -41% billed input on a synthetic 28k-token prefix, -5.7%
+ * on a real 2k one. Kept because it is free and pays on the large diffs that actually cost.
+ * See docs/loop-review-measurements.md §US-004 for what dominates the bill instead.
  */
-export function run({ prompt, model = "sonnet", timeoutMs = 240_000, cwd = process.cwd(), denied = DENIED_TOOLS, bin = "claude", requireKey = "findings" }) {
-  const started = Date.now()
-  const args = [
+export function buildArgs({ prompt, systemPrefix = "", model = "sonnet", denied = DENIED_TOOLS }) {
+  return [
     "--disallowed-tools", denied.join(","),
+    ...NO_MCP,
+    // Only when non-empty: an empty value would still shift the cache prefix for no benefit.
+    ...(systemPrefix ? ["--append-system-prompt", systemPrefix] : []),
     "--output-format", "json",
     "--model", model,
     "-p", prompt,
   ]
+}
+
+export function run({ prompt, systemPrefix = "", model = "sonnet", timeoutMs = 240_000, cwd = process.cwd(), denied = DENIED_TOOLS, bin = "claude", requireKey = "findings" }) {
+  const started = Date.now()
+  const args = buildArgs({ prompt, systemPrefix, model, denied })
   const proc = spawnSync(bin, args, {
     cwd,
     encoding: "utf8",

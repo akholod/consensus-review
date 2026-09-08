@@ -259,7 +259,7 @@ export function newRunState({ target, diffHash, cells, trivial, highRisk, budget
     findings: [],
     refuted: [],
     budget: { tokens: 0, calls: 0, ms: 0, ...budget },
-    spent: { tokens: 0, calls: 0, ms: 0 },
+    spent: { tokens: 0, calls: 0, ms: 0, cacheCreate: 0, cacheRead: 0 },
     escalations: [],
   }
 }

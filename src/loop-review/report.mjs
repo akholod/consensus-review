@@ -118,6 +118,18 @@ export function renderReport(run, { target, generatedAt = "" } = {}) {
   const mandatory = run.cells.filter((c) => c.mandatory).length
   out.push(`- high-risk cells independently verified: ${verified}/${mandatory}`)
   out.push(`- budget spent: ${run.spent.calls} call(s), ${run.spent.tokens} token(s)${run.spent.ms ? `, ${run.spent.ms}ms` : ""}`)
+  // A run that re-uploads its prefix every pass costs several times what it should, and nothing
+  // else in the report would show it: the token total counts a cache write and a cache read the
+  // same, though they are billed an order of magnitude apart.
+  const created = run.spent.cacheCreate ?? 0
+  const read = run.spent.cacheRead ?? 0
+  if (created || read) {
+    const hit = ((read / (read + created)) * 100).toFixed(0)
+    // The first call of a run is always a cold write, so reads below writes only mean something
+    // once there has been a call that could have read what an earlier one wrote.
+    const suspect = run.spent.calls > 1 && read < created
+    out.push(`- prompt cache: ${read} read / ${created} written (${hit}% hit)${suspect ? " — **the static prefix is not being reused across passes**" : ""}`)
+  }
   out.push("")
 
   if (run.escalations?.length) {

@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
-  buildNegativeSpace, renderNegativeSpace, buildPassPrompt,
+  buildNegativeSpace, renderNegativeSpace, buildPassRequest,
   applyPass, applyVerdicts, shouldContinue, spend, runLoop,
 } from "../../src/loop-review/loop.mjs"
 import { newRunState, makeCell, SURFACE, RISK, TERMINAL, PASS_STATE } from "../../src/loop-review/schema.mjs"
@@ -44,15 +44,40 @@ test("the rendered handoff never contains the prior pass's reasoning", () => {
   assert.ok(!text.includes("because the guard protects refunds"))
 })
 
-test("the static prefix stays first and byte-identical while the tail varies", () => {
+// The prefix being byte-identical is not on its own worth anything: the `-p` message is one
+// prompt-cache block, so a prefix carried inside it is invalidated by its own varying tail. What
+// has to hold is that the two live in DIFFERENT parts of the request.
+test("the static prefix is byte-identical across passes and never enters the varying prompt", () => {
   const prefix = "<review_context>STATIC</review_context>"
   const run = mkRun()
-  const first = buildPassPrompt({ staticPrefix: prefix, instructions: "INSTR", negativeSpace: buildNegativeSpace(run) })
+  const first = buildPassRequest({ staticPrefix: prefix, instructions: "INSTR", negativeSpace: buildNegativeSpace(run) })
   run.findings = [{ fingerprint: "a.js:1:correctness:x" }]
-  const second = buildPassPrompt({ staticPrefix: prefix, instructions: "INSTR", negativeSpace: buildNegativeSpace(run) })
-  assert.ok(first.startsWith(prefix))
-  assert.ok(second.startsWith(prefix))
-  assert.notEqual(first, second)
+  const second = buildPassRequest({ staticPrefix: prefix, instructions: "INSTR", negativeSpace: buildNegativeSpace(run) })
+
+  assert.equal(first.systemPrefix, prefix)
+  assert.equal(second.systemPrefix, first.systemPrefix, "the cacheable part must not move between passes")
+  assert.ok(!first.prompt.includes(prefix), "the prefix must not be duplicated into the varying message")
+  assert.ok(!second.prompt.includes(prefix))
+  assert.notEqual(second.prompt, first.prompt, "the negative space must still reach the pass")
+  assert.ok(second.prompt.includes("a.js:1:correctness:x"))
+})
+
+test("runLoop hands the runner the prefix out of band, not inside the prompt", async () => {
+  const seen = []
+  await runLoop({
+    ctx: { target: "t", diffHash: "h", cells: cells(), staticPrefix: "<review_context>STATIC</review_context>" },
+    runner: async ({ prompt, systemPrefix }) => {
+      seen.push({ prompt, systemPrefix })
+      return okPass({ findings: [], cells: [] })
+    },
+    discoveryInstructions: "INSTR",
+    budget: { calls: 2 },
+  })
+  assert.ok(seen.length > 0)
+  for (const call of seen) {
+    assert.equal(call.systemPrefix, "<review_context>STATIC</review_context>")
+    assert.ok(!call.prompt.includes("<review_context>"), "the diff must never be re-sent in the -p message")
+  }
 })
 
 test("applyPass records valid findings once and dedupes by fingerprint", () => {

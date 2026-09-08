@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { interpret, extractPayload, DENIED_TOOLS } from "../../src/loop-review/adapter.mjs"
+import { interpret, extractPayload, buildArgs, DENIED_TOOLS } from "../../src/loop-review/adapter.mjs"
 import { PASS_STATE, PASS_STATE_OK } from "../../src/loop-review/schema.mjs"
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`../fixtures/adapter/${name}.json`, import.meta.url), "utf8"))
@@ -130,4 +130,29 @@ test("absent usage counters default to zero without being treated as malformed",
   assert.equal(r.state, PASS_STATE.OK)
   assert.equal(r.usage.input_tokens, 0)
   assert.equal(r.usage.cost_usd, 0)
+})
+
+// The prefix/message split is the whole prompt-cache mechanism (see run()'s comment). It is a
+// property of the argv the adapter builds, so it is asserted there rather than left to a live run.
+test("the static prefix is passed out of band and never inside the -p message", () => {
+  const args = buildArgs({ prompt: "TAIL", systemPrefix: "PREFIX", model: "sonnet" })
+  const sys = args.indexOf("--append-system-prompt")
+  assert.notEqual(sys, -1, "the prefix must travel in --append-system-prompt")
+  assert.equal(args[sys + 1], "PREFIX")
+  assert.equal(args[args.length - 1], "TAIL")
+  assert.equal(args.indexOf("-p"), args.length - 2, "-p stays last: the flags before it are variadic")
+  assert.ok(!args[args.length - 1].includes("PREFIX"))
+})
+
+test("no --append-system-prompt is emitted when there is no prefix", () => {
+  const args = buildArgs({ prompt: "TAIL", model: "sonnet" })
+  assert.equal(args.indexOf("--append-system-prompt"), -1)
+  assert.equal(args[args.length - 1], "TAIL")
+})
+
+test("every denied tool reaches the CLI as one --disallowed-tools value", () => {
+  const args = buildArgs({ prompt: "TAIL", systemPrefix: "PREFIX" })
+  const i = args.indexOf("--disallowed-tools")
+  assert.equal(i, 0, "it must precede every other flag, and -p in particular")
+  assert.deepEqual(args[i + 1].split(","), [...DENIED_TOOLS])
 })

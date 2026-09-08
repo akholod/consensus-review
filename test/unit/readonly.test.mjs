@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
-import { DENIED_TOOLS } from "../../src/loop-review/adapter.mjs"
+import { DENIED_TOOLS, NO_MCP, buildArgs } from "../../src/loop-review/adapter.mjs"
 
 const ROOT = new URL("../..", import.meta.url).pathname
 const runtimeFiles = [
@@ -19,6 +19,20 @@ test("a review pass is denied every tool that could read or change the repositor
   for (const tool of ["Edit", "Write", "NotebookEdit", "Bash", "Task", "Read", "Grep", "Glob", "WebFetch", "WebSearch"]) {
     assert.ok(DENIED_TOOLS.includes(tool), `${tool} must be denied to a review pass`)
   }
+})
+
+// `--disallowed-tools` covers built-in tools only. An MCP tool that reads source (codegraph, a
+// filesystem server) is offered regardless, and is blocked only if the reviewed machine happens
+// not to allowlist it — measured: an allowlisted `codegraph_explore` ran with no denial. The
+// isolation promise therefore has to be enforced by removing the servers, not by naming tools.
+test("a review pass is spawned with no MCP servers, whatever the machine allowlists", () => {
+  const args = buildArgs({ prompt: "TAIL" })
+  const i = args.indexOf("--mcp-config")
+  assert.notEqual(i, -1, "an empty MCP config must be forced")
+  assert.deepEqual(JSON.parse(args[i + 1]), { mcpServers: {} })
+  assert.ok(args.includes("--strict-mcp-config"), "without it the empty config is merged, not substituted")
+  assert.ok(args.indexOf("--mcp-config") < args.indexOf("-p"), "flags must precede the prompt")
+  assert.deepEqual([...NO_MCP], ["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}'])
 })
 
 test("the runtime issues no mutating git or gh command", () => {

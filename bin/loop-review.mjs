@@ -70,22 +70,23 @@ log(`target: ${ctx.target} | files: ${ctx.files.length} | cells: ${ctx.cells.len
 const discovery = readFileSync(join(ROOT, "prompts/loop-review/discovery.md"), "utf8")
 const verifyPrompt = readFileSync(join(ROOT, "prompts/loop-review/verify.md"), "utf8")
 
-const runner = async ({ prompt, passIndex }) => {
+const runner = async ({ prompt, systemPrefix, passIndex }) => {
   log(`pass ${passIndex}…`)
-  const r = runClaude({ prompt, model, timeoutMs, cwd: workDir })
+  const r = runClaude({ prompt, systemPrefix, model, timeoutMs, cwd: workDir })
   log(`  ${r.state} (${r.ms}ms, ${r.usage.input_tokens + r.usage.output_tokens} tok)`)
   return r
 }
 
 const verifier = async ({ findings, cells }) => {
   log(`verifying ${findings.length} finding(s), ${cells.length} high-risk cell(s)…`)
+  // Same split as a discovery pass: the prefix is shared with every pass of this run, so it is
+  // delivered out of band and the verification call reads it from cache instead of re-sending it.
   const prompt = [
-    ctx.staticPrefix,
     verifyPrompt,
     `<findings>\n${JSON.stringify(findings, null, 2)}\n</findings>`,
     `<cells_to_verify>\n${JSON.stringify(cells, null, 2)}\n</cells_to_verify>`,
   ].join("\n\n")
-  const r = runClaude({ prompt, model, timeoutMs, cwd: workDir, requireKey: "verdicts" })
+  const r = runClaude({ prompt, systemPrefix: ctx.staticPrefix, model, timeoutMs, cwd: workDir, requireKey: "verdicts" })
   if (r.state !== "ok") {
     log(`  verifier ${r.state} — nothing adjudicated`)
     // Usage is still spent even when the call is unusable, so it is still charged to the budget.

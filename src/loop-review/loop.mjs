@@ -45,10 +45,21 @@ export function renderNegativeSpace(ns) {
   return out.join("\n")
 }
 
-export function buildPassPrompt({ staticPrefix, instructions, negativeSpace }) {
-  // The static prefix comes first and byte-identically on every pass; only the tail varies.
+/**
+ * Split one pass into the part that never changes and the part that does.
+ *
+ * `systemPrefix` is byte-identical on every pass of a run and is delivered out of band (the
+ * adapter puts it in `--append-system-prompt`). `prompt` carries only what actually varies.
+ * The split is what makes the prefix cacheable: the `-p` message is a single prompt-cache
+ * block, so a prefix sitting inside it is invalidated by its own varying tail and re-uploaded
+ * on every pass. The saving grows with the diff — small on a trivial one, large on a real PR.
+ */
+export function buildPassRequest({ staticPrefix, instructions, negativeSpace }) {
   const tail = renderNegativeSpace(negativeSpace)
-  return [staticPrefix, tail, instructions].filter(Boolean).join("\n\n")
+  return {
+    systemPrefix: staticPrefix ?? "",
+    prompt: [tail, instructions].filter(Boolean).join("\n\n"),
+  }
 }
 
 /** Apply one pass's payload to the run: record findings, validate evidence, mark coverage. */
@@ -158,6 +169,12 @@ export function spend(run, usage, ms) {
   run.spent.ms += ms ?? 0
   run.spent.tokens += (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0) +
     (usage?.cache_creation_input_tokens ?? 0) + (usage?.cache_read_input_tokens ?? 0)
+  // Kept apart from the budget total: `tokens` sums four counters that are billed at very
+  // different rates, so it cannot show whether the run is re-uploading its prefix. A run whose
+  // reads collapse towards its writes is paying for the diff once per pass — the failure the
+  // system/user split exists to prevent, and it is invisible in the total alone.
+  run.spent.cacheCreate = (run.spent.cacheCreate ?? 0) + (usage?.cache_creation_input_tokens ?? 0)
+  run.spent.cacheRead = (run.spent.cacheRead ?? 0) + (usage?.cache_read_input_tokens ?? 0)
   run.spent.cost_usd = (run.spent.cost_usd ?? 0) + (usage?.cost_usd ?? 0)
   return run.spent
 }
@@ -197,12 +214,12 @@ export async function runLoop({ ctx, runner, verifier, discoveryInstructions, cu
   while (shouldContinue(run) || run.passes.length === 0) {
     if (run.trivial && run.passes.length >= run.maxPasses) break
     const index = run.passes.length + 1
-    const prompt = buildPassPrompt({
+    const { systemPrefix, prompt } = buildPassRequest({
       staticPrefix: ctx.staticPrefix,
       instructions: discoveryInstructions,
       negativeSpace: buildNegativeSpace(run),
     })
-    const result = await runner({ prompt, passIndex: index })
+    const result = await runner({ prompt, systemPrefix, passIndex: index })
     const pass = { index, state: result.state, newFindings: 0, detail: result.detail ?? "", usage: result.usage, modelId: result.modelId ?? null, runnerId: result.runnerId ?? null }
     spend(run, result.usage, result.ms)
 
