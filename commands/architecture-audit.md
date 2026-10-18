@@ -31,7 +31,7 @@ Stack-agnostic. Scope — always the whole project.
   architectural complexity warrants it.
 - Ask clarifying questions **during the analysis**, as soon as facts from the
   code are insufficient. Do not accumulate them to the end.
-- Output language: English by default. If the caller passes `lang=ua` (Ukrainian), write in Ukrainian. Identifiers, paths, and technical terms stay in their original form.
+- Output language: English by default. If the caller passes `lang=<language>` (any language, as a code or a name), write in that language. Identifiers, paths, and technical terms stay in their original form.
 
 ## Severity Scale (for the findings block in Phase 5)
 

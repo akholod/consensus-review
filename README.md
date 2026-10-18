@@ -77,7 +77,7 @@ for fast blast-radius. None of them is required; see
 ```text
 /consensus-review                     review uncommitted changes
 /consensus-review #42                 review pull request 42
-/consensus-review #42 deep lang=ua    full panel, report in Ukrainian
+/consensus-review #42 deep lang=uk    full panel, report in Ukrainian
 /loop-review --pr=42                  sequential review of the same PR
 ```
 

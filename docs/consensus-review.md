@@ -7,7 +7,7 @@ every serious finding. Back to the [README](../README.md).
 ```text
 /consensus-review [<PR>] [deep|minimal] [dims=<list>|arch] [sceptic=off|basic|strict]
                   [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped|full|off]
-                  [out=<path>|no-file] [lang=en|ua|ru]
+                  [out=<path>|no-file] [lang=<language>]
 ```
 
 `<PR>` is a PR URL, `owner/repo#N` or `#N`. Without it, the review covers
@@ -34,7 +34,7 @@ never passes for a default.
 | `p2=full` / `p2=off`      | list every P2 / show only the count                                                                                                          |
 | `out=<path>`              | write the report to a directory or an exact file                                                                                             |
 | `no-file`                 | terminal only; the run writes nothing to disk                                                                                                |
-| `lang=en\|ua\|ru`         | report language; code, paths and terms stay as they are                                                                                     |
+| `lang=<language>`         | report language: any language, as a code or a name; code, paths and terms stay as they are                                                  |
 
 Depth (`deep`, `minimal`) and lanes (`dims`, `arch`) are independent:
 `minimal arch` is a shallow pass that includes architecture.

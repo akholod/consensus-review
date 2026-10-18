@@ -1,6 +1,6 @@
 ---
 description: Consensus code review (Opus arbiter + codex, optional pi advisor) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; strict sceptic by default; every flag also accepted with a leading --
-argument-hint: "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>|arch] [sceptic=off|basic|strict] [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped|full|off] [out=<path>|no-file] [lang=en|ua|ru]"
+argument-hint: "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>|arch] [sceptic=off|basic|strict] [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped|full|off] [out=<path>|no-file] [lang=<language>]"
 ---
 
 You are the **Opus arbiter** of a consensus review. Review runs by **dimensions** (what
@@ -42,7 +42,7 @@ Resolution rules, in full:
 - `p2=<mode>` → how P2 is presented in the report (§9). `grouped` (default) — up to 7 individually, the rest rolled up by theme. `full` — every P2 individually. `off` — omit the P2 body, but keep the count in `Totals` and one summary line, because a suppressed section must still be visibly suppressed.
 - `out=<path>` → where the report file goes. A value ending in `/`, or naming an existing directory, is treated as a directory and the default filename is used inside it; anything else is the exact file path. Default: `<cwd>/.reviews/review-<slug>-<YYYY-MM-DD>.md`.
 - `no-file` → do not write a report file at all, terminal output only. With this flag the review performs **zero** writes anywhere on disk (`$WD` under `/tmp` aside).
-- `lang=<code>` → output language for the review: `en` (default), `ua` (Ukrainian), `ru` (Russian). Code identifiers, paths, and technical terms always stay in their original form. Pass the chosen language to the dimension agents and into the consultant brief.
+- `lang=<language>` → output language for the review: any language, given as a code or a name; English by default. A value you cannot read as a language goes to `Ignored args`. Code identifiers, paths, and technical terms always stay in their original form. Pass the chosen language to the dimension agents and into the consultant brief.
 
 ## 1. Resolve diff and context
 Work dir **outside the repo**: `WD=$(mktemp -d)` (in `/tmp`, not under the repo — otherwise it pollutes `git status`).
@@ -320,7 +320,7 @@ Write the report in the selected output language (`lang`, default English). Sort
 Format:
 ```
 # Consensus Review — <target: PR #N url | uncommitted in <repo>>
-base→head: <…> | date: <…> | sceptic: STRICT/BASIC/OFF | extra-advisor: ON (pi, <provider/model>)/OFF | timeout: <sec> | p2: <grouped|full|off> | lang: <en|ua|ru>
+base→head: <…> | date: <…> | sceptic: STRICT/BASIC/OFF | extra-advisor: ON (pi, <provider/model>)/OFF | timeout: <sec> | p2: <grouped|full|off> | lang: <language>
 Ignored args: <unrecognized or overridden tokens, or "none">
 Classification: tier=<T0..T3> | effective code: <~N lines / M files> | non-code excluded: <K lines (.bru/lock/docs)> | blast: <isolated|local|wide> | basis: <short>
 Dimensions: <architecture? quality impact tests?>  (applied / skipped with reason)
