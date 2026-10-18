@@ -51,7 +51,11 @@ test("the only forge call reads", () => {
   }
 })
 
-test("the report is the runtime's only write, and it is suppressible", () => {
+// Two writes exist and no more: the report, and the system-prefix file the runner is handed
+// instead of a 500 KB argv value. The second one is why this is a list and not a single entry —
+// widened deliberately, since the promise being protected is that nothing is written INTO THE
+// REVIEWED REPOSITORY, and the prefix file is confined to the run's temp cwd.
+test("the runtime writes only the report and the temp system-prefix file", () => {
   const writes = []
   for (const file of runtimeFiles) {
     // call sites only — the import statement names the same symbol
@@ -60,7 +64,11 @@ test("the report is the runtime's only write, and it is suppressible", () => {
       writes.push(`${file}:${m[1]}`)
     }
   }
-  assert.deepEqual(writes, ["bin/loop-review.mjs:writeFileSync"], `unexpected writes: ${writes.join(", ")}`)
-  // and that single write is behind --no-file
+  assert.deepEqual(writes.sort(), ["bin/loop-review.mjs:writeFileSync", "src/loop-review/adapter.mjs:writeFileSync"],
+    `unexpected writes: ${writes.join(", ")}`)
+  // the report write is behind --no-file
   assert.match(source("bin/loop-review.mjs"), /if \(!noFile\) \{[\s\S]*?writeFileSync/)
+  // and the adapter's write is anchored to the spawn cwd, which bin/ sets to a mkdtemp directory
+  assert.match(source("src/loop-review/adapter.mjs"), /systemPrefixFile = join\(cwd, SYSTEM_PREFIX_FILE\)/)
+  assert.match(source("bin/loop-review.mjs"), /const workDir = mkdtempSync\(/)
 })

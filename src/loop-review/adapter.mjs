@@ -5,6 +5,8 @@
 // test/fixtures/adapter/ were captured from a real CLI and pin this interpretation.
 
 import { spawnSync } from "node:child_process"
+import { writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { PASS_STATE } from "./schema.mjs"
 
 /** Tools a discovery pass must not have. `--allowed-tools` does NOT restrict — see contracts/adapter.md. */
@@ -25,6 +27,9 @@ export const DENIED_TOOLS = Object.freeze([
  * Also drops ~3.7k tokens of tool schemas per call and the server startup on every spawn.
  */
 export const NO_MCP = Object.freeze(["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}'])
+
+/** Basename of the system-prefix file, written into the run's temp cwd. */
+export const SYSTEM_PREFIX_FILE = "system-prefix.txt"
 
 const ZERO_USAGE = Object.freeze({
   input_tokens: 0,
@@ -145,19 +150,29 @@ export function interpret({ rc, stdout, timedOut, requireKey = "findings" }) {
  * swallows a trailing positional prompt (contracts/adapter.md).
  *
  * `systemPrefix` carries the part of the request that is byte-identical on every call of a run
- * (the diff and its context). It goes to `--append-system-prompt`, NOT into `prompt`, because the
+ * (the diff and its context). It goes to the system prompt, NOT into `prompt`, because the
  * whole `-p` message is a single prompt-cache block: with the prefix inside it, the varying
  * negative-space tail invalidates the prefix too and the diff is re-uploaded on every pass.
  * The saving scales with prefix size: -41% billed input on a synthetic 28k-token prefix, -5.7%
  * on a real 2k one. Kept because it is free and pays on the large diffs that actually cost.
  * See docs/loop-review-measurements.md §US-004 for what dominates the bill instead.
+ *
+ * It travels as a FILE, never as an argv value. Linux caps one argv string at MAX_ARG_STRLEN
+ * (131,072 bytes) and the prefix is the diff plus its originals — measured at 531,693 bytes on a
+ * 24-file change. Inline, `spawnSync` then fails with E2BIG before the CLI starts: no envelope,
+ * no stderr, ~2ms, so EVERY pass of the run reported `failed` and the run escalated. That is a
+ * tool failure indistinguishable, in the report, from a review that could not reach a verdict.
+ * `--append-system-prompt-file` takes the same bytes with no size limit and yields the identical
+ * system prompt, so the cache split above is unchanged. There is deliberately NO size-conditional
+ * fallback to the inline form: a branch that fires only on large diffs is the branch that stays
+ * broken, and this one did.
  */
-export function buildArgs({ prompt, systemPrefix = "", model = "sonnet", denied = DENIED_TOOLS }) {
+export function buildArgs({ prompt, systemPrefixFile = "", model = "sonnet", denied = DENIED_TOOLS }) {
   return [
     "--disallowed-tools", denied.join(","),
     ...NO_MCP,
     // Only when non-empty: an empty value would still shift the cache prefix for no benefit.
-    ...(systemPrefix ? ["--append-system-prompt", systemPrefix] : []),
+    ...(systemPrefixFile ? ["--append-system-prompt-file", systemPrefixFile] : []),
     "--output-format", "json",
     "--model", model,
     "-p", prompt,
@@ -166,7 +181,14 @@ export function buildArgs({ prompt, systemPrefix = "", model = "sonnet", denied 
 
 export function run({ prompt, systemPrefix = "", model = "sonnet", timeoutMs = 240_000, cwd = process.cwd(), denied = DENIED_TOOLS, bin = "claude", requireKey = "findings" }) {
   const started = Date.now()
-  const args = buildArgs({ prompt, systemPrefix, model, denied })
+  // The prefix is materialised inside `cwd`, which is the run's temp directory and never the
+  // reviewed repository. Same name every call, so a run leaves one file rather than one per pass.
+  let systemPrefixFile = ""
+  if (systemPrefix) {
+    systemPrefixFile = join(cwd, SYSTEM_PREFIX_FILE)
+    writeFileSync(systemPrefixFile, systemPrefix)
+  }
+  const args = buildArgs({ prompt, systemPrefixFile, model, denied })
   const proc = spawnSync(bin, args, {
     cwd,
     encoding: "utf8",

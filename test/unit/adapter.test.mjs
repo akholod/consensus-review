@@ -1,7 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
-import { interpret, extractPayload, buildArgs, DENIED_TOOLS } from "../../src/loop-review/adapter.mjs"
+import { readFileSync, writeFileSync, mkdtempSync, chmodSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { interpret, extractPayload, buildArgs, run, DENIED_TOOLS, SYSTEM_PREFIX_FILE } from "../../src/loop-review/adapter.mjs"
 import { PASS_STATE, PASS_STATE_OK } from "../../src/loop-review/schema.mjs"
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`../fixtures/adapter/${name}.json`, import.meta.url), "utf8"))
@@ -135,23 +137,55 @@ test("absent usage counters default to zero without being treated as malformed",
 // The prefix/message split is the whole prompt-cache mechanism (see run()'s comment). It is a
 // property of the argv the adapter builds, so it is asserted there rather than left to a live run.
 test("the static prefix is passed out of band and never inside the -p message", () => {
-  const args = buildArgs({ prompt: "TAIL", systemPrefix: "PREFIX", model: "sonnet" })
-  const sys = args.indexOf("--append-system-prompt")
-  assert.notEqual(sys, -1, "the prefix must travel in --append-system-prompt")
-  assert.equal(args[sys + 1], "PREFIX")
+  const args = buildArgs({ prompt: "TAIL", systemPrefixFile: "/tmp/PREFIX.txt", model: "sonnet" })
+  const sys = args.indexOf("--append-system-prompt-file")
+  assert.notEqual(sys, -1, "the prefix must travel in --append-system-prompt-file")
+  assert.equal(args[sys + 1], "/tmp/PREFIX.txt")
   assert.equal(args[args.length - 1], "TAIL")
   assert.equal(args.indexOf("-p"), args.length - 2, "-p stays last: the flags before it are variadic")
   assert.ok(!args[args.length - 1].includes("PREFIX"))
 })
 
+// The prefix must never be an argv value at any size: Linux rejects one longer than
+// MAX_ARG_STRLEN with E2BIG, which killed every pass of a real run before the CLI even started.
+test("the prefix never appears inline in argv, so its size cannot fail the spawn", () => {
+  const args = buildArgs({ prompt: "TAIL", systemPrefixFile: "/tmp/PREFIX.txt", model: "sonnet" })
+  assert.equal(args.indexOf("--append-system-prompt"), -1, "the inline form must be gone, not merely unused")
+  assert.ok(args.every((a) => Buffer.byteLength(a) < 131_072), "no argv element may approach MAX_ARG_STRLEN")
+})
+
 test("no --append-system-prompt is emitted when there is no prefix", () => {
   const args = buildArgs({ prompt: "TAIL", model: "sonnet" })
-  assert.equal(args.indexOf("--append-system-prompt"), -1)
+  assert.equal(args.indexOf("--append-system-prompt-file"), -1)
   assert.equal(args[args.length - 1], "TAIL")
 })
 
+// Regression, measured: a 24-file diff produced a 531,693-byte prefix. Inline, spawnSync returned
+// status null / error E2BIG in ~2ms with empty stdout, which interpret() reads as `failed` — an
+// escalating run that says nothing about the reviewed code. The stub reports the byte count it was
+// handed, so this asserts the whole prefix arrived, not merely that the spawn survived.
+test("a prefix far larger than MAX_ARG_STRLEN reaches the runner intact", () => {
+  const dir = mkdtempSync(join(tmpdir(), "adapter-prefix-"))
+  const stub = join(dir, "stub.mjs")
+  writeFileSync(stub, [
+    "#!/usr/bin/env node",
+    'import { readFileSync } from "node:fs"',
+    'const i = process.argv.indexOf("--append-system-prompt-file")',
+    "const bytes = i < 0 ? -1 : Buffer.byteLength(readFileSync(process.argv[i + 1], \"utf8\"))",
+    'process.stdout.write(JSON.stringify({ is_error: false, subtype: "success", usage: {}, result: JSON.stringify({ findings: [], cells: [], prefixBytes: bytes }) }))',
+  ].join("\n"))
+  chmodSync(stub, 0o755)
+
+  const systemPrefix = "P".repeat(531_693)
+  const r = run({ prompt: "TAIL", systemPrefix, cwd: dir, bin: stub })
+
+  assert.equal(r.state, PASS_STATE.OK, `spawn must survive the prefix, got ${r.state}: ${r.detail}`)
+  assert.equal(r.payload.prefixBytes, systemPrefix.length, "the runner must receive every byte of the prefix")
+  assert.equal(readFileSync(join(dir, SYSTEM_PREFIX_FILE), "utf8"), systemPrefix)
+})
+
 test("every denied tool reaches the CLI as one --disallowed-tools value", () => {
-  const args = buildArgs({ prompt: "TAIL", systemPrefix: "PREFIX" })
+  const args = buildArgs({ prompt: "TAIL", systemPrefixFile: "/tmp/PREFIX.txt" })
   const i = args.indexOf("--disallowed-tools")
   assert.equal(i, 0, "it must precede every other flag, and -p in particular")
   assert.deepEqual(args[i + 1].split(","), [...DENIED_TOOLS])

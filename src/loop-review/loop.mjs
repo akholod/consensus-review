@@ -49,7 +49,8 @@ export function renderNegativeSpace(ns) {
  * Split one pass into the part that never changes and the part that does.
  *
  * `systemPrefix` is byte-identical on every pass of a run and is delivered out of band (the
- * adapter puts it in `--append-system-prompt`). `prompt` carries only what actually varies.
+ * adapter writes it to a file and names it with `--append-system-prompt-file`). `prompt` carries
+ * only what actually varies.
  * The split is what makes the prefix cacheable: the `-p` message is a single prompt-cache
  * block, so a prefix sitting inside it is invalidated by its own varying tail and re-uploaded
  * on every pass. The saving grows with the diff — small on a trivial one, large on a real PR.

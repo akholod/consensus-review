@@ -3,7 +3,7 @@
 ```
 run({ prompt, systemPrefix, model, timeoutMs, cwd, denied, bin, requireKey })
   -> { state, payload, usage, detail, ms, modelId, runnerId }
-buildArgs({ prompt, systemPrefix, model, denied }) -> string[]   // pure; the argv above
+buildArgs({ prompt, systemPrefixFile, model, denied }) -> string[]   // pure; the argv above
 ```
 
 `state` is one of `ok | malformed | truncated | refused | timeout | failed`. Only `ok` may contribute findings; every other value forces the run to a non-`CLEAN` terminal state.
@@ -16,9 +16,9 @@ buildArgs({ prompt, systemPrefix, model, denied }) -> string[]   // pure; the ar
 
 Captured against **claude 2.1.234 (Claude Code)**. Re-run `node scripts/compat-check.mjs` before every release.
 
-- Invocation: `claude --disallowed-tools "<list>" --strict-mcp-config --mcp-config '{"mcpServers":{}}' [--append-system-prompt "<prefix>"] --output-format json --model <m> -p "<prompt>"`.
+- Invocation: `claude --disallowed-tools "<list>" --strict-mcp-config --mcp-config '{"mcpServers":{}}' [--append-system-prompt-file <path>] --output-format json --model <m> -p "<prompt>"`.
 - `systemPrefix` carries the run-invariant part of the request (the diff and its context) and MUST NOT be repeated inside `prompt`. The `-p` message is a **single prompt-cache block**: a prefix placed inside it is invalidated by its own varying tail, so every pass re-uploads the diff. The saving scales with prefix size — measured −41% billed input on a synthetic 28k-token prefix, −5.7% on a real 2k one. See `docs/loop-review-measurements.md` §US-004, including what actually dominates the bill.
-- `--append-system-prompt` takes exactly one value and does not swallow the following flag, but is kept before `-p` with the other flags.
+- `--append-system-prompt-file` takes exactly one value and does not swallow the following flag, but is kept before `-p` with the other flags. The prefix is passed as a **file**, never inline: Linux caps a single argv string at `MAX_ARG_STRLEN` (131,072 bytes), and a real 24-file diff produced a 531,693-byte prefix. Inline, `spawnSync` returns `status: null, error.code: "E2BIG"` in ~2ms with empty stdout — `interpret` reads that as `failed`, so every pass of the run fails and the run escalates without ever reaching the model. The file form yields an identical system prompt, so the prompt-cache split is unaffected.
 - `--disallowed-tools` and `--allowed-tools` are **variadic** and swallow a following positional argument; they must precede `-p`.
 - `--allowed-tools` does **not** act as an exclusive allowlist and does not restrict tool use. See `docs/loop-review-measurements.md` §US-003.
 - Isolation needs **both** halves. `--disallowed-tools` covers built-in tools only; MCP tools stay on offer and execute whenever the reviewed machine allowlists them (measured: an allowlisted `codegraph_explore`, which returns verbatim source, ran with `permission_denials: []`). `NO_MCP` — `--strict-mcp-config --mcp-config '{"mcpServers":{}}'` — is therefore not optional and is always emitted. See §US-005.
