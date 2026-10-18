@@ -146,12 +146,14 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false } 
       sync ? "" : "a prompt asks for a shape the runtime does not parse")
 
     // Which model each dimension runs on — they differ since 0.8.3, and that is worth stating.
-    const models = ["arch", "impact", "quality", "test"].map((n) => {
-      const f = join(ROOT, `agents/${n}-reviewer.md`)
-      return `${n}=${readFileSync(f, "utf8").match(/^model:\s*(\S+)/m)?.[1] ?? "?"}`
-    })
-    const verifier = readFileSync(join(ROOT, "agents/finding-verifier.md"), "utf8").match(/^model:\s*(\S+)/m)?.[1]
-    add("contracts", "dimension models", "ok", `${models.join(" ")} verifier=${verifier}`)
+    // An unset effort follows the session, so it is printed as such rather than guessed.
+    const modelOf = (file) => {
+      const text = readFileSync(join(ROOT, file), "utf8")
+      const model = text.match(/^model:\s*(\S+)/m)?.[1] ?? "?"
+      return `${model}/${text.match(/^effort:\s*(\S+)/m)?.[1] ?? "session"}`
+    }
+    const models = ["arch", "impact", "quality", "test"].map((n) => `${n}=${modelOf(`agents/${n}-reviewer.md`)}`)
+    add("contracts", "dimension models", "ok", `${models.join(" ")} verifier=${modelOf("agents/finding-verifier.md")}`)
   }
 
   // ── Workspace ────────────────────────────────────────────────────────────────────────────────

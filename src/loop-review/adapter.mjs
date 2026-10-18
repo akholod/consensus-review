@@ -5,9 +5,20 @@
 // test/fixtures/adapter/ were captured from a real CLI and pin this interpretation.
 
 import { spawnSync } from "node:child_process"
-import { writeFileSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { PASS_STATE } from "./schema.mjs"
+
+const PAYLOAD_CONTRACT = JSON.parse(readFileSync(new URL("../../contracts/loop-payload.schema.json", import.meta.url), "utf8"))
+
+/**
+ * The self-contained schema `--json-schema` takes for a payload shape. The contract keeps both
+ * shapes under `$defs`; the CLI needs one root, so the root is lifted out and the defs ride along.
+ */
+export function payloadSchema(requireKey = "findings") {
+  const root = requireKey === "verdicts" ? "verifierPayload" : "discoveryPayload"
+  return { ...PAYLOAD_CONTRACT.$defs[root], $defs: PAYLOAD_CONTRACT.$defs }
+}
 
 /** Tools a discovery pass must not have. `--allowed-tools` does NOT restrict — see contracts/adapter.md. */
 export const DENIED_TOOLS = Object.freeze([
@@ -118,7 +129,12 @@ export function interpret({ rc, stdout, timedOut, requireKey = "findings" }) {
     // Anything else — an object, an array, a hostile toString — is not a response we can read.
     return { state: PASS_STATE.MALFORMED, payload: null, usage, detail: "envelope result is not a string" }
   }
-  const payload = extractPayload(envelope.result)
+  // Under `--json-schema` the CLI validates the payload and returns it in `structured_output`.
+  // Prefer that copy; parsing `result` remains the fallback for envelopes without it.
+  const structured = envelope.structured_output
+  const payload = structured && typeof structured === "object" && !Array.isArray(structured)
+    ? structured
+    : extractPayload(envelope.result)
 
   if (envelope.stop_reason === "max_tokens") {
     return { state: PASS_STATE.TRUNCATED, payload, usage, detail: "response hit max_tokens; content is incomplete" }
@@ -166,13 +182,18 @@ export function interpret({ rc, stdout, timedOut, requireKey = "findings" }) {
  * system prompt, so the cache split above is unchanged. There is deliberately NO size-conditional
  * fallback to the inline form: a branch that fires only on large diffs is the branch that stays
  * broken, and this one did.
+ *
+ * `schema` turns on structured output: the CLI validates the reply against it and retries, so
+ * the payload no longer has to be dug out of prose. Sonnet 5.5 was documented to answer JSON tasks
+ * with prose around the object, which `extractPayload` can misread when that prose has braces.
  */
-export function buildArgs({ prompt, systemPrefixFile = "", model = "sonnet", denied = DENIED_TOOLS }) {
+export function buildArgs({ prompt, systemPrefixFile = "", model = "sonnet", denied = DENIED_TOOLS, schema = null }) {
   return [
     "--disallowed-tools", denied.join(","),
     ...NO_MCP,
     // Only when non-empty: an empty value would still shift the cache prefix for no benefit.
     ...(systemPrefixFile ? ["--append-system-prompt-file", systemPrefixFile] : []),
+    ...(schema ? ["--json-schema", JSON.stringify(schema)] : []),
     "--output-format", "json",
     "--model", model,
     "-p", prompt,
@@ -188,7 +209,7 @@ export function run({ prompt, systemPrefix = "", model = "sonnet", timeoutMs = 2
     systemPrefixFile = join(cwd, SYSTEM_PREFIX_FILE)
     writeFileSync(systemPrefixFile, systemPrefix)
   }
-  const args = buildArgs({ prompt, systemPrefixFile, model, denied })
+  const args = buildArgs({ prompt, systemPrefixFile, model, denied, schema: payloadSchema(requireKey) })
   const proc = spawnSync(bin, args, {
     cwd,
     encoding: "utf8",

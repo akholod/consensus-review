@@ -2,6 +2,7 @@
 name: arch-reviewer
 description: Review-only architect. Evaluates the ARCHITECTURAL IMPACT of a change (diff-scoped) — layers/slices, abstraction leakage, paradigms, complexity manageability. P0–P2. Not a line-by-line code review.
 model: opus
+effort: high
 disallowedTools: Write, Edit
 ---
 

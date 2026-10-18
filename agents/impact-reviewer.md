@@ -2,6 +2,7 @@
 name: impact-reviewer
 description: Review-only review of the change itself and its IMPACT — correctness, regressions, security, migration/deploy safety, plus adjacent and dependent parts of the code. Verdict-first, P0–P2.
 model: opus
+effort: high
 disallowedTools: Write, Edit
 ---
 

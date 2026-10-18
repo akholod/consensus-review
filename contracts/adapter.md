@@ -3,7 +3,8 @@
 ```
 run({ prompt, systemPrefix, model, timeoutMs, cwd, denied, bin, requireKey })
   -> { state, payload, usage, detail, ms, modelId, runnerId }
-buildArgs({ prompt, systemPrefixFile, model, denied }) -> string[]   // pure; the argv above
+buildArgs({ prompt, systemPrefixFile, model, denied, schema }) -> string[]   // pure; the argv above
+payloadSchema(requireKey) -> object   // self-contained --json-schema root from loop-payload.schema.json
 ```
 
 `state` is one of `ok | malformed | truncated | refused | timeout | failed`. Only `ok` may contribute findings; every other value forces the run to a non-`CLEAN` terminal state.
@@ -16,7 +17,8 @@ buildArgs({ prompt, systemPrefixFile, model, denied }) -> string[]   // pure; th
 
 Captured against **claude 2.1.234 (Claude Code)**. Re-run `node scripts/compat-check.mjs` before every release.
 
-- Invocation: `claude --disallowed-tools "<list>" --strict-mcp-config --mcp-config '{"mcpServers":{}}' [--append-system-prompt-file <path>] --output-format json --model <m> -p "<prompt>"`.
+- Invocation: `claude --disallowed-tools "<list>" --strict-mcp-config --mcp-config '{"mcpServers":{}}' [--append-system-prompt-file <path>] --json-schema '<schema>' --output-format json --model <m> -p "<prompt>"`.
+- `--json-schema` (verified on 2.1.302, fixture `structured.json`) takes the schema **inline**; `$defs`/`$ref` resolve. The validated payload arrives in `structured_output`, `result` holds the same object as text, and `stop_reason` is `tool_use`. `interpret` prefers `structured_output` and falls back to parsing `result`. The schema is small (~2.4 KB), so the argv cap below does not apply to it. Discovery and verification send different schemas, so the verifier call does not share the discovery calls' cached tool prefix.
 - `systemPrefix` carries the run-invariant part of the request (the diff and its context) and MUST NOT be repeated inside `prompt`. The `-p` message is a **single prompt-cache block**: a prefix placed inside it is invalidated by its own varying tail, so every pass re-uploads the diff. The saving scales with prefix size — measured −41% billed input on a synthetic 28k-token prefix, −5.7% on a real 2k one. See `docs/loop-review-measurements.md` §US-004, including what actually dominates the bill.
 - `--append-system-prompt-file` takes exactly one value and does not swallow the following flag, but is kept before `-p` with the other flags. The prefix is passed as a **file**, never inline: Linux caps a single argv string at `MAX_ARG_STRLEN` (131,072 bytes), and a real 24-file diff produced a 531,693-byte prefix. Inline, `spawnSync` returns `status: null, error.code: "E2BIG"` in ~2ms with empty stdout — `interpret` reads that as `failed`, so every pass of the run fails and the run escalates without ever reaching the model. The file form yields an identical system prompt, so the prompt-cache split is unaffected.
 - `--disallowed-tools` and `--allowed-tools` are **variadic** and swallow a following positional argument; they must precede `-p`.
@@ -26,4 +28,4 @@ Captured against **claude 2.1.234 (Claude Code)**. Re-run `node scripts/compat-c
 - `stop_reason: "max_tokens"` indicates truncation.
 - A refusal is returned as `is_error: false`, `subtype: "success"`, exit 0, with prose in `result`. Payload-shape validation is mandatory; exit status is not sufficient.
 - On timeout the process is killed and **no** envelope reaches stdout — an absent envelope must never be read as "zero findings".
-- `permission_denials` is empty even when tools were used, so it is not evidence of isolation; `num_turns > 1` is the usable signal.
+- `permission_denials` is empty even when tools were used, so it is not evidence of isolation; `num_turns > 1` was the usable signal — but under `--json-schema` structured output itself costs turns (4 measured with no repository tool), so it no longer is.

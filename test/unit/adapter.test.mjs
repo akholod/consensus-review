@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { readFileSync, writeFileSync, mkdtempSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { interpret, extractPayload, buildArgs, run, DENIED_TOOLS, SYSTEM_PREFIX_FILE } from "../../src/loop-review/adapter.mjs"
+import { interpret, extractPayload, buildArgs, run, payloadSchema, DENIED_TOOLS, SYSTEM_PREFIX_FILE } from "../../src/loop-review/adapter.mjs"
 import { PASS_STATE, PASS_STATE_OK } from "../../src/loop-review/schema.mjs"
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`../fixtures/adapter/${name}.json`, import.meta.url), "utf8"))
@@ -22,6 +22,7 @@ const CASES = [
   ["timeout", PASS_STATE.TIMEOUT],
   ["exit-nonzero", PASS_STATE.FAILED],
   ["refusal", PASS_STATE.REFUSED],
+  ["structured", PASS_STATE.OK], // --json-schema run: payload in structured_output
 ]
 
 for (const [name, expected] of CASES) {
@@ -182,6 +183,42 @@ test("a prefix far larger than MAX_ARG_STRLEN reaches the runner intact", () => 
   assert.equal(r.state, PASS_STATE.OK, `spawn must survive the prefix, got ${r.state}: ${r.detail}`)
   assert.equal(r.payload.prefixBytes, systemPrefix.length, "the runner must receive every byte of the prefix")
   assert.equal(readFileSync(join(dir, SYSTEM_PREFIX_FILE), "utf8"), systemPrefix)
+})
+
+// The validated copy wins: prose with stray braces in `result` must not decide the payload.
+test("structured_output is preferred over parsing result", () => {
+  const env = { is_error: false, stop_reason: "tool_use", result: "see {below}", structured_output: { findings: [], cells: [] } }
+  const r = interpret({ rc: 0, stdout: JSON.stringify(env), timedOut: false })
+  assert.equal(r.state, PASS_STATE.OK)
+  assert.deepEqual(r.payload, { findings: [], cells: [] })
+})
+
+test("a non-object structured_output falls back to result and cannot fake a clean pass", () => {
+  const env = { is_error: false, stop_reason: "end_turn", result: "I won't do that.", structured_output: [] }
+  assert.equal(interpret({ rc: 0, stdout: JSON.stringify(env), timedOut: false }).state, PASS_STATE.REFUSED)
+})
+
+test("payloadSchema is a self-contained root for each payload shape", () => {
+  assert.deepEqual(payloadSchema("findings").required, ["findings", "cells"])
+  assert.deepEqual(payloadSchema("verdicts").required, ["verdicts", "cell_verdicts"])
+  assert.ok(payloadSchema().$defs.loopFinding, "the $refs must resolve inside the schema handed to the CLI")
+})
+
+test("run hands the CLI the schema matching requireKey, before -p", () => {
+  const dir = mkdtempSync(join(tmpdir(), "adapter-schema-"))
+  const stub = join(dir, "stub.mjs")
+  writeFileSync(stub, [
+    "#!/usr/bin/env node",
+    'const i = process.argv.indexOf("--json-schema")',
+    'const p = process.argv.indexOf("-p")',
+    "const required = i < 0 || i > p ? null : JSON.parse(process.argv[i + 1]).required",
+    'process.stdout.write(JSON.stringify({ is_error: false, usage: {}, result: "", structured_output: { verdicts: [], cell_verdicts: [], required } }))',
+  ].join("\n"))
+  chmodSync(stub, 0o755)
+
+  const r = run({ prompt: "TAIL", cwd: dir, bin: stub, requireKey: "verdicts" })
+  assert.equal(r.state, PASS_STATE.OK, r.detail)
+  assert.deepEqual(r.payload.required, ["verdicts", "cell_verdicts"])
 })
 
 test("every denied tool reaches the CLI as one --disallowed-tools value", () => {

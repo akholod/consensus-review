@@ -2,6 +2,7 @@
 name: finding-verifier
 description: Independent adversarial verifier of review findings. Fresh context, has NOT seen the synthesis. Tries to REFUTE each finding with evidence (code graph, repro, reading); confirms only what is concretely grounded. Read-only.
 model: opus
+effort: high
 disallowedTools: Write, Edit
 ---
 
