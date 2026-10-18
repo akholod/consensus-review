@@ -3,15 +3,18 @@
 # minutes of agents working are sped up, and the report arriving plays at double speed
 # before holding on its last frame.
 #
-#   bash assets/demo/render.sh <raw.mp4> <out.gif> <report_at_s>
+#   bash assets/demo/render.sh <raw.mp4> <out.gif> <report_at_s> [speedup]
 #
 # <report_at_s> is when the report file appeared, in seconds into the video; record.sh
-# measures it. Re-run this alone to re-cut an existing recording.
+# measures it. [speedup] plays the whole cut that many times faster (default 5); the hold on
+# the last frame stays long enough to read it. Re-run this alone to re-cut a recording.
 set -euo pipefail
 
 IN="$1"
 OUT="$2"
 REPORT_AT="$3"
+SPEEDUP="${4:-5}"
+HOLD=4         # seconds the final frame stays, after the speed-up
 HEAD=12        # typing the command, the panel starting: real time
 MIDDLE=16      # the agents working, sped up to this many seconds
 BEFORE=20      # report time window, before and after the file appears...
@@ -26,8 +29,8 @@ SPEED="$(echo "($TAIL_START - $HEAD) / $MIDDLE" | bc -l)"
 ffmpeg -v error -y -i "$IN" -filter_complex "
   [0:v]trim=0:$HEAD,setpts=PTS-STARTPTS[a];
   [0:v]trim=$HEAD:$TAIL_START,setpts=(PTS-STARTPTS)/$SPEED[b];
-  [0:v]trim=$TAIL_START:$TAIL_END,setpts=(PTS-STARTPTS)/$TAIL_SPEED,tpad=stop_mode=clone:stop_duration=5[c];
-  [a][b][c]concat=n=3,fps=12,split[x][y];
+  [0:v]trim=$TAIL_START:$TAIL_END,setpts=(PTS-STARTPTS)/$TAIL_SPEED[c];
+  [a][b][c]concat=n=3,setpts=PTS/$SPEEDUP,tpad=stop_mode=clone:stop_duration=$HOLD,fps=12,split[x][y];
   [x]palettegen=stats_mode=diff[p];
   [y][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle
 " "$OUT"
