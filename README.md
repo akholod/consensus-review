@@ -138,9 +138,9 @@ Everything the plugin runs, and where your code goes:
   a read-only toolset and the provider pi is set up for. `/loop-review`
   runs `claude -p`, which sends the diff and its context to Anthropic.
 - **GitHub, for pull requests.** `gh pr diff` and `gh pr view` read the
-  PR. Without `gh`, the diff is fetched with `curl` from github.com; for
-  a private repository the request to api.github.com carries your
-  `GITHUB_TOKEN`, and nothing else uses it.
+  PR. Without `gh`, a local clone is used, or for a public repository
+  the diff is fetched with `curl` from github.com. No token is read from
+  your environment.
 - **Local tools.** `git` (read-only commands), and `codegraph` or
   `graphify` when they are installed.
 - **The doctor** asks GitHub for the latest release and, unless run with

@@ -57,7 +57,7 @@ What each one adds, and what a review does without it:
 | Tool        | Adds                                                     | Without it                                                    |
 | ----------- | -------------------------------------------------------- | ------------------------------------------------------------- |
 | `codex`     | the independent consultant and the sceptic's second vote | every review is Claude-only; the report says so               |
-| `gh`        | pull requests by number or URL                           | the diff is fetched by URL; private repos need `GITHUB_TOKEN` |
+| `gh`        | pull requests by number or URL                           | a local clone, or the diff by URL for public repos; private PRs need a clone |
 | `codegraph` | fast, precise blast radius (`impact`, `callers`)         | reviewers trace consumers with grep: slower, less precise     |
 | `pi`        | a second consultant, only with the `extra-advisor` flag  | that flag has nothing to add                                  |
 

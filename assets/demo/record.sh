@@ -2,8 +2,8 @@
 # Record the README demo: a real /consensus-review of the demo repository, captured with VHS
 # and squeezed into a ~50s GIF. Needs vhs, ffmpeg, bc, claude, and codex (logged in).
 #
-#   bash assets/demo/record.sh [max_minutes]   # writes assets/demo.gif
-#   bash assets/demo/record.sh probe           # one screenshot of the first visible frame, no review
+#   bash assets/demo/record.sh <out.gif> [max_minutes]   # the README's GIF lives under assets/
+#   bash assets/demo/record.sh probe                     # a screenshot of the first visible frame, no review
 #
 # Run it from a normal terminal, not from inside Claude Code: a real review takes several
 # minutes and spends real model calls (the Opus agents and codex).
@@ -11,8 +11,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PROBE=""
-[ "${1:-}" = probe ] && PROBE=1 && shift
-MAX_MIN="${1:-15}"
+OUT=""
+if [ "${1:-}" = probe ]; then PROBE=1; else OUT="${1:?usage: record.sh <out.gif> [max_minutes] | probe}"; fi
+MAX_MIN="${2:-15}"
 WORK="$(mktemp -d)"
 DEMO="$WORK/shop-demo"
 bash "$ROOT/assets/demo/setup.sh" "$DEMO"
@@ -59,14 +60,14 @@ EOF
 
 if [ -n "$PROBE" ]; then
   cat >> "$WORK/demo.tape" <<EOF
-Screenshot "$ROOT/assets/demo/probe.png"
+Screenshot "$WORK/probe.png"
 Sleep 2s
 Ctrl+U
 Type "/exit" Sleep 500ms Enter
 Sleep 2s
 EOF
   vhs "$WORK/demo.tape"
-  echo "probe: $ROOT/assets/demo/probe.png"
+  echo "probe: $WORK/probe.png"
   exit 0
 fi
 
@@ -82,10 +83,10 @@ vhs "$WORK/demo.tape"
 kill "$WATCH" 2>/dev/null || true
 
 if [ ! -s "$WORK/reported" ]; then
-  echo "no report within ${MAX_MIN} minutes; raise it: bash $0 <max_minutes>. Raw: $WORK/raw.mp4" >&2
+  echo "no report within ${MAX_MIN} minutes; raise it: bash $0 $OUT <max_minutes>. Raw: $WORK/raw.mp4" >&2
   exit 1
 fi
 # The visible part starts ~23s after launch: the hidden Sleeps and typing above.
 REPORT_AT=$(( $(cat "$WORK/reported") - $(cat "$WORK/launched") - 23 ))
-bash "$ROOT/assets/demo/render.sh" "$WORK/raw.mp4" "$ROOT/assets/demo.gif" "$REPORT_AT"
+bash "$ROOT/assets/demo/render.sh" "$WORK/raw.mp4" "$OUT" "$REPORT_AT"
 echo "raw recording kept at $WORK/raw.mp4 (report at ${REPORT_AT}s)"

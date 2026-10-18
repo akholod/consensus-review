@@ -32,8 +32,8 @@ is `FAIL`.
   reported `failed` and its findings are lost. That is a config bug, not
   a clean review.
 - **`gh — not installed` or `not authenticated`** (`WARN`): pull
-  requests are fetched by URL instead. Public repos work; private ones
-  need `GITHUB_TOKEN`. Run `gh auth login`.
+  requests come from a local clone, or by URL for a public repository. A
+  private PR needs `gh` or a clone. Run `gh auth login`.
 - **`pi — not installed`** (`SKIP`): only matters with `extra-advisor`.
 
 ## code graph
