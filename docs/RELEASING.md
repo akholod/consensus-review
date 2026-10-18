@@ -6,7 +6,8 @@
 2. **Adapter compatibility** — `node scripts/compat-check.mjs`. This one makes a real `claude -p` call, so it is not in CI. It proves the live CLI still returns the envelope `adapter.mjs` parses. **No release without a green run.**
 
    The probe itself lives in `scripts/lib/probe.mjs`, shared with `scripts/doctor.mjs`. One set of probes, two entry points: the check that gates a release and the check a user runs cannot drift apart and start disagreeing about what a working setup looks like.
-3. **Version bump** in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
+3. **Version bump** in `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` and `package.json`.
+4. **Publish**: tag `consensus-review--v<version>`, push, GitHub release, then `npm publish` (its `prepublishOnly` runs the CI checks again).
 
 ## Why the compatibility check is a release gate and not a CI job
 
@@ -25,6 +26,7 @@ Record each release's result here.
 | 2026-08-19 | 0.9.0 | 2.1.235 | green — all 6 checks passed |
 | 2026-08-19 | 0.9.1 | 2.1.235 | green — all 6 checks passed |
 | 2026-09-08 | 0.10.0 | 2.1.263 | green — all 6 checks passed |
+| 2026-10-18 | 0.11.0 | 2.1.302 | green — all 6 checks passed, with `--json-schema` |
 
 ## 2026-08-19 — why the probe changed
 

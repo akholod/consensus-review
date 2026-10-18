@@ -1,9 +1,40 @@
 {
   "name": "consensus-review",
-  "version": "0.10.0",
-  "private": true,
+  "version": "0.11.0",
+  "description": "Code review for Claude Code that a second model has to agree with: a parallel panel with codex as consultant, or sequential coverage-directed passes. Read-only, P0-P2 with evidence.",
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "code-review",
+    "consensus",
+    "codex",
+    "multi-agent",
+    "review"
+  ],
+  "author": "akholod",
+  "license": "MIT",
+  "homepage": "https://github.com/akholod/consensus-review#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akholod/consensus-review.git"
+  },
+  "bugs": {
+    "url": "https://github.com/akholod/consensus-review/issues"
+  },
   "type": "module",
-  "description": "Runtime for the /loop-review command. The plugin itself is markdown; this package carries only the deterministic loop runtime and its tests.",
+  "files": [
+    ".claude-plugin",
+    "agents",
+    "commands",
+    "prompts",
+    "contracts",
+    "bin",
+    "src",
+    "scripts",
+    "docs/*.md",
+    "README.md",
+    "CHANGELOG.md"
+  ],
   "engines": { "node": ">=20" },
   "scripts": {
     "test": "node --test",
@@ -12,7 +43,7 @@
     "lint:prompts": "node scripts/lint-prompts.mjs",
     "doctor": "node scripts/doctor.mjs",
     "doctor:offline": "node scripts/doctor.mjs --offline",
-    "check:all": "node --test && node scripts/gen-contracts.mjs --check && node scripts/lint-prompts.mjs"
-  },
-  "license": "MIT"
+    "check:all": "node --test && node scripts/gen-contracts.mjs --check && node scripts/lint-prompts.mjs",
+    "prepublishOnly": "npm run check:all"
+  }
 }
