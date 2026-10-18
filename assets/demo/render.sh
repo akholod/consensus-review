@@ -31,8 +31,14 @@ ffmpeg -v error -y -i "$IN" -filter_complex "
   [0:v]trim=$HEAD:$TAIL_START,setpts=(PTS-STARTPTS)/$SPEED[b];
   [0:v]trim=$TAIL_START:$TAIL_END,setpts=(PTS-STARTPTS)/$TAIL_SPEED[c];
   [a][b][c]concat=n=3,setpts=PTS/$SPEEDUP,tpad=stop_mode=clone:stop_duration=$HOLD,fps=12,split[x][y];
-  [x]palettegen=stats_mode=diff[p];
+  [x]palettegen=stats_mode=diff:max_colors=96[p];
   [y][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle
 " "$OUT"
 
 echo "$OUT: $(du -h "$OUT" | cut -f1), middle sped up $(echo "scale=0; $SPEED / 1" | bc)x"
+
+# The plugin directory refuses to validate a repository holding any file of 5 MiB or more.
+if [ "$(stat -c %s "$OUT")" -ge 5242880 ]; then
+  echo "$OUT is over the directory's 5 MiB per-file limit; raise the speed-up or lower max_colors" >&2
+  exit 1
+fi

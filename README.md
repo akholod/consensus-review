@@ -126,6 +126,34 @@ Flags: [docs/consensus-review.md](https://github.com/akholod/consensus-review/bl
 - [Troubleshooting](https://github.com/akholod/consensus-review/blob/main/docs/troubleshooting.md): what the doctor's warnings mean.
 - [Changelog](https://github.com/akholod/consensus-review/blob/main/CHANGELOG.md).
 
+## What it runs and sends
+
+Everything the plugin runs, and where your code goes:
+
+- **Your code goes to the models you already use.** The Claude agents
+  run in your Claude Code session. `/consensus-review` gives the diff
+  and a short brief to `codex exec`, which runs in a read-only sandbox,
+  reads files in your repository, and sends what it reads to OpenAI
+  under your codex login. With `extra-advisor`, `pi` does the same with
+  a read-only toolset and the provider pi is set up for. `/loop-review`
+  runs `claude -p`, which sends the diff and its context to Anthropic.
+- **GitHub, for pull requests.** `gh pr diff` and `gh pr view` read the
+  PR. Without `gh`, the diff is fetched with `curl` from github.com; for
+  a private repository the request to api.github.com carries your
+  `GITHUB_TOKEN`, and nothing else uses it.
+- **Local tools.** `git` (read-only commands), and `codegraph` or
+  `graphify` when they are installed.
+- **The doctor** asks GitHub for the latest release and, unless run with
+  `offline`, makes one small `claude -p` call and one `codex exec` call
+  on a built-in sample diff.
+- **Writes.** The report in `.reviews/` (or `out=<path>`, or nothing with
+  `no-file`), and working files in a temp directory outside your
+  repository.
+
+The plugin has no telemetry and makes no other network call of its own.
+The Claude agents run with your session's tools and permissions, minus
+`Write` and `Edit`.
+
 ## Under the hood
 
 The panel is plain Claude Code: commands and read-only subagents
