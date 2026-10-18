@@ -171,7 +171,7 @@ export function interpret({ rc, stdout, timedOut, requireKey = "findings" }) {
  * negative-space tail invalidates the prefix too and the diff is re-uploaded on every pass.
  * The saving scales with prefix size: -41% billed input on a synthetic 28k-token prefix, -5.7%
  * on a real 2k one. Kept because it is free and pays on the large diffs that actually cost.
- * See docs/loop-review-measurements.md §US-004 for what dominates the bill instead.
+ * See docs/design/loop-review-measurements.md §US-004 for what dominates the bill instead.
  *
  * It travels as a FILE, never as an argv value. Linux caps one argv string at MAX_ARG_STRLEN
  * (131,072 bytes) and the prefix is the diff plus its originals — measured at 531,693 bytes on a

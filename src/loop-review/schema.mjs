@@ -22,7 +22,7 @@ export const PASS_STATE = Object.freeze({
 export const PASS_STATE_OK = PASS_STATE.OK
 
 /**
- * Pass policy, verbatim from the accepted baseline (docs/loop-review-plan.md §Required behavior).
+ * Pass policy, verbatim from the accepted baseline (docs/design/loop-review-plan.md §Required behavior).
  * These are not tunable at run time — a shorter run than the policy allows cannot report CLEAN.
  */
 export const PASS_POLICY = Object.freeze({

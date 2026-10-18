@@ -5,7 +5,7 @@
 # loop-review — implementation plan (v5, PENDING APPROVAL)
 
 Target: `/home/andrii/opencode_sanbox/consensus-review`, branch `feat/loop-review`, off `main` @ `1f1189b` (v0.7.0).
-Baseline requirement doc: `docs/loop-review-plan.md` (status: **Accepted**) — authoritative; this plan implements it, it does not amend it.
+Baseline requirement doc: `docs/design/loop-review-plan.md` (status: **Accepted**) — authoritative; this plan implements it, it does not amend it.
 History: v1 → Architect → v2 → Critic **REJECT** → v3 → Architect (*"overcorrected"*) → v4 → Critic **ITERATE** → **v5**.
 
 ---
@@ -97,7 +97,7 @@ Layout `test/unit/`, `test/fixtures/`, `test/e2e/`; runner `node --test test/` (
 | SD-07 | — | adapter truncation mid-run | `INCONCLUSIVE` |
 | SD-08 | migration / data | high-risk cell with context unavailable | `ESCALATE` |
 
-Commands: offline orchestration `node --test test/e2e/` (transcript replay — asserts pass counts, state transitions, stale-diff detection, the `CLEAN` conjunction); live recall `node bin/loop-review.mjs --target test/e2e/seeded --json` run explicitly, 2 repetitions, results appended to `docs/loop-review-measurements.md`. Transcripts cannot establish recall and are not used for it.
+Commands: offline orchestration `node --test test/e2e/` (transcript replay — asserts pass counts, state transitions, stale-diff detection, the `CLEAN` conjunction); live recall `node bin/loop-review.mjs --target test/e2e/seeded --json` run explicitly, 2 repetitions, results appended to `docs/design/loop-review-measurements.md`. Transcripts cannot establish recall and are not used for it.
 
 **False-clean rule (numeric):** across the seeded fixtures, **zero** runs may report `CLEAN` while any seeded mandatory or high-risk defect (SD-01, SD-02, SD-08) remains undiscovered. Any such occurrence fails Phase 2 acceptance outright.
 

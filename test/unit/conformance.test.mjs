@@ -6,7 +6,7 @@
 // (non-blank after trimming, the P0/P1 bar) — see scripts/lib/json-schema.mjs — so they are
 // asserted here against the functions that own them.
 //
-// Layers, per docs/eval-layer-plan.md §3.3:
+// Layers, per docs/design/eval-layer-plan.md §3.3:
 //   1 structural  — the schema, and adapter.interpret
 //   2 semantic    — validateFinding, validateEvidence (one record at a time)
 //   3 contextual  — applyVerdicts, evidenceSubstantiates, runLoop (a whole run)

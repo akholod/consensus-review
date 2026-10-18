@@ -2,7 +2,7 @@
 // Checks the invariants of the plugin's markdown that generation cannot cover. Free, deterministic,
 // no model, no network. Exits 1 naming file and line.
 //
-// What each check is for is in docs/eval-layer-plan.md §3.4. The load-bearing one is L2: read-only
+// What each check is for is in docs/design/eval-layer-plan.md §3.4. The load-bearing one is L2: read-only
 // is this plugin's headline promise, and a dropped `disallowedTools` line silently arms five Opus
 // agents with Write.
 //

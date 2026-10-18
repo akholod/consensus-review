@@ -457,7 +457,7 @@ export function originalFiles(repo, files, base) {
 /**
  * The static prompt prefix. It must be byte-identical across every pass of a run so that the
  * variable negative-space payload is the only thing that differs — see the plan §1.6 and
- * docs/loop-review-measurements.md (cross-process caching was refuted, but prefix stability
+ * docs/design/loop-review-measurements.md (cross-process caching was refuted, but prefix stability
  * remains a correctness property: passes must review the same context).
  */
 export function buildStaticPrefix(ctx) {

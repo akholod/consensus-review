@@ -1,144 +1,147 @@
 # consensus-review
 
-Multi-model **consensus code review** for Claude Code. Opus acts as **arbiter** and merges its own review with an independent external consultant — [`codex`](https://github.com/openai/codex) — across four dimensions (architecture / quality / impact / tests), with an optional second advisor [`pi`](https://pi.dev) behind the `extra-advisor` flag. It triages the change by size **and** blast-radius first (so a 2000-line dump of Bruno configs doesn't run the whole panel), ranks findings **P0–P2**, and runs an independent **sceptic** verifier by default (strict: verifier + consultant refuters with a majority vote). Strictly **read-only** — the only write is the report (`.reviews/` by default, `out=<path>` to redirect, `no-file` for none at all).
+[![CI](https://github.com/akholod/consensus-review/actions/workflows/ci.yml/badge.svg)](https://github.com/akholod/consensus-review/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/akholod/consensus-review)](https://github.com/akholod/consensus-review/releases)
+[![npm](https://img.shields.io/npm/v/consensus-review)](https://www.npmjs.com/package/consensus-review)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/akholod/consensus-review/blob/main/LICENSE)
 
-It ships two review strategies. `/consensus-review` is the **parallel** one — several independent reviewers plus an external consultant, merged by an arbiter, for multi-source agreement. `/loop-review` is the **sequential** one — the context is built once and reviewed in several differentiated passes, each told what is already covered but never *why*, because review models hyperfocus on one theme and miss what sits beside it. Use consensus-review when you want agreement; use loop-review when you want coverage per token.
+Code review for Claude Code that a second model has to agree with.
 
-> **Check your setup with `/doctor`.** It reports what each missing or misconfigured piece would *silently* do to a review — an unavailable consultant does not stop a run, it just makes it quieter. Live probes are on by default (about a minute, two small model calls); `offline` skips them.
->
-> **No `oh-my-claudecode` required.** This is a standalone plugin — the only hard needs are the external CLIs below. **`codegraph` is strongly recommended:** its `impact`/`callers` gives fast, precise blast-radius, which is a killer feature for review.
+## The problem
+
+Ask one model to review a change and you get one opinion. It locks onto
+the first theme it notices, misses what sits beside it, and reports
+guesses with the same confidence as bugs. A 2000-line dump of generated
+configs gets the same expensive treatment as a 20-line change to auth.
+
+## What it does
+
+It reviews a pull request or your uncommitted changes in four
+dimensions: architecture, quality, impact and tests. Two strategies:
+
+- **`/consensus-review`** runs a panel in parallel: Claude reviewers for
+  each dimension plus [`codex`](https://github.com/openai/codex) as an
+  independent consultant. An arbiter merges what they found and shows
+  who agreed on each finding.
+- **`/loop-review`** builds the context once and reviews it in several
+  passes. Each pass is told what is already covered, never why, so it
+  looks somewhere else instead of repeating the last pass.
+
+Both rank findings **P0** (blocker), **P1** (important) and **P2**
+(minor), and both demand evidence: a P0 or P1 needs a concrete failure
+scenario, or it is not a P0 or P1. Then a verifier with a fresh context,
+which found nothing itself, tries to refute the serious findings before
+you see them.
+
+It never changes your code. The only file it writes is the report.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/akholod/consensus-review/main/assets/demo.gif" alt="/consensus-review on a small change: impact, quality and tests agents plus codex run in parallel, a sceptic pass verifies the findings, and the report lists P0, P1 and P2 with failure scenarios" width="100%">
+</p>
+
+One command, three Claude reviewers and codex at once. A sceptic pass
+tries to refute every serious finding before the report is written.
 
 ## Install
 
+Paste this into Claude Code:
+
+```text
+Install and set up the consensus-review plugin by following https://raw.githubusercontent.com/akholod/consensus-review/main/docs/install.md
 ```
-# from GitHub
+
+It installs the plugin, checks which consultants you have, and runs the
+doctor to show what works.
+
+Or by hand:
+
+```text
 /plugin marketplace add akholod/consensus-review
 /plugin install consensus-review@crv
-
-# or from a local clone (for development)
-/plugin marketplace add /path/to/consensus-review
-/plugin install consensus-review@crv
 ```
 
-Marketplace = `crv`, plugin = `consensus-review`. Commands install namespaced (`/consensus-review:consensus-review`); bare names work when there's no collision. If you already keep these as personal `~/.claude` commands/agents, remove them after installing to avoid duplicates.
+For development, add a local clone instead:
+`/plugin marketplace add /path/to/consensus-review`.
 
-## Prerequisites (external — not auto-installed)
+Commands install namespaced (`/consensus-review:loop-review`); the bare
+name works when no other command has it. The doctor always needs the
+namespace, because Claude Code has a `/doctor` of its own.
 
-| Tool | Required? | Install |
-|------|-----------|---------|
-| `codex` | for the codex lane (the baseline external consultant) | see openai/codex; `codex login` |
-| `pi` | optional — only for the `extra-advisor` lane | see [pi.dev](https://pi.dev) |
-| `gh` | only for PR-by-URL/number mode | GitHub CLI, authenticated |
-| `codegraph` | **strongly recommended** — its `impact`/`callers` powers fast, precise blast-radius | `npm i -g @colbymchenry/codegraph` then `codegraph init` |
-| `graphify` | optional — `explain`/`path` for module maps | `uv tool install graphifyy` (pip pkg is `graphifyy`) |
+Then run `/consensus-review:doctor`. For the full panel you also want `codex` (logged in), `gh` for
+pull requests, and [`codegraph`](https://github.com/colbymchenry/codegraph)
+for fast blast-radius. None of them is required; see
+[docs/install.md](https://github.com/akholod/consensus-review/blob/main/docs/install.md) for what each one adds.
 
-Code graphs are **auto-detected and used, never built** by this plugin. None present → reviewers fall back to grep (absence is never a finding). Detection: `.codegraph/codegraph.db` / `graphify-out/graph.json`.
+## How it looks in practice
+
+```text
+/consensus-review                     review uncommitted changes
+/consensus-review #42                 review pull request 42
+/consensus-review #42 deep lang=ua    full panel, report in Ukrainian
+/loop-review --pr=42                  sequential review of the same PR
+```
+
+The report goes to the terminal and to `.reviews/`. Each finding carries
+its location, severity, a failure scenario and an agreement badge such
+as `[claude|codex]`. Its header says which sources ran, so a review that
+lost its consultant says so instead of looking complete.
+
+Small changes stay cheap: a triage step sizes the change and its blast
+radius first, and a docs-only diff skips the panel entirely.
 
 ## Commands
 
-| Command | Purpose |
-|---------|---------|
-| `/consensus-review [<PR>] [deep\|minimal] [dims=<list>\|arch] [sceptic=off\|basic\|strict] [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped\|full\|off] [out=<path>\|no-file] [lang=en\|ua\|ru]` | Orchestrated consensus review with triage |
-| `/impact-review [<scope>]` | Correctness + regressions + adjacent parts + security/migrations |
-| `/quality-review [<scope>]` | Maintainability, conventions, AI-slop, duplication, contracts |
-| `/test-review [<scope>]` | Test quality, mock/fixture drift, critical-flow coverage |
-| `/arch-review [<scope>]` | Architectural impact of the change (diff-scoped) |
-| `/architecture-audit` | Full **whole-project** architecture audit (standalone, heavier) |
-| `/loop-review [--pr=<n>\|--range=<a..b>] [--model=<m>] [--timeout=<sec>] [--out=<path>\|--no-file] [--json]` | Sequential, coverage-directed cyclic review (see below) |
+| Command                    | Does                                                         |
+| -------------------------- | ------------------------------------------------------------ |
+| `/consensus-review`        | parallel panel with an arbiter, codex consultant and sceptic |
+| `/loop-review`             | sequential passes with evidence per risk cell                |
+| `/impact-review`           | correctness, regressions, security, the code around the diff |
+| `/quality-review`          | conventions, duplication, AI slop, contracts                 |
+| `/test-review`             | whether the tests catch realistic regressions                |
+| `/arch-review`             | architectural impact of the change                           |
+| `/architecture-audit`      | the whole project's architecture, not just a diff            |
+| `/consensus-review:doctor` | what a broken setup would silently do to a review            |
 
-`<scope>`/`<PR>`: empty = uncommitted working tree; a PR URL / `owner/repo#N` / `#N`; a git range (`main..HEAD`); a path/glob. Standalone commands also take `lang=en|ua|ru`.
+The diff reviews take an empty scope (your working tree) or a pull
+request: a URL, `owner/repo#N` or `#N` (`--pr=<n>` for `/loop-review`).
+Flags: [docs/consensus-review.md](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md) and
+[docs/loop-review.md](https://github.com/akholod/consensus-review/blob/main/docs/loop-review.md).
 
-### `consensus-review` flags
+## Which one to use
 
-Every flag is accepted with or without a leading `--`. Depth (`deep`/`minimal`) and lanes (`dims=`/`arch`) are **orthogonal axes**: `minimal arch` is a shallow architecture-aware pass, not a contradiction. Unrecognized tokens are ignored but echoed in the report header as `Ignored args`, so a typo never passes for a default.
+- You want to know whether a change is safe to merge, with several
+  sources agreeing: `/consensus-review`.
+- You want broad coverage at a lower cost per token, and a `CLEAN` you
+  can trust: `/loop-review`. It can only report `CLEAN` when every pass
+  succeeded and every risk cell was covered with evidence; that rule is
+  in code, not in a prompt.
+- You want one angle only: the single-dimension commands.
 
-| Flag | Effect |
-|------|--------|
-| _(default)_ | **Sceptic runs strict by default** — an **independent verifier** (fresh context, not the reviewers or the arbiter) refutes each P0/P1 with evidence **and** the consultants are re-run as refuters for a majority vote per finding (a tie is not a confirmation, so with the default two voters a finding needs both to survive). Unconfirmed findings move to Unconfirmed/Unverified buckets; P0s never silently dropped. Fires only when there are P0/P1 findings, so clean/trivial reviews pay nothing. |
-| `sceptic=basic` | Verifier only — no refuter re-runs, no vote (the pre-0.5 default) |
-| `sceptic=off` | Disable the sceptic pass entirely (`no-sceptic` is a kept alias) |
-| `extra-advisor[=<model>]` | Add `pi` as a **second** external consultant (off by default — codex alone otherwise). `extra-advisor=<model>` picks pi's model, e.g. `extra-advisor=sonnet:high` |
-| `arch` | Alias for `dims=+architecture` — force the architecture lane even if the change isn't structural |
-| `dims=<list>` | Set the lanes explicitly. Absolute (`dims=impact,quality`) replaces the tier's set; relative (`dims=+tests,-quality`) adjusts it. `dims=+tests` is the only way to review tests when the diff has no test files |
-| `deep` / `full` | Force the maximum tier (full panel, skip triage). Wins over `minimal` if both are given |
-| `minimal` | Force the minimal tier (shallow exploration budget) |
-| `timeout=<sec>` | Per-consultant wall clock for codex/pi. Default `240`, clamped to `[30, 1800]` — raise it on a large PR instead of losing the lane to a timeout |
-| `p2=grouped\|full\|off` | P2 presentation. `grouped` (default) shows 7 and rolls the rest up by theme; `full` lists all; `off` suppresses the body but keeps the count |
-| `out=<path>` | Report destination (directory or exact file). Default `<cwd>/.reviews/review-<slug>-<date>.md` |
-| `no-file` | Terminal output only — the run performs zero writes on disk |
-| `lang=en\|ua\|ru` | Output language — English (default), Ukrainian, or Russian |
+## Docs
 
-## How it works
+- [Install](https://github.com/akholod/consensus-review/blob/main/docs/install.md): step by step, written for an agent but fine by hand.
+- [consensus-review](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md): flags, triage tiers, how findings are merged and verified.
+- [loop-review](https://github.com/akholod/consensus-review/blob/main/docs/loop-review.md): passes, coverage cells, terminal states, cost.
+- [Models](https://github.com/akholod/consensus-review/blob/main/docs/models.md): which model each part runs on, and how to change it.
+- [Troubleshooting](https://github.com/akholod/consensus-review/blob/main/docs/troubleshooting.md): what the doctor's warnings mean.
+- [Changelog](https://github.com/akholod/consensus-review/blob/main/CHANGELOG.md).
 
-1. **Resolve** the diff (PR via `gh pr diff`, or `git diff HEAD` + untracked) into a temp workdir outside the repo.
-2. **Triage** by *effective code size* (non-code like `.bru`, lock files, docs, fixtures, generated code is excluded) and *blast radius* (shared modules / contracts / manifests / migrations / auth / fan-in — fan-in measured via `codegraph impact`/`callers` when present). → a tier:
+## Under the hood
 
-   | Tier | Trigger | Claude agents | Consultants |
-   |------|---------|-------------|-------------|
-   | **T0** | only non-code | — (skipped) | — |
-   | **T1** | small + isolated | impact | codex |
-   | **T2** | small/medium + local · medium + isolated · **small + wide** (no high-risk path) | impact + quality (+ tests if present) | codex |
-   | **T3** | large · structural · wide at medium+ · **any size touching a high-risk path** | + architecture | codex |
+The panel is plain Claude Code: commands and read-only subagents
+(`disallowedTools: Write, Edit`). `/loop-review` is a small Node runtime
+with no dependencies. Its passes run as separate `claude -p` processes
+with every file, shell, web and MCP tool removed, so a pass sees only the
+context it was given. Both strategies share one finding schema
+(`contracts/finding.schema.json`) and one set of severity bars
+(`contracts/severity-bars.md`); CI fails if a prompt drifts from them.
 
-   **Proportionality:** blast radius decides *which* lane you cannot skip, effective size decides *how many* lanes are worth paying for. A 20-line edit to a shared module needs consumer tracing (impact), not an architecture verdict. The exception is **high-risk paths** — migrations, auth/permissions/security, dependency manifests — which stay T3 at any size, because their failure mode does not scale with line count. `isolated` also covers an edit confined to one file whose changed symbols have no consumers outside it, so small local edits can reach T1 instead of piling up at T2.
+Design notes and measurements behind these choices live in
+[docs/design/](https://github.com/akholod/consensus-review/tree/main/docs/design). Releasing: [docs/RELEASING.md](https://github.com/akholod/consensus-review/blob/main/docs/RELEASING.md).
 
-   `extra-advisor` adds `pi` as a second consultant at any tier above T0.
+## License
 
-3. **Review** — applicable dimension agents run read-only (Claude lane); codex (and pi, with `extra-advisor`) review independently from a minimal, non-leading brief. The dimension agents and codex may use the code graph for navigation; pi runs with a shell-less read-only toolset (`read,grep,find,ls`), so it navigates by reading and grepping.
-4. **Consensus** — Opus dedups, tags each finding with `dimension` + an agreement badge `[claude|codex|pi]`, assigns final **P0** (blocker) / **P1** (important) / **P2** (minor). Two rules keep the severities honest:
-   - **Evidence bar / admission bar.** Both bars live in every lane — the four agent prompts and the consultant brief alike, so they hold in the standalone commands too. Every P0/P1 needs a concrete failure scenario; one that cannot produce it goes to *Unverified*, **not** down into P2. Every P2 in turn must name the concrete cost of leaving it *and* a project-specific anchor (a documented convention, an existing pattern, a contract) — a remark justified only by a general best practice is not a finding. Without both halves P2 becomes a landfill for unproven claims, which is what turns it into twenty entries of noise.
-   - **`owner:` tags.** A lane may report something outside its own protocol (quality spotting a probable bug it cannot trace to consumers) and tag the owning lane. If that lane ran, normal dedup applies; if it did not — architecture is absent at T2, and `dims=` can narrow the panel further — the finding keeps the reporter's severity and is marked *ungraded*. A finding is never lost because the lane that owns it was skipped.
-5. **Sceptic** (strict by default) — an **independent verifier agent** (fresh context, separate from the reviewers *and* the arbiter, so it can't rubber-stamp its own findings) refutes each P0/P1 with evidence; strict (the default) adds a majority vote across the consultants; `sceptic=basic` keeps the verifier alone. P0s are never silently dropped; unconfirmed findings move to explicit buckets; all drops logged.
-6. **Report** — terminal + `<cwd>/.reviews/review-<slug>-<date>.md` (or `out=<path>`; nothing written with `no-file`), with classification header, per-dimension summary, unconfirmed/unverified + dropped appendices, and source availability. P2 is grouped by default: up to 7 entries individually, the rest rolled up per theme with counts and files — presentation only, `Totals` always keeps the true count.
+MIT, see [LICENSE](https://github.com/akholod/consensus-review/blob/main/LICENSE).
 
-## `/loop-review` — the sequential strategy
-
-Where `/consensus-review` runs a panel in parallel, `/loop-review` builds the review context **once** and makes several **differentiated discovery passes** over it. Each later pass receives compact fingerprints of what has already been claimed, what has been refuted, and which risk cells are still open — and **never** the previous pass's reasoning. Withholding the reasoning is the mechanism, not an oversight: persuasive context is what makes the next pass restate the dominant theme instead of looking elsewhere.
-
-**It reports; it never repairs.** `/loop-review` finds problems and writes a report. It does not
-edit code, stage, commit, push, or comment on a pull request. This is enforced at the process
-level, not by asking nicely: each review pass is spawned with `--disallowed-tools` covering
-`Edit`, `Write`, `NotebookEdit`, `Bash`, `Task`, `Read`, `Grep`, `Glob`, `WebFetch` and
-`WebSearch`, so the model performing the review has no tool with which to change anything. The
-runtime itself contains no mutating git or `gh` command; `gh pr diff` is the only forge call and
-it reads. Fixing is a separate, human-initiated step — apply the changes, then run the review
-again on the new diff.
-
-Its **one** write is the report file (`.reviews/loop-review-<hash>.md` by default, `--out=<path>`
-to redirect, `--no-file` for no write at all). Working files live in a temp directory outside the
-repository.
-
-It is implemented as a runtime rather than a prompt, because its central promise — that `CLEAN` means something — is a control-flow guarantee:
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/bin/loop-review.mjs" [--pr=<n>] [--range=<a..b>] [--no-file]
-```
-
-**Terminal states.** `CLEAN` · `FINDINGS` · `INCONCLUSIVE` · `ESCALATE` (exit `2`). `CLEAN` requires the full conjunction: the minimum passes completed, no failed or truncated pass, every mandatory cell covered *with evidence* and independently verified, every actionable finding adjudicated, budget intact, the diff unchanged throughout, and a final pass that produced nothing new. A failed, truncated, stale or under-covered run cannot report `CLEAN` — enforced in code, not by instruction.
-
-**Pass policy** (fixed, not tunable at run time): 0–1 pass for docs/generated/formatting-only; **≥2** for any non-trivial code diff; **≥3** when the change touches auth, permissions, migrations, destructive data, a public contract or crosses services; hard maximum **4** before escalation.
-
-**Coverage cells** are `changed surface × risk category`, derived from the changed paths. A pass must return an evidence record per cell — anchors it actually inspected and checks it actually ran. A cell claimed as covered with no anchors is rejected: dispatch is not coverage.
-
-**Custom instructions.** `.claude/review-instructions.json` or `.gitlab/duo/mr-review-instructions.yaml`, matched per changed file (positive globs, then `!` exclusions), so rules for untouched areas never enter the context. They are untrusted advisory input and cannot relax read-only, budgets, the severity bars, the stopping rule, or escalation.
-
-**Cost.** Roughly **$0.28** per review on a small clean diff (2 passes) and **$0.70–0.88** when there are findings (3 passes plus verification). Those are `total_cost_usd` as the CLI reports it — the API-price valuation of the tokens used. On an API plan that is a bill; on a claude.ai subscription it is drawn against your usage limit instead. Either way it scales with the pass count, because the static context is **not** cached across passes — see `docs/loop-review-measurements.md`, where that hypothesis was tested and refuted.
-
-**Machine-readable output.** `--json` prints the whole run state to stdout — terminal state and
-its reasons, every finding with its verdict, every cell with its evidence and verification, each
-pass with its state, model and token usage, and the totals. Nothing is written to a log file; if
-you want the run recorded, redirect that stdout yourself.
-
-**Shared contracts.** Both commands use one finding schema (`contracts/finding.schema.json`) and one set of severity bars (`contracts/severity-bars.md`). The schema embedded in `commands/consensus-review.md` is generated from the canonical file by `scripts/gen-contracts.mjs`, and CI fails if the two drift.
-
-## Notes
-
-- Cost scales with tier. Triage does most of the work; `minimal` forces the floor, and omitting `extra-advisor`/`deep` keeps it down. Strict sceptic (the default) adds one extra codex run, but only on reviews that actually produced P0/P1 findings.
-- **Pick a different model for `extra-advisor`.** A second consultant is only worth its cost if it is a *different* model — if `pi` is configured to run the same engine as `codex` (`openai-codex` / `gpt-5.x`, a common default), the extra lane mostly echoes codex. Use `extra-advisor=<model>` (e.g. `sonnet:high`, `gemini-2.5-pro`) or set another default in `~/.pi/agent/settings.json`. The report prints pi's resolved provider/model and flags the collision.
-- A code graph reflects its last build (usually committed state): used for existing/surrounding code, the diff itself for brand-new symbols.
-
-## License & attribution
-
-This plugin: **MIT** (see [LICENSE](./LICENSE)).
-
-`codex`, `pi`, `codegraph` ([MIT](https://github.com/colbymchenry/codegraph)), and `graphify` ([MIT](https://github.com/safishamsi/graphify)) are **separate tools, not bundled or redistributed here** — the plugin only detects and invokes them if you install them. Their MIT licenses place no restriction on this plugin. (A Claude Code plugin ships commands/agents/skills/hooks/MCP, not external binaries, so it can't auto-install them — install them yourself via the table above.)
+`codex`, `pi`, `codegraph` and `graphify` are separate tools. They are
+not bundled; the plugin detects and calls them when you install them.
