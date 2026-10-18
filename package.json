@@ -1,6 +1,6 @@
 {
   "name": "consensus-review",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Code review for Claude Code that a second model has to agree with: a parallel panel with codex as consultant, or sequential coverage-directed passes. Read-only, P0-P2 with evidence.",
   "keywords": [
     "claude-code",

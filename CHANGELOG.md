@@ -2,6 +2,22 @@
 
 Full notes for each release: [GitHub releases](https://github.com/akholod/consensus-review/releases).
 
+## 0.12.0
+
+Ready for Anthropic's plugin directory, and reports in any language.
+
+- **`lang=` takes any language**, as a code or a name. It used to know
+  only English, Ukrainian and Russian.
+- **No token is read from your environment.** Without `gh`, a private
+  pull request used to be fetched from api.github.com with your
+  `GITHUB_TOKEN`; it now needs `gh` or a local clone. Public pull
+  requests are still fetched by URL.
+- **The README lists everything the plugin runs and where code goes**:
+  codex and pi to their providers, `claude -p` to Anthropic, `gh` and
+  `curl` to GitHub, the doctor's probes.
+- **A listing icon** at `.claude-plugin/icon.png`, and the demo GIF
+  shrunk under the directory's 5 MiB per-file limit.
+
 ## 0.11.0
 
 Structured output for `/loop-review`, effort pinned for the Opus agents,
