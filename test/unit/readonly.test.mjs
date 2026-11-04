@@ -3,11 +3,14 @@ import assert from "node:assert/strict"
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { DENIED_TOOLS, NO_MCP, buildArgs } from "../../src/loop-review/adapter.mjs"
+import { laneCommand } from "../../scripts/lib/lanes.mjs"
 
 const ROOT = new URL("../..", import.meta.url).pathname
 const runtimeFiles = [
   ...readdirSync(join(ROOT, "src/loop-review")).map((f) => join("src/loop-review", f)),
   "bin/loop-review.mjs",
+  "scripts/run-lane.mjs",
+  "scripts/lib/lanes.mjs",
 ].filter((f) => f.endsWith(".mjs"))
 
 const source = (rel) => readFileSync(join(ROOT, rel), "utf8")
@@ -60,15 +63,45 @@ test("the runtime writes only the report and the temp system-prefix file", () =>
   for (const file of runtimeFiles) {
     // call sites only — the import statement names the same symbol
     const body = source(file).replace(/^import[\s\S]*?from "[^"]+"$/gm, "")
-    for (const m of body.matchAll(/\b(writeFileSync|appendFileSync|rmSync|unlinkSync|renameSync|rmdirSync)\s*\(/g)) {
+    for (const m of body.matchAll(/\b(writeFileSync|appendFileSync|rmSync|unlinkSync|renameSync|linkSync|rmdirSync)\s*\(/g)) {
       writes.push(`${file}:${m[1]}`)
     }
   }
-  assert.deepEqual(writes.sort(), ["bin/loop-review.mjs:writeFileSync", "src/loop-review/adapter.mjs:writeFileSync"],
+  assert.deepEqual(writes.sort(), [
+    "bin/loop-review.mjs:writeFileSync", "scripts/run-lane.mjs:linkSync", "scripts/run-lane.mjs:renameSync",
+    "scripts/run-lane.mjs:unlinkSync", "scripts/run-lane.mjs:writeFileSync",
+    "src/loop-review/adapter.mjs:writeFileSync",
+  ],
     `unexpected writes: ${writes.join(", ")}`)
   // the report write is behind --no-file
   assert.match(source("bin/loop-review.mjs"), /if \(!noFile\) \{[\s\S]*?writeFileSync/)
   // and the adapter's write is anchored to the spawn cwd, which bin/ sets to a mkdtemp directory
   assert.match(source("src/loop-review/adapter.mjs"), /systemPrefixFile = join\(cwd, SYSTEM_PREFIX_FILE\)/)
   assert.match(source("bin/loop-review.mjs"), /const workDir = mkdtempSync\(/)
+})
+
+// The lane helper writes status, decision, canonical output and per-attempt logs — all under --wd,
+// which the command creates with mktemp outside the reviewed repository.
+test("the lane helper writes only under its --wd", () => {
+  const text = source("scripts/run-lane.mjs")
+  const calls = [...text.matchAll(/\b(writeAtomic|openSync)\((.*)$/gm)].filter((m) => !m[2].startsWith("path,"))
+  assert.ok(calls.length >= 4, "expected the status, decision, output and log writes")
+  for (const m of calls) assert.match(m[2], /^join\(wd, /, `${m[1]} outside --wd: ${m[0]}`)
+  // writeAtomic itself is the only raw write
+  assert.equal(text.match(/\b(writeFileSync|renameSync|linkSync|unlinkSync)\(/g).length, 4)
+})
+
+test("external lanes run with read-only flags and no mutating tools", () => {
+  const codex = laneCommand("codex", { repo: "/r", schema: "/s", out: "/o", brief: "b" }).args
+  assert.deepEqual(codex.slice(0, 6), ["exec", "-s", "read-only", "-C", "/r", "--skip-git-repo-check"])
+  assert.ok(codex.includes("--output-schema") && codex.includes("-o"))
+  const pi = laneCommand("pi", { repo: "/r", brief: "b" })
+  assert.equal(pi.cwd, "/r")
+  const tools = pi.args[pi.args.indexOf("--tools") + 1].split(",")
+  assert.deepEqual(tools, ["read", "grep", "find", "ls"])
+  for (const banned of ["bash", "edit", "write"]) assert.ok(!tools.includes(banned))
+  // `--tools` keeps MCP tools; only `--no-mcp` keeps a server's tools away from pi
+  assert.ok(pi.args.includes("--no-mcp"), "pi must run with --no-mcp")
+  // codex waits on an open stdin forever, so every attempt is spawned with stdin ignored
+  assert.match(source("scripts/run-lane.mjs"), /stdio: \["ignore", log, log\]/)
 })

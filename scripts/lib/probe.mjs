@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { run as runClaude } from "../../src/loop-review/adapter.mjs"
 import { PASS_STATE_OK } from "../../src/loop-review/schema.mjs"
+import { classifyCodexResult, laneCommand } from "./lanes.mjs"
 
 /** A tiny real defect. Probing with a genuine review task rather than a canned answer matters:
  *  asking for a fabricated empty result is what CLI 2.1.235 started refusing, and correctly. */
@@ -94,37 +95,20 @@ export function probeCodex({ root, repo, timeoutSeconds = 180 }) {
       "scenario: which input or state produces which wrong result. Respond only via the output schema.",
     ].join(" ")
 
-    const proc = spawnSync(
-      "codex",
-      [
-        "exec", "-s", "read-only", "-C", repo, "--skip-git-repo-check",
-        "--output-schema", schema, "-o", out, brief,
-      ],
-      { encoding: "utf8", timeout: timeoutSeconds * 1000, stdio: ["ignore", "pipe", "pipe"] }
+    // The lane's own argv, so the doctor probes exactly the command the review runs.
+    const cmd = laneCommand("codex", { repo, schema, out, brief })
+    const proc = spawnSync(cmd.bin, cmd.args,
+      { cwd: cmd.cwd, encoding: "utf8", timeout: timeoutSeconds * 1000, stdio: ["ignore", "pipe", "pipe"] }
     )
 
     const timedOut = proc.error?.code === "ETIMEDOUT" || proc.signal === "SIGTERM"
     if (timedOut) return { ok: false, reason: `timed out after ${timeoutSeconds}s` }
-    if (proc.status !== 0) {
-      // The command reads the reason out of the log for its section-9 status; do the same here.
-      const log = `${proc.stdout ?? ""}\n${proc.stderr ?? ""}`
-      const message = log.match(/"message"\s*:\s*"([^"]+)"/)?.[1]
-      return { ok: false, reason: message || log.trim().split("\n").slice(-2).join(" ").slice(0, 200) || `exit ${proc.status}` }
-    }
-    if (!existsSync(out)) {
-      // Never read a missing file as "zero findings" — the same rule the command states.
-      return { ok: false, reason: "exited 0 but wrote no output file" }
-    }
-    let payload
-    try {
-      payload = JSON.parse(readFileSync(out, "utf8"))
-    } catch (err) {
-      return { ok: false, reason: `output is not valid JSON: ${err.message}` }
-    }
-    if (!Array.isArray(payload?.findings)) {
-      return { ok: false, reason: "output has no findings array — the schema was not honoured" }
-    }
-    return { ok: true, findings: payload.findings.length }
+    // The same classifier the review's codex lane uses, so doctor and review cannot disagree.
+    const result = classifyCodexResult({
+      rc: proc.status, timedOut, log: `${proc.stdout ?? ""}\n${proc.stderr ?? ""}`, outPath: out,
+    })
+    if (result.status !== "ok") return { ok: false, reason: result.reason }
+    return { ok: true, findings: result.payload.findings.length }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

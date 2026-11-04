@@ -29,8 +29,8 @@ is `FAIL`.
 - **`codex schema` fails** (`FAIL`, live): codex is installed but cannot
   review. Usually expired auth (`codex login` again) or a codex version
   that rejects the findings schema. Until it is fixed, the codex lane is
-  reported `failed` and its findings are lost. That is a config bug, not
-  a clean review.
+  reported `failed: <reason>` (not retried) and its findings are lost.
+  That is a config bug, not a clean review.
 - **`gh — not installed` or `not authenticated`** (`WARN`): pull
   requests come from a local clone, or by URL for a public repository. A
   private PR needs `gh` or a clone. Run `gh auth login`.
@@ -90,11 +90,20 @@ is `FAIL`.
 
 Read the report's `Sources` line before reading its findings:
 
-- `codex=timeout`: the consultant ran out of time and its findings are
-  lost. Raise `timeout=` (default `900`, up to `1800`) rather than
-  lowering it.
-- `codex=failed: <reason>`: the reason is codex's own error. Run the
-  doctor.
+- `codex=ok (retried: <why>)`: the first attempt failed and the retry
+  answered. Nothing is lost; a recurring `timeout` here means `timeout=`
+  is close to the limit.
+- `codex=degraded (<why>; <why>)`: both attempts failed (or the second
+  had no time left in the 2×T budget per phase), so its findings are
+  lost. For `timeout`, raise `timeout=` (default `900`, up to `1800`)
+  rather than lowering it; otherwise read the attempts under *Source
+  availability*.
+- `codex=failed: <reason>`: a config error, not retried. The reason is
+  codex's own error. Run the doctor.
+- `failed: helper error (<reason>)`: the lane helper was killed or
+  crashed and left no status. Rerun the review.
+- A `Single-source review (Claude only)` warning under the title: no
+  consultant produced a usable review.
 - `codex=unavailable`: codex is not installed.
 - A review with no P0 or P1 has no sceptic section. That is expected:
   the sceptic only runs when there is something to refute.
