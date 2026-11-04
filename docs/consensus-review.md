@@ -33,7 +33,8 @@ never passes for a default.
 | `p2=grouped`              | the default: up to 7 P2s listed, the rest rolled up by theme                                                                                 |
 | `p2=full` / `p2=off`      | list every P2 / show only the count                                                                                                          |
 | `out=<path>`              | write the report to a directory or an exact file                                                                                             |
-| `no-file`                 | terminal only; the run writes nothing to disk                                                                                                |
+| `no-file`                 | terminal only; the run writes nothing to disk, the archive included                                                                          |
+| `archive=off`             | no run archive (see [The run archive](#the-run-archive))                                                                                     |
 | `lang=<language>`         | report language: any language, as a code or a name; code, paths and terms stay as they are                                                  |
 
 Depth (`deep`, `minimal`) and lanes (`dims`, `arch`) are independent:
@@ -72,7 +73,7 @@ codex review of a small repository has been measured still working at
    severity.
 5. **Sceptic.** Fires only when there are P0 or P1 findings, so a clean
    review pays nothing for it.
-6. **Report.** Terminal plus `.reviews/review-<slug>-<date>.md`.
+6. **Report.** Terminal plus `.reviews/review-<slug>-<date>.md`, and the [run archive](#the-run-archive).
 
 ### Tiers
 
@@ -168,6 +169,38 @@ reason, the vote mode and how many voters each finding had), and, when
 no consultant produced a usable review, in a *Single-source review*
 warning under the title. `/consensus-review:doctor`
 finds these problems before you rely on a review.
+
+## The run archive
+
+Unless `no-file` or `archive=off` is given, the run also leaves a
+private copy of what it saw in `.reviews/<run-id>/`, so a strange result
+can be traced. The run-id is the report's name plus a UTC timestamp. It
+holds:
+
+- `diff.patch`, the diff reviewed, never truncated;
+- the prompt each consultant and refuter got, and its attempt logs
+  (consultant transcripts, which can include any repo file a model read);
+- findings per stage (`findings/`) and the arbiter's decisions;
+- `events.jsonl`, the run's events in time order;
+- `meta.json`: `schema`, `runId`, `createdAt`, `command`, `target`,
+  `mode`, `pluginVersion`, `report`, `workDir`, `flags`, `diffHash`,
+  `lanes` (each consultant's status, display, model, provider and
+  schema), `missing` (expected work files that were absent), `transcribed`
+  (files written by the arbiter, not captured verbatim), `unavailable`
+  (sources the plugin cannot capture), `notWritten` (archive files
+  withheld, with the reason) and `truncated` (files cut or dropped by the
+  caps).
+
+The archive goes only to the invoking repository's `.reviews/`, and only
+when git ignores that path, never next to an external `out=`. Directories
+are `0700` and files `0600`. A file over 2 MiB keeps its head and tail (a
+truncated `.json` is no longer valid JSON), and an archive stops at
+20 MiB. An archive that cannot be written never fails the review; the
+report says `Archive: not written (<reason>)`.
+
+The raw prompts and transcripts of the Claude Task agents are not
+available to the plugin, so they are listed under `unavailable`. There is
+no retention: remove old runs with `rm -rf .reviews/<run-id>`.
 
 ## The single-dimension commands
 

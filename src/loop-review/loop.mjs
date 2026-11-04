@@ -198,7 +198,7 @@ export function shouldContinue(run) {
  * Drive the loop. `runner` and `verifier` are injected so the whole sequence can be replayed
  * from recorded transcripts without touching a live model.
  */
-export async function runLoop({ ctx, runner, verifier, discoveryInstructions, currentDiffHash, budget = {} }) {
+export async function runLoop({ ctx, runner, verifier, discoveryInstructions, currentDiffHash, budget = {}, onStage }) {
   const run = newRunState({
     target: ctx.target,
     diffHash: ctx.diffHash,
@@ -226,6 +226,8 @@ export async function runLoop({ ctx, runner, verifier, discoveryInstructions, cu
 
     if (result.state === PASS_STATE_OK) {
       applyPass(run, pass, result.payload)
+      // A copy, so later verdicts cannot rewrite what this stage looked like.
+      onStage?.({ stage: "pass", index, findings: structuredClone(run.findings) })
     } else {
       // A failed pass yields no coverage and no findings, and permanently blocks CLEAN.
       pass.newFindings = 0
@@ -290,7 +292,10 @@ export async function runLoop({ ctx, runner, verifier, discoveryInstructions, cu
         const mapped = (Array.isArray(verdicts) ? verdicts : [])
           .filter((v) => v && typeof v === "object" && idMap.has(v.id))
           .map((v) => ({ ...v, id: idMap.get(v.id) }))
-        if (verificationOk) applyVerdicts(run, mapped)
+        if (verificationOk) {
+          applyVerdicts(run, mapped)
+          onStage?.({ stage: "verify", index, findings: structuredClone(run.findings) })
+        }
         // Only a verdict naming the cell counts. Deriving this from "a verifier exists" was the
         // same dispatch-is-not-coverage mistake the evidence records exist to prevent.
         for (const cv of verificationOk ? cellVerdicts : []) {

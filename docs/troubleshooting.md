@@ -63,8 +63,8 @@ is `FAIL`.
   nothing to diff. Run the review from inside a repository with at least
   one commit.
 - **`.reviews in git — not ignored`** (`WARN`): the next review picks up
-  this review's report as an untracked change. Add `.reviews/` to
-  `.gitignore`.
+  this review's report as an untracked change, and the run archive is
+  skipped. Add `.reviews/` to `.gitignore`.
 - **`report output — directory is not writable`** (`WARN`): use
   `no-file`, or `out=<path>` somewhere writable.
 
@@ -85,6 +85,29 @@ is `FAIL`.
 - **`SKIP — --offline`**: stale auth and format changes are not checked.
   Run without `offline` before trusting a setup you have not used for a
   while.
+
+## A result looks wrong
+
+Open the run archive, `.reviews/<run-id>/`; the report's `Archive:` line
+names it. See [consensus-review.md](consensus-review.md#the-run-archive)
+for what it holds.
+
+1. Open `meta.json`: the `missing`, `unavailable`, `notWritten` lists and
+   each lane's model (CLI versions are not recorded; the attempt logs
+   show what each CLI printed).
+2. Open `events.jsonl`: what happened, in time order, per source.
+3. Open that source's `sources/<name>/` output or attempt log: what the
+   model was given and what it said. A refusal comes back as prose.
+
+No archive means one of: `no-file`; `archive=off` / `--no-archive`; the
+run was not in a git worktree; `.reviews/` is not ignored by git (the
+doctor warns) or is a symlink; the diff is larger than 20 MiB; or a copy
+or write failed. The report's `Archive:` line gives the reason.
+
+To salvage a review that died before writing its archive, run from the
+repository: `node scripts/archive-run.mjs finish --wd <work dir>`, with
+the work dir printed at the start of the run. Without `--report`, the
+run-id is `salvage-…`.
 
 ## A review looks too quiet
 

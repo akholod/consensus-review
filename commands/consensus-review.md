@@ -1,6 +1,6 @@
 ---
 description: Consensus code review (Opus arbiter + codex, optional pi advisor) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; strict sceptic by default; every flag also accepted with a leading --
-argument-hint: "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>|arch] [sceptic=off|basic|strict] [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped|full|off] [out=<path>|no-file] [lang=<language>]"
+argument-hint: "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>|arch] [sceptic=off|basic|strict] [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped|full|off] [out=<path>|no-file] [archive=off] [lang=<language>]"
 ---
 
 You are the **Opus arbiter** of a consensus review. Review runs by **dimensions** (what
@@ -8,7 +8,7 @@ to check) using **independent** reviewers (who checks): your dimension agents + 
 plus the optional extra advisor `pi` ([pi.dev](https://pi.dev)) when asked for.
 Merge everything into a single consensus report with P0–P2 findings.
 This is a **read-only** review: do not fix, commit, push, or comment on the PR.
-The only write is the markdown report file — and none at all with `no-file`.
+The only writes are the markdown report file and its private run archive — and none at all with `no-file`.
 
 Arguments: `$ARGUMENTS`
 
@@ -40,12 +40,13 @@ Resolution rules, in full:
   - **Independence check:** the value of a second consultant is a *different* model. If pi's resolved model is the same engine codex runs (`openai-codex` / `gpt-5.x`), the extra lane adds little — say so in the report (section 9) and suggest `extra-advisor=<other-model>`. pi reports its own `provider`/`model` in the JSON output, so read it from there rather than guessing.
 - `timeout=<sec>` → per-attempt wall clock (`T`) for the codex and pi lanes and their refuter re-runs. Default `900`, clamped to `[30, 1800]`, always an integer. A lane that times out or fails transiently is **retried once**; a config error (bad auth, rejected schema, unknown model) is not. Each phase is bounded by **2×T** — §5 and §8 separately, so `sceptic=strict` can take up to ~4×T in the worst case. A lane whose attempts all fail is reported `degraded (…)` and **its findings are lost**, so the cost of setting this too low is a whole source silently dropped from the review, not a slower review. The lanes run in parallel, so a higher ceiling costs nothing until something actually hangs. Measured: a codex consultant reading a small repository was still working at **600s**, so the old `240` default truncated ordinary runs.
 - `p2=<mode>` → how P2 is presented in the report (§9). `grouped` (default) — up to 7 individually, the rest rolled up by theme. `full` — every P2 individually. `off` — omit the P2 body, but keep the count in `Totals` and one summary line, because a suppressed section must still be visibly suppressed.
-- `out=<path>` → where the report file goes. A value ending in `/`, or naming an existing directory, is treated as a directory and the default filename is used inside it; anything else is the exact file path. Default: `<cwd>/.reviews/review-<slug>-<YYYY-MM-DD>.md`.
-- `no-file` → do not write a report file at all, terminal output only. With this flag the review performs **zero** writes anywhere on disk (`$WD` under `/tmp` aside).
+- `out=<path>` → where the report file goes. A value ending in `/`, or naming an existing directory, is treated as a directory and the default filename is used inside it; anything else is the exact file path. Default: `<INVOKE>/.reviews/review-<slug>-<YYYY-MM-DD>.md` (`INVOKE` from §1).
+- `no-file` → do not write a report file at all, terminal output only. With this flag the review performs **zero** writes anywhere on disk (`$WD` under `/tmp` aside) — no run archive either.
+- `archive=off` → do not keep the run archive. By default §9 copies a bounded, private snapshot of `$WD` (diff, each source's prompt and raw output, an event log) to `<INVOKE>/.reviews/<run-id>/`, and only when git confirms `.reviews/` is ignored. `out=` moves the report, never the archive.
 - `lang=<language>` → output language for the review: any language, given as a code or a name; English by default. A value you cannot read as a language goes to `Ignored args`. Code identifiers, paths, and technical terms always stay in their original form. Pass the chosen language to the dimension agents and into the consultant brief.
 
 ## 1. Resolve diff and context
-Work dir **outside the repo**: `WD=$(mktemp -d)` (in `/tmp`, not under the repo — otherwise it pollutes `git status`).
+Work dir **outside the repo**: `WD=$(mktemp -d)` (in `/tmp`, not under the repo — otherwise it pollutes `git status`). Right after it, print `work dir: <WD>` (a dead run is salvaged from it with `archive-run.mjs finish --wd <WD>`) and record the invoking directory as `INVOKE=<abs path of the cwd>`. Shell state does not persist between calls, so keep `WD` and `INVOKE` as **literals** from here on; a later `cd` must move neither.
 
 **PR mode:**
 - gh repo resolution: a full URL is self-describing. For `owner/repo#N` and `#N` pass `-R <owner/repo>` (otherwise `gh pr diff` from a non-git dir fails with "not a git repository"). Bare `#N` without owner/repo: try to derive the repo from the cwd git remote, else stop and ask for `owner/repo#N` or a URL.
@@ -110,7 +111,7 @@ Modifiers on top of the tier:
 - the sceptic pass (section 8) runs **strict by default** on any P0/P1 findings — `sceptic=basic` drops the refuter vote, `sceptic=off` (alias `no-sceptic`) disables it.
 - **T0:** do not run agents/consultants. Do a light pass yourself (Opus): quickly check the non-code for gross errors (broken JSON/YAML, obvious config typos) and emit a SHORT report with the classification and a note "no code-impacting changes — full panel skipped (override: `deep`)". Don't stay silent about what was skipped.
 
-Record `TIER`, `DIMS`, and the consultant set — they drive section 5. Show the classification to the user before launching (one line).
+Record `TIER`, `DIMS`, and the consultant set — they drive section 5. Show the classification to the user before launching (one line), and write it with the Write tool to `$WD/triage.json` as `{"tier": "T0..T3", "dims": [...], "basis": "<short>"}`.
 
 ## 4. Shared brief (MINIMAL and NON-leading)
 One brief for the consultants (codex, and pi when EXTRA is on; the dimension agents get their scope separately). It preserves source independence: do **not** list concrete hypotheses and do **not** give finding examples. The brief contains:
@@ -289,6 +290,7 @@ node "$H" decide --wd "$WD" --phase review --lanes codex,pi   # just `codex` wit
 - consultants: read `$WD/review.decision.json` — `lanes.<name>` is each lane's status (`status`, `display`, `attempts[]`, and for pi `provider`/`model`), plus `allExternalDown` and `refuters`. Read findings from `$WD/<name>.json` **only when that lane's `status` is `ok`**; the file exists only then. A missing or unreadable file is never "zero findings" — the lane's `display` says why (`degraded (timeout; failed: <reason>)`, `failed: <config reason>`, `failed: helper error (…)`). Treat `null` in `line`/`failure_scenario`/`suggested_fix` as "not provided". A `failed: <reason>` without retry is a config bug to fix (bad auth, rejected schema), not a clean review.
 - pi (only with `extra-advisor`): `$WD/pi.json` is already parsed from the markers. Report pi's actual `provider`/`model` from its status in section 9 and apply the independence check from section 0.
 - Tag every finding with `source` (`claude`/`codex`/`pi`) and `dimension`, and **preserve `owner`** when the reporting lane set it — normalizing it away is what turns the §7 owner rule into a no-op.
+- Write the Claude lane's findings **as received, before any merging**, with the Write tool to `$WD/claude-findings.json` as `{"findings": [...]}` (each with its `dimension`, `owner` kept).
 - **Floor case:** when `allExternalDown` is true (no external lane ended `ok*`) — build the report from the Claude dimension agents only, with the §9 top warning `> **Single-source review (Claude only):** …`; do not abort.
 
 ## 7. Consensus synthesis (you are the arbiter)
@@ -298,12 +300,14 @@ node "$H" decide --wd "$WD" --phase review --lanes codex,pi   # just `codex` wit
 - **`owner:` tags.** A lane may report something outside its own protocol and tag it `owner: <lane>` (e.g. quality flags a probable bug it cannot trace to consumers). If that lane ran, normal dedup applies — merge and keep the more precise `dimension`. **If that lane did not run in this review** (architecture is absent at T2; `dims=` can narrow the panel further), the finding is *ungraded*: keep the reporter's severity, do not demote it for being out-of-lane, and mark it in the report as `owner lane not in this run — ungraded`. A finding must never be lost because the lane that owns it was skipped.
 - Assign the **final severity** per the impact rubric (the decision is yours; source agreement influences confidence).
 - Keep minority/disputed findings (single source) with an annotation; never drop them silently.
+- Give **every** merged finding a string id (`F1`, `F2`, …) in report order, and write the merged list with the Write tool to `$WD/synthesis.json` as `{"findings": [{"id": "F1", …}, …]}` (each with `source`, `dimension`, final `severity`). These ids are the only ids of this run — §8 reuses them and never renumbers.
 
 ## 8. Sceptic pass (STRICT by default; `sceptic=basic` softens it, `sceptic=off` skips it) — INDEPENDENT verification
 To avoid confirmation bias, the sceptic pass is performed by an **independent verifier agent with fresh context** — NOT by you (the arbiter), and NOT by the agent that produced the finding. You only apply its verdicts.
-- Collect the P0/P1 findings (P2 isn't worth verifying). Spawn `finding-verifier` via Task (batched — pass the whole list in one call; split into a few calls if large), giving it ONLY: the path to `$WD/diff.patch`, `REPO`, and the findings (id, title, `file:line`, severity, dimension, claimed `failure_scenario`, source, rationale). Do NOT pass your synthesis reasoning. Namespaced fallback: `consensus-review:finding-verifier`.
+- Collect the P0/P1 findings (P2 isn't worth verifying), each with its id from `$WD/synthesis.json` — in both modes, never renumbered. Spawn `finding-verifier` via Task (batched — pass the whole list in one call; split into a few calls if large), giving it ONLY: the path to `$WD/diff.patch`, `REPO`, and the findings (id, title, `file:line`, severity, dimension, claimed `failure_scenario`, source, rationale). Do NOT pass your synthesis reasoning. Namespaced fallback: `consensus-review:finding-verifier`.
+- When `finding-verifier` returns, write its JSON verdict array verbatim to `$WD/verifier.verdicts.json` **only if** it returned a usable JSON array; otherwise write nothing. If you split it into several calls, concatenate the verdict arrays from all of them into that one file (still only usable arrays). This holds in `basic` and `strict` alike.
 - **Strict — the default.** Additionally enlist the consultants as refuters and take a **majority vote** per finding. `sceptic=basic` skips this paragraph entirely and applies the verifier verdicts as-is.
-  - Give every P0/P1 a string id (`F1`, `F2`, …). Write the ids as a JSON array to `$WD/ids.json`, and a refuter brief ("argue why each finding is NOT real", the same findings fields the verifier gets, the output language) to `$WD/refuter-brief.md`. With `extra-advisor`, also `$WD/refuter-brief-pi.md`: the same text plus "Output the verdicts strictly as a JSON array of `{id, verdict: confirmed|unconfirmed|refuted, evidence}` between the markers `===VERDICTS_START===` and `===VERDICTS_END===`".
+  - Write the P0/P1 ids (the `synthesis.json` ids above) as a JSON array to `$WD/ids.json`, and a refuter brief ("argue why each finding is NOT real", the same findings fields the verifier gets, the output language) to `$WD/refuter-brief.md`. With `extra-advisor`, also `$WD/refuter-brief-pi.md`: the same text plus "Output the verdicts strictly as a JSON array of `{id, verdict: confirmed|unconfirmed|refuted, evidence}` between the markers `===VERDICTS_START===` and `===VERDICTS_END===`".
   - Which refuters run is already decided in `review.decision.json` (`refuters`) — do not re-derive it. The helper reads it, runs a refuter marked `run`, and writes the recorded `skipped (…)` status for the rest without starting anything. Run them with the **same backgrounded-call protocol as §5** (one `run_in_background: true` call with literal values; without a completion notice, the bounded literal-path poll — here on `$WD/codex-refuter.status.json`, and `pi-refuter.status.json` with `extra-advisor` — up to 2×T + 60 s, each poll call with `timeout: 600000`, then `decide` regardless), launching `finding-verifier` while it runs:
     ```bash
     WD=/tmp/tmp.XXXX REPO=/abs/repo T=900   # literals
@@ -316,7 +320,7 @@ To avoid confirmation bias, the sceptic pass is performed by an **independent ve
       --from-decision "$WD/review.decision.json" --require-key verdicts --ids-file "$WD/ids.json" &
     wait
     ```
-  - When `finding-verifier` returns, write its JSON verdict array verbatim to `$WD/verifier.verdicts.json` **only if** it returned a usable JSON array; otherwise write nothing. If you split it into several calls, concatenate the verdict arrays from all of them into that one file (still only usable arrays). Then, once the refuter statuses exist (or the bounded poll above has run out), always run in a foreground call `node "${CLAUDE_PLUGIN_ROOT}/scripts/run-lane.mjs" decide --wd <literal WD> --phase sceptic --lanes codex-refuter` (`,pi-refuter` with `extra-advisor`), then read `$WD/sceptic.decision.json`: `perFinding.<id>.decision` is the verdict to apply, `perFinding.<id>.voters` reads `n of m`, `perFinding.<id>.noVote` names the voters that cast no vote on it, `verifier` is `ok | missing | invalid`, and `voteMode` is `strict` or `strict → basic`. Every id from `$WD/ids.json` has a decision; a finding with no vote at all is `unconfirmed`. Without a verifier vote a finding is `unconfirmed` — a refuter never decides alone. Report `verifier=missing|invalid` in section 9. If the decision carries `error` (e.g. `failed: helper error (no ids)`), apply none of it: fall back to the verifier's verdicts as in `sceptic=basic` and say so in section 9 — and if the verifier output is also missing or invalid, every P0/P1 is `unconfirmed` (a P0 goes to **Unverified — needs confirmation**).
+  - Once `$WD/verifier.verdicts.json` is written (or `finding-verifier` returned nothing usable) and the refuter statuses exist (or the bounded poll above has run out), always run in a foreground call `node "${CLAUDE_PLUGIN_ROOT}/scripts/run-lane.mjs" decide --wd <literal WD> --phase sceptic --lanes codex-refuter` (`,pi-refuter` with `extra-advisor`), then read `$WD/sceptic.decision.json`: `perFinding.<id>.decision` is the verdict to apply, `perFinding.<id>.voters` reads `n of m`, `perFinding.<id>.noVote` names the voters that cast no vote on it, `verifier` is `ok | missing | invalid`, and `voteMode` is `strict` or `strict → basic`. Every id from `$WD/ids.json` has a decision; a finding with no vote at all is `unconfirmed`. Without a verifier vote a finding is `unconfirmed` — a refuter never decides alone. Report `verifier=missing|invalid` in section 9. If the decision carries `error` (e.g. `failed: helper error (no ids)`), apply none of it: fall back to the verifier's verdicts as in `sceptic=basic` and say so in section 9 — and if the verifier output is also missing or invalid, every P0/P1 is `unconfirmed` (a P0 goes to **Unverified — needs confirmation**).
   - **The vote is lenient by design.** Only voters that returned a valid verdict for a finding count: a strict majority decides, a **tie is `unconfirmed`** (so with the default two voters a finding needs both to survive as stated), and a lone vote applies as-is only when it is the verifier's. A refuter that failed or timed out casts no vote rather than a negative one — an infrastructure failure must not remove a real P0. When no refuter voted at all, `voteMode` is `strict → basic` and the verifier's verdicts apply: say so in section 9.
 - Apply the verdicts:
   - `refuted` → drop (P1/P2, logged) or, for P0, move to **Unverified — needs confirmation** with the refutation reason.
@@ -326,7 +330,14 @@ To avoid confirmation bias, the sceptic pass is performed by an **independent ve
 - **No silent drops:** log every drop/downgrade/move together with the verifier verdict.
 
 ## 9. Report
-Write the report in the selected output language (`lang`, default English). Sort P0→P1→P2 (within a tier — by agreement desc, then dimension/file). Print to the terminal **and** save the file, unless `no-file` was given (terminal only, zero writes). Destination: `out=<path>` when set (directory value → default filename inside it; otherwise the exact path), else `<cwd>/.reviews/review-<slug>-<YYYY-MM-DD>.md` (create the dir; for the remote-PR diff-only case write to the invoking repo's `.reviews/`). State the destination — or "not written (`no-file`)" — in the last line of the terminal output.
+Write the report in the selected output language (`lang`, default English). Sort P0→P1→P2 (within a tier — by agreement desc, then dimension/file). Print to the terminal **and** save the file, unless `no-file` was given (terminal only, zero writes). Destination: `out=<path>` when set (directory value → default filename inside it; otherwise the exact path), else `<INVOKE>/.reviews/review-<slug>-<YYYY-MM-DD>.md` (create the dir; for the remote-PR diff-only case write to the invoking repo's `.reviews/`). State the destination — or "not written (`no-file`)" — in the last line of the terminal output.
+
+**Archive — on the file branch only, never with `no-file`.** Before writing the report, run in a foreground call, with the literals from §1 and the final report path:
+```bash
+cd <literal INVOKE> && node "${CLAUDE_PLUGIN_ROOT}/scripts/archive-run.mjs" finish --wd <literal WD> --report <final report path> --args-json '<flags JSON>'   # add --off with archive=off
+```
+`<flags JSON>` is one object: `{"target": "<PR ref | uncommitted>", "mode": "PR|uncommitted|diff-only", "sceptic": "off|basic|strict", "tier": "T0..T3", "dims": [...], "extra": true|false, "timeout": <T>, "lang": "<lang>"}`.
+It prints one JSON line and exits 0 either way: `{"dir":"…"}` → `Archive: <dir relative to INVOKE>`; `{"skipped":"…"}` → `Archive: not written (<reason>)`. A failed or unparseable call is `Archive: not written (<what happened>)`; the report is still written and the review's outcome is unchanged. Put that `Archive:` line in the header block and append it to the last terminal line. With `no-file` there is no `Archive:` line.
 
 Format:
 ```
@@ -340,6 +351,7 @@ Classification: tier=<T0..T3> | effective code: <~N lines / M files> | non-code 
 Dimensions: <architecture? quality impact tests?>  (applied / skipped with reason)
 Sources: <each lane's `display`, refuters included> — e.g. codex=ok (retried: unparseable), pi=degraded (timeout; failed: rate limit), codex-refuter=skipped (codex failed: config), claude=ok
 Code graph: <codegraph|graphify|none> (used for navigation/blast-radius)
+Archive: <.reviews/<run-id> | not written (<reason>)>   <omitted with no-file>
 Totals: P0=<n> P1=<n> P2=<n>
 
 ## P0
@@ -383,6 +395,6 @@ Totals: P0=<n> P1=<n> P2=<n>
 ```
 
 ## Hard rules
-- **Read-only:** do not edit code, commit, push, comment on the PR, or run fixes. The only write is the report file (`.reviews/` by default, or `out=<path>`) — and with `no-file` there is no write at all.
+- **Read-only:** do not edit code, commit, push, comment on the PR, or run fixes. The only writes are the report file (`.reviews/` by default, or `out=<path>`) and its private run archive (`<INVOKE>/.reviews/<run-id>/`, unless `archive=off`) — and with `no-file` there is no write at all.
 - Working files only in `$WD` (mktemp outside the repo).
 - Never "lose" a source or dimension silently — skips and unavailability always appear in the report ("Dimension summary" and "Source availability" sections).

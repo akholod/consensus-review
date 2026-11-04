@@ -218,5 +218,14 @@ export function run({ prompt, systemPrefix = "", model = "sonnet", timeoutMs = 2
   })
   const timedOut = proc.error?.code === "ETIMEDOUT" || proc.signal === "SIGTERM"
   const result = interpret({ rc: proc.status ?? 1, stdout: proc.stdout ?? "", timedOut, requireKey })
-  return { ...result, ms: Date.now() - started, modelId: model, runnerId: bin }
+  // What the process actually did, verbatim, for the run archive. A spawn failure (ENOENT, E2BIG)
+  // leaves empty streams, so its error is the only trace of it.
+  const raw = {
+    stdout: proc.stdout ?? "",
+    stderr: proc.stderr ?? "",
+    status: proc.status,
+    signal: proc.signal,
+    error: proc.error ? { code: proc.error.code ?? null, message: proc.error.message } : null,
+  }
+  return { ...result, ms: Date.now() - started, modelId: model, runnerId: bin, raw }
 }

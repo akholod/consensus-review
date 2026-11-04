@@ -4,6 +4,17 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
 
 ## Unreleased
 
+- **Each run leaves a private archive**
+  ([#5](https://github.com/akholod/consensus-review/issues/5)).
+  `.reviews/<run-id>/` keeps the diff, each source's prompt and raw
+  output or attempt logs, findings per stage, `events.jsonl` and a
+  `meta.json` that lists what is missing or not raw. It is written only
+  when git ignores `.reviews/`, with `0700`/`0600` permissions and caps of
+  2 MiB per file and 20 MiB per run. Off with `archive=off` or
+  `--no-archive`; `no-file` writes none. `scripts/archive-run.mjs finish`
+  salvages a dead run. The doctor now checks `.reviews/` correctly on a
+  fresh repository.
+
 - **A failed consultant is retried once, then reported `degraded`**
   ([#6](https://github.com/akholod/consensus-review/issues/6)). codex
   and pi, and their refuter re-runs, now go through a small Node helper

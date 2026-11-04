@@ -33,7 +33,8 @@ scenario, or it is not a P0 or P1. Then a verifier with a fresh context,
 which found nothing itself, tries to refute the serious findings before
 you see them.
 
-It never changes your code. The only file it writes is the report.
+It never changes your code. It writes only the report and its private run archive in the ignored
+`.reviews/`. `archive=off` / `--no-archive` drop the archive; `no-file` writes nothing at all.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/akholod/consensus-review/main/assets/demo.gif" alt="/consensus-review on a small change: impact, quality and tests agents plus codex run in parallel, a sceptic pass verifies the findings, and the report lists P0, P1 and P2 with failure scenarios" width="100%">
@@ -150,6 +151,12 @@ Everything the plugin runs, and where your code goes:
 - **Writes.** The report in `.reviews/` (or `out=<path>`, or nothing with
   `no-file`), and working files in a temp directory outside your
   repository.
+- **The run archive.** Next to the report, `.reviews/<run-id>/` keeps the
+  diff, the prompts and the consultants' transcripts (which can include
+  any repo file a model read). It is private (`0700`/`0600`), written
+  only when git ignores `.reviews/`, and never leaves your repository.
+  Turn it off with `archive=off` or `--no-archive`; `no-file` writes
+  none. There is no retention: delete old runs yourself.
 
 The plugin has no telemetry and makes no other network call of its own.
 The Claude agents run with your session's tools and permissions, minus

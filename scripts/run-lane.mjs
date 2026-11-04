@@ -132,8 +132,9 @@ async function runLane(lane, v, { onSpawned }) {
   for (let n = 1, seconds = T; n <= 2; n++) {
     const file = `${name}.a${n}`
     const cmd = laneCommand(lane, { repo: v.repo, schema, out: join(wd, `${file}.json`), model: v.model, brief })
+    const startedAt = new Date().toISOString()
     result = await attempt({ lane, wd, file, cmd, seconds, grace, requireKey, onSpawned })
-    const record = { n, status: result.status, reason: result.reason ?? null, rc: result.rc, seconds: result.seconds }
+    const record = { n, startedAt, status: result.status, reason: result.reason ?? null, rc: result.rc, seconds: result.seconds }
     if (result.status === "ok" && ids) {
       const { status, ignored, duplicates } = parseVerdicts(result.payload, ids)
       Object.assign(record, { ignored, duplicates })
@@ -151,7 +152,9 @@ async function runLane(lane, v, { onSpawned }) {
 
   // The canonical output exists only for a usable result, so its absence can never read as "0 findings".
   if (result.status === "ok") writeAtomic(join(wd, `${name}.json`), result.payload)
-  const meta = lane === "pi" ? { model: result.model ?? null, provider: result.provider ?? null } : {}
+  const meta = lane === "pi"
+    ? { model: result.model ?? null, provider: result.provider ?? null }
+    : { model: v.model ?? null, schema }
   return finish({ ...laneStatus(attempts), attempts, ...meta })
 }
 

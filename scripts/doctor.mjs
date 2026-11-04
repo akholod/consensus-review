@@ -168,12 +168,13 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false } 
 
       try {
         accessSync(REPO, constants.W_OK)
-        const ignored = sh("git", ["check-ignore", ".reviews"], { cwd: REPO })
+        // trailing slash: without it git reports a not-yet-created directory as not ignored
+        const ignored = sh("git", ["check-ignore", "-q", ".reviews/"], { cwd: REPO }) !== null
         add("workspace", "report output", "ok",
           ignored ? ".reviews/ writable and gitignored" : ".reviews/ writable, NOT gitignored")
         if (!ignored) {
           add("workspace", ".reviews in git", "warn", "not ignored",
-            "review reports would be picked up as untracked changes by the NEXT review")
+            "review reports would be picked up as untracked changes by the NEXT review; the run archive will be skipped")
         }
       } catch {
         add("workspace", "report output", "warn", "directory is not writable",

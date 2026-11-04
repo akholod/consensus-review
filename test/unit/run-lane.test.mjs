@@ -114,6 +114,36 @@ test("1c: pi-refuter fail then votes → ok (retried: failed), verdicts written"
   }
 })
 
+test("every attempt records startedAt; codex status records model (null when unset) and the effective schema", async () => {
+  const ws = workspace()
+  try {
+    const before = Date.now()
+    await launch(ws, runArgs(ws, "codex"), { fake: "fail,ok" })
+    const s = status(ws)
+    assert.equal(s.attempts.length, 2)
+    for (const a of s.attempts) {
+      assert.equal(new Date(a.startedAt).toISOString(), a.startedAt, "startedAt is an ISO timestamp")
+      assert.ok(Date.parse(a.startedAt) >= before - 1000)
+    }
+    assert.ok(Date.parse(s.attempts[1].startedAt) >= Date.parse(s.attempts[0].startedAt))
+    assert.equal(s.model, null)
+    assert.equal(s.schema, join(ROOT, "contracts/finding.schema.json"), "the default schema when --schema is not given")
+  } finally {
+    ws.cleanup()
+  }
+  const ws2 = workspace()
+  try {
+    const schema = join(ROOT, "contracts/verdict.schema.json")
+    await launch(ws2, runArgs(ws2, "codex", ["--model", "gpt-x", "--schema", schema]))
+    const s = status(ws2)
+    assert.equal(s.model, "gpt-x")
+    assert.equal(s.schema, schema)
+    assert.ok(s.attempts[0].startedAt)
+  } finally {
+    ws2.cleanup()
+  }
+})
+
 test("2: invalid_json_schema → failed: <reason>, exactly one launch", async () => {
   const ws = workspace()
   try {

@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync, readdirSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { DENIED_TOOLS, NO_MCP, buildArgs } from "../../src/loop-review/adapter.mjs"
 import { laneCommand } from "../../scripts/lib/lanes.mjs"
@@ -11,7 +11,9 @@ const runtimeFiles = [
   "bin/loop-review.mjs",
   "scripts/run-lane.mjs",
   "scripts/lib/lanes.mjs",
-].filter((f) => f.endsWith(".mjs"))
+  "scripts/lib/archive.mjs",
+  "scripts/archive-run.mjs", // created by a later story; skipped while absent
+].filter((f) => f.endsWith(".mjs") && existsSync(join(ROOT, f)))
 
 const source = (rel) => readFileSync(join(ROOT, rel), "utf8")
 
@@ -54,21 +56,24 @@ test("the only forge call reads", () => {
   }
 })
 
-// Two writes exist and no more: the report, and the system-prefix file the runner is handed
-// instead of a 500 KB argv value. The second one is why this is a list and not a single entry —
-// widened deliberately, since the promise being protected is that nothing is written INTO THE
-// REVIEWED REPOSITORY, and the prefix file is confined to the run's temp cwd.
-test("the runtime writes only the report and the temp system-prefix file", () => {
+// The writes are: the report, the system-prefix file the runner is handed instead of a 500 KB argv
+// value, the temp dirs they live in, and the run archive. The list is widened deliberately, since
+// the promise being protected is that nothing is written INTO THE REVIEWED REPOSITORY outside the
+// ignored `.reviews/`: the prefix file is confined to the run's temp cwd, the archive to its staging dir.
+test("the runtime writes only the report, the temp system-prefix file and the run archive", () => {
   const writes = []
   for (const file of runtimeFiles) {
     // call sites only — the import statement names the same symbol
     const body = source(file).replace(/^import[\s\S]*?from "[^"]+"$/gm, "")
-    for (const m of body.matchAll(/\b(writeFileSync|appendFileSync|rmSync|unlinkSync|renameSync|linkSync|rmdirSync)\s*\(/g)) {
+    for (const m of body.matchAll(/\b(writeFileSync|appendFileSync|rmSync|unlinkSync|renameSync|linkSync|rmdirSync|copyFileSync|cpSync|mkdirSync|mkdtempSync|chmodSync|openSync|writeSync|createWriteStream)\s*\(/g)) {
       writes.push(`${file}:${m[1]}`)
     }
   }
   assert.deepEqual(writes.sort(), [
-    "bin/loop-review.mjs:writeFileSync", "scripts/run-lane.mjs:linkSync", "scripts/run-lane.mjs:renameSync",
+    "bin/loop-review.mjs:mkdirSync", "bin/loop-review.mjs:mkdtempSync", "bin/loop-review.mjs:writeFileSync",
+    "scripts/lib/archive.mjs:mkdirSync", "scripts/lib/archive.mjs:mkdirSync", "scripts/lib/archive.mjs:mkdtempSync",
+    "scripts/lib/archive.mjs:renameSync", "scripts/lib/archive.mjs:rmSync", "scripts/lib/archive.mjs:writeFileSync",
+    "scripts/run-lane.mjs:linkSync", "scripts/run-lane.mjs:openSync", "scripts/run-lane.mjs:renameSync",
     "scripts/run-lane.mjs:unlinkSync", "scripts/run-lane.mjs:writeFileSync",
     "src/loop-review/adapter.mjs:writeFileSync",
   ],
@@ -78,6 +83,20 @@ test("the runtime writes only the report and the temp system-prefix file", () =>
   // and the adapter's write is anchored to the spawn cwd, which bin/ sets to a mkdtemp directory
   assert.match(source("src/loop-review/adapter.mjs"), /systemPrefixFile = join\(cwd, SYSTEM_PREFIX_FILE\)/)
   assert.match(source("bin/loop-review.mjs"), /const workDir = mkdtempSync\(/)
+})
+
+// The archive writes only into the staging dir its own mkdtempSync returned, renames that dir into
+// place, and deletes nothing else: `.reviews/` is the only directory it creates outside staging.
+test("the archive lib writes under its staging dir and removes only that dir", () => {
+  const body = source("scripts/lib/archive.mjs").replace(/^import[\s\S]*?from "[^"]+"$/gm, "")
+  assert.match(body, /staging = mkdtempSync\(join\(dir, `\.\$\{id\}\.tmp-`\)\)/)
+  const calls = (name) => [...body.matchAll(new RegExp(`\\b${name}\\((.*)$`, "gm"))].map((m) => m[1])
+  assert.deepEqual(calls("rmSync"), ["staging, { recursive: true, force: true })"])
+  assert.deepEqual(calls("writeFileSync"), ["join(staging, to), data, { mode: 0o600, flag: \"wx\" })"])
+  assert.deepEqual(calls("mkdirSync"), [
+    "dir, { recursive: true, mode: 0o700 })", "dirname(join(staging, to)), { recursive: true, mode: 0o700 })",
+  ])
+  assert.deepEqual(calls("renameSync"), ["staging, join(dir, name))"])
 })
 
 // The lane helper writes status, decision, canonical output and per-attempt logs — all under --wd,
