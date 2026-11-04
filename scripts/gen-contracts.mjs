@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
-import { resolveRef } from "./lib/json-schema.mjs"
+import { assertStrictSchema, resolveRef } from "./lib/json-schema.mjs"
 import { renderSketch } from "./lib/sketch.mjs"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
@@ -29,16 +29,7 @@ const findingRoot = JSON.parse(findingSchema)
 const loopRoot = JSON.parse(read(LOOP))
 
 // Fail loudly rather than emitting a schema OpenAI strict mode would reject at run time.
-;(function strict(node, path) {
-  if (node && typeof node === "object" && node.type === "object") {
-    if (node.additionalProperties !== false) throw new Error(`${path}: missing "additionalProperties": false`)
-    const props = Object.keys(node.properties ?? {})
-    const required = node.required ?? []
-    for (const p of props) if (!required.includes(p)) throw new Error(`${path}: "required" omits "${p}"`)
-    for (const p of props) strict(node.properties[p], `${path}.${p}`)
-  }
-  if (node && node.type === "array" && node.items) strict(node.items, `${path}[]`)
-})(findingRoot, "$")
+assertStrictSchema(findingRoot)
 
 /**
  * loopFinding must remain the consensus finding minus exactly the declared omissions. Any other

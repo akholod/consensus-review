@@ -38,7 +38,7 @@ Resolution rules, in full:
   The pass only fires when there are P0/P1 findings, so trivial/clean reviews pay nothing at any setting. Strict costs one extra codex run on the reviews that do have P0/P1 — and note the vote arithmetic in §8: with the default two-voter set a tie is not a confirmation, so strict-by-default means findings need both voters to survive as stated.
 - **`codex` is the only consultant by default.** `extra-advisor` (or `--extra-advisor`) → **EXTRA=on**: also run `pi` as a second, independent consultant. Optional model: `extra-advisor=<model>` (e.g. `extra-advisor=anthropic/claude-sonnet-4-5`, `extra-advisor=sonnet:high`, `extra-advisor=gemini-2.5-pro`) → passed to `pi --model`. Without a model, pi uses its configured default.
   - **Independence check:** the value of a second consultant is a *different* model. If pi's resolved model is the same engine codex runs (`openai-codex` / `gpt-5.x`), the extra lane adds little — say so in the report (section 9) and suggest `extra-advisor=<other-model>`. pi reports its own `provider`/`model` in the JSON output, so read it from there rather than guessing.
-- `timeout=<sec>` → per-consultant wall clock for the codex and pi lanes. Default `900`, clamped to `[30, 1800]`. A lane that hits it is reported as `timeout` and **its findings are lost**, so the cost of setting this too low is a whole source silently dropped from the review, not a slower review. The lanes run in parallel, so a higher ceiling costs nothing until something actually hangs. Measured: a codex consultant reading a small repository was still working at **600s**, so the old `240` default truncated ordinary runs.
+- `timeout=<sec>` → per-attempt wall clock (`T`) for the codex and pi lanes and their refuter re-runs. Default `900`, clamped to `[30, 1800]`, always an integer. A lane that times out or fails transiently is **retried once**; a config error (bad auth, rejected schema, unknown model) is not. Each phase is bounded by **2×T** — §5 and §8 separately, so `sceptic=strict` can take up to ~4×T in the worst case. A lane whose attempts all fail is reported `degraded (…)` and **its findings are lost**, so the cost of setting this too low is a whole source silently dropped from the review, not a slower review. The lanes run in parallel, so a higher ceiling costs nothing until something actually hangs. Measured: a codex consultant reading a small repository was still working at **600s**, so the old `240` default truncated ordinary runs.
 - `p2=<mode>` → how P2 is presented in the report (§9). `grouped` (default) — up to 7 individually, the rest rolled up by theme. `full` — every P2 individually. `off` — omit the P2 body, but keep the count in `Totals` and one summary line, because a suppressed section must still be visibly suppressed.
 - `out=<path>` → where the report file goes. A value ending in `/`, or naming an existing directory, is treated as a directory and the default filename is used inside it; anything else is the exact file path. Default: `<cwd>/.reviews/review-<slug>-<YYYY-MM-DD>.md`.
 - `no-file` → do not write a report file at all, terminal output only. With this flag the review performs **zero** writes anywhere on disk (`$WD` under `/tmp` aside).
@@ -127,7 +127,9 @@ One brief for the consultants (codex, and pi when EXTRA is on; the dimension age
 - The category enum: `security|correctness|perf|maintainability|tests|style`.
 - A requirement to emit findings strictly per the schema (below), each tagged with a `dimension` from `DIMS`.
 
-Findings schema (write it to `$WD/findings.schema.json` for codex) — **copy it verbatim**:
+Write the brief to `$WD/brief.md` (and the pi variant, §5, to `$WD/brief-pi.md`) — the §5 helper reads it from there.
+
+Findings schema — the §5 helper hands codex the canonical `contracts/finding.schema.json` itself; this copy is what the pi brief quotes, **verbatim**:
 <!-- BEGIN GENERATED: contracts/finding.schema.json -->
 ```json
 {
@@ -264,36 +266,30 @@ the effect on recall is unverified. Issue #1 (the eval corpus) is what would set
 Note: when installed as a plugin the agents may be namespaced — if a bare name does not resolve, use `consensus-review:arch-reviewer`, `consensus-review:quality-reviewer`, `consensus-review:impact-reviewer`, `consensus-review:test-reviewer`.
 Pass each one: the path to `$WD/diff.patch`, `REPO`, the mode (PR/uncommitted/diff-only), the output language (from `lang`), and **`TIER` with an exploration budget** — T1/T2 means "the diff plus its nearest context and direct consumers; do not sweep the repository", T3 means the full protocol. Each agent explores independently (that is what buys source independence), so an unbounded brief multiplies the same repo walk by the number of lanes. Their structured output is the Claude lane's share of the findings, each already carrying its `dimension`. The **same P0/P1 evidence bar and P2 admission bar** are built into each agent prompt, so every lane is held to one standard — the consultant brief in §4 is not a stricter rule for codex alone, and the standalone `/arch-review`-style commands keep the bar even without an orchestrator.
 
-**codex lane** (always) and **pi lane** (only with `extra-advisor`) — as a SINGLE foreground Bash call (one shell owns both processes → `wait` is valid; separate background calls won't work, shell state does not persist between calls).
+**codex lane** (always) and **pi lane** (only with `extra-advisor`) — through the lane helper `scripts/run-lane.mjs`, never by calling `codex`/`pi` directly. The helper owns the read-only flags, the per-attempt timeout, the single retry and killing each attempt's process group; it writes `$WD/<name>.status.json` per lane and, only on success, the canonical `$WD/<name>.json`.
+
+Make this **ONE Bash call with `run_in_background: true`**: one shell owns both node processes, so `wait` is valid and `decide` runs after both. Separate background calls (one per lane) are still forbidden — nothing would own both processes. Shell state does not persist between calls, so write every value (`$WD`, `$REPO`, `T`, the model) as a **literal**.
 ```bash
-T=${TIMEOUT:-900}          # from timeout=<sec>, clamped to [30,1800]
-timeout "$T" codex exec -s read-only -C "$REPO" --skip-git-repo-check \
-  --output-schema "$WD/findings.schema.json" -o "$WD/codex.json" "$BRIEF" </dev/null \
-  > "$WD/codex.log" 2>&1 & C=$!
-P=""                      # pi lane runs ONLY with extra-advisor — never start it otherwise
-if [ "$EXTRA" = on ]; then
-  # add --model "$EXTRA_MODEL" only when extra-advisor=<model> was given
-  ( cd "$REPO" && timeout "$T" pi -p --mode json --tools read,grep,find,ls \
-      ${EXTRA_MODEL:+--model "$EXTRA_MODEL"} "$BRIEF_PI" </dev/null ) \
-    > "$WD/pi.out" 2>&1 & P=$!
-fi
-wait $C; codex_rc=$?      # 124 = timeout
-if [ -n "$P" ]; then wait $P; pi_rc=$?; fi
+WD=/tmp/tmp.XXXX REPO=/abs/repo T=900   # literals; T from timeout=<sec>
+H="${CLAUDE_PLUGIN_ROOT}/scripts/run-lane.mjs"
+node "$H" run codex --wd "$WD" --name codex --repo "$REPO" --brief-file "$WD/brief.md" --timeout "$T" &
+# only with extra-advisor; add --model <model> only when extra-advisor=<model> was given
+node "$H" run pi --wd "$WD" --name pi --repo "$REPO" --brief-file "$WD/brief-pi.md" --timeout "$T" &
+wait
+node "$H" decide --wd "$WD" --phase review --lanes codex,pi   # just `codex` without extra-advisor
 ```
-- codex: `</dev/null` is mandatory (otherwise it hangs on stdin); pass the diff as a file, not via stdin; `--json` not needed (the final message shape is set by `--output-schema`, and `-o` writes that final message to the file).
-- pi: has **no `--dir`/`-C` flag** — run it inside `( cd "$REPO" && … )` so the subshell's cwd doesn't leak into the rest of the call. `-p` = non-interactive, `--mode json` = JSONL events on stdout.
-- pi read-only enforcement is the **toolset**: `--tools read,grep,find,ls` (no `edit`, no `write`, no `bash`) — pi has no sandbox flag, so never add `bash` here. `$WD` is outside the repo, so also pass the diff **inline in the brief** or via `@` (`pi @"$WD/diff.patch" …`) rather than relying on the path being readable from the repo cwd — `read` resolves relative to cwd but accepts absolute paths, so the absolute `$WD/diff.patch` path in the brief is fine.
-- pi has no output-schema flag. In `$BRIEF_PI` add: "Output the findings strictly as a JSON array per the schema between the markers `===FINDINGS_START===` and `===FINDINGS_END===`".
+- Without `extra-advisor`, drop the pi line and list only `codex` in `--lanes` (pi is reported `skipped (no extra-advisor)` from §2). A lane §2 marked `unavailable` keeps its line with `--skip unavailable` instead of starting the tool.
+- **While the call runs**, launch the dimension agents (above). On the call's completion notice, read `$WD/review.decision.json`.
+- **No notice?** Poll the literal path in a foreground call, e.g. `timeout 540 sh -c 'until [ -f /tmp/tmp.XXXX/review.decision.json ]; do sleep 5; done'`, repeated until **2×T + 60 s** in total (count whole seconds). Pass **`timeout: 600000`** on that Bash call: the tool's default is 120 s, which would kill the poll long before `timeout 540`. If the file is still missing, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/run-lane.mjs" decide --wd <literal WD> --phase review --lanes <same list>` yourself: a lane without a status is then reported `failed: helper error (no status written)`, never as zero findings. `review.decision.json` is write-once — whichever `decide` runs first wins, a later one leaves it as is — so read the file after your `decide`, whoever wrote it.
+- pi read-only enforcement is the **toolset** the helper passes (`--tools read,grep,find,ls --no-mcp` — no `edit`, `write` or `bash`, and no MCP server tools, which `--tools` alone keeps; pi has no sandbox flag). It runs in `$REPO`, so give the diff by its **absolute** `$WD/diff.patch` path in the brief.
+- pi has no output-schema flag. In `$WD/brief-pi.md` add: "Output the findings strictly as a JSON array per the schema between the markers `===FINDINGS_START===` and `===FINDINGS_END===`" — the helper takes the last such block and treats its absence as `unparseable`.
 
 ## 6. Collect and normalize
 - dimension agents: take their structured findings, normalize to the common schema (the `dimension` field is known from the agent), `source = claude`.
-- codex: read `$WD/codex.json` (valid JSON per schema); treat `null` in `line`/`failure_scenario`/`suggested_fix` as "not provided". `codex_rc`: 124 → `timeout`, ≠0 → `failed` (on failure `$WD/codex.json` is not written at all — never read a missing/empty file as "zero findings"). When `failed`, grab the reason from the log (`grep -m1 -o '"message": *"[^"]*"' "$WD/codex.log"`, else its last lines) and put that one line in the section-9 status — a rejected schema or bad auth is a config bug to fix, not a clean review.
-- pi (only with `extra-advisor`): parse `$WD/pi.out` as JSONL. The final answer is the last assistant message — take the `agent_end` event (or the last `turn_end`) and concatenate its text parts:
-  `jq -r 'select(.type=="agent_end") | .messages[-1].content[] | select(.type=="text") | .text' "$WD/pi.out"`
-  Then take the **last** block between the markers. `pi_rc`: 124 → `timeout`, ≠0 → `failed`; markers missing/unparseable → `unparseable`, keep the raw output.
-  Also read pi's actual model from the same events (`.message.provider` / `.message.model`) — report it in section 9 and apply the independence check from section 0.
+- consultants: read `$WD/review.decision.json` — `lanes.<name>` is each lane's status (`status`, `display`, `attempts[]`, and for pi `provider`/`model`), plus `allExternalDown` and `refuters`. Read findings from `$WD/<name>.json` **only when that lane's `status` is `ok`**; the file exists only then. A missing or unreadable file is never "zero findings" — the lane's `display` says why (`degraded (timeout; failed: <reason>)`, `failed: <config reason>`, `failed: helper error (…)`). Treat `null` in `line`/`failure_scenario`/`suggested_fix` as "not provided". A `failed: <reason>` without retry is a config bug to fix (bad auth, rejected schema), not a clean review.
+- pi (only with `extra-advisor`): `$WD/pi.json` is already parsed from the markers. Report pi's actual `provider`/`model` from its status in section 9 and apply the independence check from section 0.
 - Tag every finding with `source` (`claude`/`codex`/`pi`) and `dimension`, and **preserve `owner`** when the reporting lane set it — normalizing it away is what turns the §7 owner rule into a no-op.
-- **Floor case:** if all external consultants are unavailable/failed — build the report from the Claude dimension agents only, with a "single-source (Claude-only)" warning; do not abort.
+- **Floor case:** when `allExternalDown` is true (no external lane ended `ok*`) — build the report from the Claude dimension agents only, with the §9 top warning `> **Single-source review (Claude only):** …`; do not abort.
 
 ## 7. Consensus synthesis (you are the arbiter)
 - **You do NOT author findings yourself.** Findings come only from the independent dimension agents + codex (+ pi) — each a separate context. You merge/dedup/rank; you never grade your own review — the sceptic pass (§8) is run by a separate independent verifier to avoid confirmation bias.
@@ -306,7 +302,22 @@ if [ -n "$P" ]; then wait $P; pi_rc=$?; fi
 ## 8. Sceptic pass (STRICT by default; `sceptic=basic` softens it, `sceptic=off` skips it) — INDEPENDENT verification
 To avoid confirmation bias, the sceptic pass is performed by an **independent verifier agent with fresh context** — NOT by you (the arbiter), and NOT by the agent that produced the finding. You only apply its verdicts.
 - Collect the P0/P1 findings (P2 isn't worth verifying). Spawn `finding-verifier` via Task (batched — pass the whole list in one call; split into a few calls if large), giving it ONLY: the path to `$WD/diff.patch`, `REPO`, and the findings (id, title, `file:line`, severity, dimension, claimed `failure_scenario`, source, rationale). Do NOT pass your synthesis reasoning. Namespaced fallback: `consensus-review:finding-verifier`.
-- **Strict — the default.** Additionally enlist the consultants as refuters (re-run each with an "argue why each finding is NOT real" brief) and take a **majority vote** per finding across {finding-verifier, codex} — plus pi when `extra-advisor` is on. With an even voter set (2 — the default, without an extra advisor) a **tie is not a confirmation**: treat it as `unconfirmed` and apply the downgrade rules below. `sceptic=basic` skips this paragraph entirely and applies the verifier verdicts as-is.
+- **Strict — the default.** Additionally enlist the consultants as refuters and take a **majority vote** per finding. `sceptic=basic` skips this paragraph entirely and applies the verifier verdicts as-is.
+  - Give every P0/P1 a string id (`F1`, `F2`, …). Write the ids as a JSON array to `$WD/ids.json`, and a refuter brief ("argue why each finding is NOT real", the same findings fields the verifier gets, the output language) to `$WD/refuter-brief.md`. With `extra-advisor`, also `$WD/refuter-brief-pi.md`: the same text plus "Output the verdicts strictly as a JSON array of `{id, verdict: confirmed|unconfirmed|refuted, evidence}` between the markers `===VERDICTS_START===` and `===VERDICTS_END===`".
+  - Which refuters run is already decided in `review.decision.json` (`refuters`) — do not re-derive it. The helper reads it, runs a refuter marked `run`, and writes the recorded `skipped (…)` status for the rest without starting anything. Run them with the **same backgrounded-call protocol as §5** (one `run_in_background: true` call with literal values; without a completion notice, the bounded literal-path poll — here on `$WD/codex-refuter.status.json`, and `pi-refuter.status.json` with `extra-advisor` — up to 2×T + 60 s, each poll call with `timeout: 600000`, then `decide` regardless), launching `finding-verifier` while it runs:
+    ```bash
+    WD=/tmp/tmp.XXXX REPO=/abs/repo T=900   # literals
+    H="${CLAUDE_PLUGIN_ROOT}/scripts/run-lane.mjs"
+    node "$H" run codex --wd "$WD" --name codex-refuter --repo "$REPO" --brief-file "$WD/refuter-brief.md" --timeout "$T" \
+      --from-decision "$WD/review.decision.json" --schema "${CLAUDE_PLUGIN_ROOT}/contracts/verdict.schema.json" \
+      --require-key verdicts --ids-file "$WD/ids.json" &
+    # only with extra-advisor (same --model as §5)
+    node "$H" run pi --wd "$WD" --name pi-refuter --repo "$REPO" --brief-file "$WD/refuter-brief-pi.md" --timeout "$T" \
+      --from-decision "$WD/review.decision.json" --require-key verdicts --ids-file "$WD/ids.json" &
+    wait
+    ```
+  - When `finding-verifier` returns, write its JSON verdict array verbatim to `$WD/verifier.verdicts.json` **only if** it returned a usable JSON array; otherwise write nothing. If you split it into several calls, concatenate the verdict arrays from all of them into that one file (still only usable arrays). Then, once the refuter statuses exist (or the bounded poll above has run out), always run in a foreground call `node "${CLAUDE_PLUGIN_ROOT}/scripts/run-lane.mjs" decide --wd <literal WD> --phase sceptic --lanes codex-refuter` (`,pi-refuter` with `extra-advisor`), then read `$WD/sceptic.decision.json`: `perFinding.<id>.decision` is the verdict to apply, `perFinding.<id>.voters` reads `n of m`, `perFinding.<id>.noVote` names the voters that cast no vote on it, `verifier` is `ok | missing | invalid`, and `voteMode` is `strict` or `strict → basic`. Every id from `$WD/ids.json` has a decision; a finding with no vote at all is `unconfirmed`. Without a verifier vote a finding is `unconfirmed` — a refuter never decides alone. Report `verifier=missing|invalid` in section 9. If the decision carries `error` (e.g. `failed: helper error (no ids)`), apply none of it: fall back to the verifier's verdicts as in `sceptic=basic` and say so in section 9 — and if the verifier output is also missing or invalid, every P0/P1 is `unconfirmed` (a P0 goes to **Unverified — needs confirmation**).
+  - **The vote is lenient by design.** Only voters that returned a valid verdict for a finding count: a strict majority decides, a **tie is `unconfirmed`** (so with the default two voters a finding needs both to survive as stated), and a lone vote applies as-is only when it is the verifier's. A refuter that failed or timed out casts no vote rather than a negative one — an infrastructure failure must not remove a real P0. When no refuter voted at all, `voteMode` is `strict → basic` and the verifier's verdicts apply: say so in section 9.
 - Apply the verdicts:
   - `refuted` → drop (P1/P2, logged) or, for P0, move to **Unverified — needs confirmation** with the refutation reason.
   - `unconfirmed` → downgrade; single-source-unconfirmed → **Unconfirmed (single-source)**; a P0 → **Unverified — needs confirmation** (not counted in Totals P0).
@@ -320,11 +331,14 @@ Write the report in the selected output language (`lang`, default English). Sort
 Format:
 ```
 # Consensus Review — <target: PR #N url | uncommitted in <repo>>
+<only when review.decision.json has allExternalDown: true (never at T0, where no consultant runs):>
+> **Single-source review (Claude only):** codex=<display>[, pi=<display>]. No external model cross-checked these findings.
+
 base→head: <…> | date: <…> | sceptic: STRICT/BASIC/OFF | extra-advisor: ON (pi, <provider/model>)/OFF | timeout: <sec> | p2: <grouped|full|off> | lang: <language>
 Ignored args: <unrecognized or overridden tokens, or "none">
 Classification: tier=<T0..T3> | effective code: <~N lines / M files> | non-code excluded: <K lines (.bru/lock/docs)> | blast: <isolated|local|wide> | basis: <short>
 Dimensions: <architecture? quality impact tests?>  (applied / skipped with reason)
-Sources: codex=<ok|timeout|failed: <reason from codex.log>|unavailable>, pi=<ok|…|unparseable|skipped (no extra-advisor)>, claude=ok
+Sources: <each lane's `display`, refuters included> — e.g. codex=ok (retried: unparseable), pi=degraded (timeout; failed: rate limit), codex-refuter=skipped (codex failed: config), claude=ok
 Code graph: <codegraph|graphify|none> (used for navigation/blast-radius)
 Totals: P0=<n> P1=<n> P2=<n>
 
@@ -360,7 +374,11 @@ Totals: P0=<n> P1=<n> P2=<n>
 <dropped P1/P2 + downgrades, each with the reason — only when sceptic is on (basic or strict)>
 
 ## Source availability
-<timeout/failed/unavailable/unparseable/skipped, diff-only mode, etc.
+<one line per external lane (refuters included) with its attempts from `attempts[]`, e.g.
+ `codex: degraded — attempt 1: timeout (900s); attempt 2: failed: stream disconnected (412s)`,
+ `codex-refuter: ok (retried: failed) — attempt 1: failed: rate limit (35s); attempt 2: ok (610s)`;
+ skipped/unavailable lanes with their reason; diff-only mode, etc.
+ strict sceptic: `voteMode: strict | strict → basic`, `verifier` when it is not `ok`, and the voters per finding — `F1: 2 of 2 voters`, `F3: 1 of 2 voters (no vote: codex-refuter)`.
  with extra-advisor: pi's resolved provider/model, plus a note when it is the same engine as codex (openai-codex/gpt-5.x) — the lane then adds little independence, suggest extra-advisor=<other-model>>
 ```
 

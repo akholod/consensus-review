@@ -132,11 +132,12 @@ Everything the plugin runs, and where your code goes:
 
 - **Your code goes to the models you already use.** The Claude agents
   run in your Claude Code session. `/consensus-review` gives the diff
-  and a short brief to `codex exec`, which runs in a read-only sandbox,
-  reads files in your repository, and sends what it reads to OpenAI
-  under your codex login. With `extra-advisor`, `pi` does the same with
-  a read-only toolset and the provider pi is set up for. `/loop-review`
-  runs `claude -p`, which sends the diff and its context to Anthropic.
+  and a short brief to `codex exec` (through the lane helper below),
+  which runs in a read-only sandbox, reads files in your repository,
+  and sends what it reads to OpenAI under your codex login. With
+  `extra-advisor`, `pi` does the same with a read-only toolset and the
+  provider pi is set up for. `/loop-review` runs `claude -p`, which
+  sends the diff and its context to Anthropic.
 - **GitHub, for pull requests.** `gh pr diff` and `gh pr view` read the
   PR. Without `gh`, a local clone is used, or for a public repository
   the diff is fetched with `curl` from github.com. No token is read from
@@ -157,10 +158,13 @@ The Claude agents run with your session's tools and permissions, minus
 ## Under the hood
 
 The panel is plain Claude Code: commands and read-only subagents
-(`disallowedTools: Write, Edit`). `/loop-review` is a small Node runtime
-with no dependencies. Its passes run as separate `claude -p` processes
-with every file, shell, web and MCP tool removed, so a pass sees only the
-context it was given. Both strategies share one finding schema
+(`disallowedTools: Write, Edit`), plus one small Node helper
+(`scripts/run-lane.mjs`) that runs `codex` and `pi` with their read-only
+flags (`pi`: `--tools read,grep,find,ls --no-mcp`), retries a failed run
+once and kills its process group on timeout. `/loop-review` is a small
+Node runtime with no dependencies. Its passes run as separate
+`claude -p` processes with every file, shell, web and MCP tool removed,
+so a pass sees only the context it was given. Both strategies share one finding schema
 (`contracts/finding.schema.json`) and one set of severity bars
 (`contracts/severity-bars.md`); CI fails if a prompt drifts from them.
 

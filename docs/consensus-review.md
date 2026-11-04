@@ -29,7 +29,7 @@ never passes for a default.
 | `sceptic=basic`           | the verifier alone, no vote                                                                                                                  |
 | `sceptic=off`             | no sceptic pass (`no-sceptic` is an alias)                                                                                                   |
 | `extra-advisor[=<model>]` | add `pi` as a second consultant; `=<model>` picks its model, for example `extra-advisor=sonnet:high`                                         |
-| `timeout=<sec>`           | wall clock per consultant, default `900`, clamped to `[30, 1800]`                                                                            |
+| `timeout=<sec>`           | wall clock per attempt, default `900`, clamped to `[30, 1800]`; retried once, at most 2×T per phase                                          |
 | `p2=grouped`              | the default: up to 7 P2s listed, the rest rolled up by theme                                                                                 |
 | `p2=full` / `p2=off`      | list every P2 / show only the count                                                                                                          |
 | `out=<path>`              | write the report to a directory or an exact file                                                                                             |
@@ -39,11 +39,16 @@ never passes for a default.
 Depth (`deep`, `minimal`) and lanes (`dims`, `arch`) are independent:
 `minimal arch` is a shallow pass that includes architecture.
 
-**Do not set `timeout` low to save time.** A consultant that hits it is
-reported as `timeout` and its findings are lost: the cost is a whole
-source missing, not a slower review. Consultants run in parallel, so a
-high ceiling costs nothing until one hangs. A codex review of a small
-repository has been measured still working at 600 seconds.
+**Do not set `timeout` low to save time.** A consultant that times out
+or fails transiently is retried once; if the retry fails too, it is
+reported `degraded` and its findings are lost: the cost is a whole
+source missing, not a slower review. A config error (bad auth, a
+rejected schema, an unknown model) is not retried. Each phase is
+bounded by 2×T: the review, and in `strict` mode the refuter re-runs
+separately, so a strict review can take up to about 4×T. Consultants
+run in parallel, so a high ceiling costs nothing until one hangs. A
+codex review of a small repository has been measured still working at
+600 seconds.
 
 ## How a review runs
 
@@ -60,7 +65,8 @@ repository has been measured still working at 600 seconds.
    with `extra-advisor`) review the same change independently from a
    short brief that does not lead them. The agents and codex may use a
    code graph; pi runs with a read-only toolset and no shell
-   (`read,grep,find,ls`), so it navigates by reading and grepping.
+   (`read,grep,find,ls`, with `--no-mcp` so no MCP server tools are
+   loaded), so it navigates by reading and grepping.
 4. **Merge.** The arbiter deduplicates, tags each finding with its
    dimension and who found it (`[claude|codex|pi]`), and sets the final
    severity.
@@ -137,8 +143,17 @@ is logged.
 ## The report
 
 - a header with the tier, flags, sources and their status
-  (`codex=ok|timeout|failed: <reason>|unavailable`), and any ignored
-  flags;
+  and any ignored flags. Each consultant, refuters included, shows one
+  status:
+  - `ok`: it answered first time;
+  - `ok (retried: <why>)`: the first attempt failed, the retry answered;
+  - `degraded (<why>; <why>)`: both attempts failed, or
+    `degraded (<why>; no time left)` when the 2×T budget left no room
+    for a retry. Its findings are lost;
+  - `failed: <reason>`: a config error, not retried;
+  - `failed: helper error (<reason>)`: the lane helper itself died or
+    left no status. Treated as a failure, never as zero findings;
+  - `unavailable` or `skipped (<why>)`;
 - findings by severity, each with location, failure scenario, agreement
   badge and confidence;
 - a summary per dimension;
@@ -148,7 +163,10 @@ is logged.
 
 **Read the Sources line.** A consultant that is missing or fails does not
 stop the review; the review carries on with fewer sources. The report
-says so in that line and nowhere louder. `/consensus-review:doctor`
+says so in that line, in *Source availability* (every attempt and its
+reason, the vote mode and how many voters each finding had), and, when
+no consultant produced a usable review, in a *Single-source review*
+warning under the title. `/consensus-review:doctor`
 finds these problems before you rely on a review.
 
 ## The single-dimension commands

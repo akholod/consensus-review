@@ -2,6 +2,18 @@
 
 Full notes for each release: [GitHub releases](https://github.com/akholod/consensus-review/releases).
 
+## Unreleased
+
+- **A failed consultant is retried once, then reported `degraded`**
+  ([#6](https://github.com/akholod/consensus-review/issues/6)). codex
+  and pi, and their refuter re-runs, now go through a small Node helper
+  that retries a timeout or transient failure once, never retries a
+  config error, and kills the whole process group on timeout. Each
+  phase is bounded by 2×T (`strict` up to about 4×T). The report shows
+  every attempt, `ok (retried: …)` / `degraded (…)` / `failed: …`, the
+  vote mode and voters per finding, and a *Single-source review* warning
+  when no consultant answered. A refuter that fails casts no vote.
+
 ## 0.12.0
 
 Ready for Anthropic's plugin directory, and reports in any language.
