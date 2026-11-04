@@ -1,6 +1,6 @@
 ---
 description: Sequential, coverage-directed cyclic review of a PR or uncommitted changes — one immutable diff, differentiated discovery passes, per-cell evidence, adversarial verification, and a CLEAN verdict that cannot be produced by a failed run
-argument-hint: "[pr=<n|url>] [range=<base..head>] [model=<m>] [timeout=<sec>] [out=<path>] [no-file] [json]"
+argument-hint: "[pr=<n|url>] [range=<base..head>] [model=<m>] [timeout=<sec>] [out=<path>] [no-file] [no-archive] [json]"
 ---
 
 Run the loop-review runtime and present its report.
@@ -19,7 +19,8 @@ or comment on a pull request — and that is enforced, not merely intended:
   no tool capable of changing anything;
 - the runtime contains no mutating `git` or `gh` command. `gh pr diff` is the only forge call, and
   it reads;
-- its single write is the report file. Working files live in a temp directory outside the repo.
+- it writes only the report and its private run archive in the ignored `.reviews/` (`--no-archive`
+  drops the archive; `--no-file` writes nothing at all). Working files live in a temp directory outside the repo.
 
 Applying fixes is a separate, human-initiated step. The intended cycle is: review → a human or a
 separate agent applies changes → review again on the new diff. The runtime recomputes the diff
@@ -40,7 +41,8 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/loop-review.mjs" [flags]
 | `--timeout=<sec>` | Per-pass wall clock (default 240) |
 | `--max-tokens=`, `--max-calls=`, `--max-ms=` | Hard budgets; exhausting one blocks `CLEAN` |
 | `--out=<path>` | Report destination (default `.reviews/loop-review-<hash>.md`) |
-| `--no-file` | Terminal only, no report written |
+| `--no-file` | Terminal only, no report written (no archive either) |
+| `--no-archive` | Do not write the run archive |
 | `--json` | Emit the whole run state as JSON on stdout instead of the report |
 
 ## Write surface
@@ -48,8 +50,9 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/loop-review.mjs" [flags]
 | Path | When |
 |---|---|
 | `.reviews/loop-review-<hash>.md` | default report destination |
+| `.reviews/<run-id>/` | private run archive (diff, prompts, raw output, findings, events); only when git ignores `.reviews/`; never written next to `--out`; off with `--no-archive` |
 | `--out=<path>` | report written there instead |
-| `--no-file` | nothing written at all; report goes to the terminal only |
+| `--no-file` | nothing written at all, archive included; report goes to the terminal only |
 | a temp directory | working files, outside the repository, for the duration of the run |
 
 Nothing else is written. Reviewed source, git state and the pull request are never touched. The

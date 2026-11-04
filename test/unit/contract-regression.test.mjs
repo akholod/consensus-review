@@ -73,3 +73,52 @@ test("§5 runs the consultants only through the lane helper, in one backgrounded
   assert.match(s5, /scripts\/run-lane\.mjs/)
   assert.match(s5, /decide --wd "\$WD" --phase review/)
 })
+
+const command = () => readFileSync(new URL("../../commands/consensus-review.md", import.meta.url), "utf8")
+const section = (md, n) => md.split(`\n## ${n}. `)[1]?.split("\n## ")[0]
+
+test("§9 calls archive-run.mjs finish only on the file branch, before the report, from INVOKE", () => {
+  // no-file promises zero writes; an archive call outside the file branch would break that promise.
+  const md = command()
+  const calls = md.split("\n").filter((l) => /archive-run\.mjs"? finish/.test(l) && !/salvage/.test(l))
+  const s1 = section(md, 1)
+  const s9 = section(md, 9)
+  assert.ok(s1 && s9, "commands/consensus-review.md must keep sections 1 and 9")
+  // the only invocation outside §9 is the salvage hint printed with the work dir in §1
+  assert.equal(md.split("archive-run.mjs").length - 1, 2, "archive-run.mjs: one salvage hint in §1, one call in §9")
+  assert.match(s1, /archive-run\.mjs finish --wd <WD>/)
+  assert.equal(calls.length, 1)
+  assert.ok(s9.includes(calls[0]), "the finish call lives in §9")
+  assert.match(calls[0], /^cd <literal INVOKE> && node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/archive-run\.mjs" finish --wd <literal WD> --report /)
+  assert.match(calls[0], /--args-json '/)
+  assert.match(s9, /on the file branch only, never with `no-file`/)
+  assert.match(s9, /Before writing the report/)
+  assert.match(s9, /--off with archive=off/)
+  assert.match(s9, /\nArchive: </, "the header block carries the Archive line")
+  assert.match(s9, /last terminal line/)
+})
+
+test("the arbiter writes the files the archive expects, with one id space", () => {
+  const md = command()
+  assert.match(section(md, 0), /`archive=off`/)
+  assert.match(section(md, 0), /no run archive either/)
+  assert.match(section(md, 1), /print `work dir: <WD>`/)
+  assert.match(section(md, 1), /INVOKE=/)
+  assert.match(section(md, 3), /\$WD\/triage\.json/)
+  assert.match(section(md, 6), /\$WD\/claude-findings\.json/)
+  assert.match(section(md, 7), /\$WD\/synthesis\.json/)
+  const s8 = section(md, 8)
+  const strict = s8.indexOf("**Strict — the default.**")
+  assert.ok(strict > 0)
+  // ids and the verifier file belong to both modes, so both must come before the strict branch
+  assert.ok(s8.indexOf("synthesis.json") < strict, "§8 reuses synthesis ids before the strict/basic split")
+  assert.ok(s8.indexOf("$WD/verifier.verdicts.json") < strict, "verifier.verdicts.json is written in basic mode too")
+  assert.doesNotMatch(s8, /Give every P0\/P1 a string id/, "§8 must not renumber")
+})
+
+test("no-file still means zero writes", () => {
+  const md = command()
+  assert.match(md, /none at all with `no-file`/)
+  assert.match(section(md, 0), /performs \*\*zero\*\* writes anywhere on disk/)
+  assert.match(md.split("## Hard rules")[1], /with `no-file` there is no write at all/)
+})

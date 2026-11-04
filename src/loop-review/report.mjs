@@ -16,7 +16,7 @@ const CATEGORY = (f) => text(f.category ?? "uncategorised", 40)
 const bySeverity = (findings, severity) =>
   findings.filter((f) => f.severity === severity && isReportable(f))
 
-export function renderReport(run, { target, generatedAt = "" } = {}) {
+export function renderReport(run, { target, generatedAt = "", archive } = {}) {
   const out = []
   const confirmed = run.findings.filter(isReportable)
   const unconfirmed = run.findings.filter((f) => !isReportable(f) && f.verdict !== "refuted")
@@ -35,6 +35,7 @@ export function renderReport(run, { target, generatedAt = "" } = {}) {
     (run.spent.cost_usd ? ` | cost: $${run.spent.cost_usd.toFixed(4)}` : "") +
     (generatedAt ? ` | ${generatedAt}` : "")
   )
+  if (archive) out.push("", archive.dir ? `Archive: ${archive.dir}` : `Archive: not written (${archive.skipped})`)
   out.push("")
   out.push(`Totals: P0=${bySeverity(run.findings, "P0").length} P1=${bySeverity(run.findings, "P1").length} P2=${bySeverity(run.findings, "P2").length}`)
   out.push("")

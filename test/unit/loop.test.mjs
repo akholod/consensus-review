@@ -766,3 +766,24 @@ test("a diff whose sections could not be resolved never reports CLEAN", async ()
   assert.notEqual(run.terminal, TERMINAL.CLEAN)
   assert.match(run.terminalReasons.join(" "), /could not be resolved/)
 })
+
+test("onStage sees a copy of the findings after each pass and after its verdicts", async () => {
+  const stages = []
+  let calls = 0
+  await runLoop({
+    ctx: ctxFor(),
+    runner: async () => {
+      calls++
+      return okPass(calls === 1
+        ? { findings: [goodFinding], cells: [{ ...evidence("source:correctness"), disposition: "reported" }] }
+        : cleanPayload(["source:correctness"]))
+    },
+    verifier: honestVerifier,
+    currentDiffHash: "h",
+    onStage: (s) => stages.push(s),
+  })
+  assert.deepEqual(stages.slice(0, 3).map((s) => `${s.stage}-${s.index}`), ["pass-1", "verify-1", "pass-2"])
+  // the verdict applied after pass 1 must not reach back into the pass-1 snapshot
+  assert.equal(stages[0].findings[0].verdict, null)
+  assert.equal(stages[1].findings[0].verdict, "confirmed")
+})

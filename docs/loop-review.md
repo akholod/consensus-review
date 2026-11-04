@@ -34,6 +34,7 @@ not an omission.
 | `--max-tokens`, `--max-calls`, `--max-ms`  | hard budgets, unlimited by default (`0`); running out of one rules out `CLEAN` |
 | `--out=<path>`                             | report destination, default `.reviews/loop-review-<hash>.md`     |
 | `--no-file`                                | terminal only, nothing written                                   |
+| `--no-archive`                             | do not write the run archive                                     |
 | `--json`                                   | print the whole run state as JSON instead of the report          |
 
 ## Results
@@ -93,8 +94,9 @@ pull request. This is enforced, not requested:
 - the runtime runs no `git` or `gh` command that writes; `gh pr diff` is
   its only call to the forge (when `gh` fails on a PR URL, it fetches
   `<url>.diff` with `curl` into the temp directory instead);
-- its only write is the report. Working files stay in a temp directory
-  outside the repository.
+- it writes only the report and its private run archive in the ignored
+  `.reviews/` (`--no-archive` drops the archive; `--no-file` writes nothing). Working files
+  stay in a temp directory outside the repository.
 
 The intended cycle: review, then a person or another agent applies the
 fixes, then review the new diff. Each run hashes the diff, so a review of
@@ -123,9 +125,35 @@ cached across passes, but most of each call is Claude Code's own
 preamble (its system prompt and tool schemas), which is paid again on
 every pass. Details: [design/loop-review-measurements.md](design/loop-review-measurements.md).
 
+## The run archive
+
+Unless `--no-file` or `--no-archive` is given, the run writes a private
+copy of what it saw to `.reviews/<run-id>/`, so a false `CLEAN` or a
+failed pass can be traced. The run-id is the report's name plus a UTC
+timestamp. It holds:
+
+- `diff.patch`, the diff reviewed, never truncated;
+- `sources/context/system-prefix.md`, the shared system prefix;
+- for each pass and verification, the prompt, stdout, stderr and
+  `process.json` (status, signal, error, time), which are the raw
+  `claude -p` result and can include any repo file the model read;
+- findings after each stage (`findings/`);
+- `events.jsonl`, the run's events in time order;
+- `meta.json`: `schema`, `runId`, `createdAt`, `command`, `target`,
+  `mode`, `diffHash`, `flags` (the argv), `report`, `terminal` (the
+  verdict state) and `truncated` (files cut or dropped by the caps).
+
+It is written to the invoking repository's `.reviews/` only when git
+ignores that path, never next to an external `--out`. Directories are
+`0700` and files `0600`. A file over 2 MiB keeps its head and tail (a
+truncated `.json` is no longer valid JSON), and an archive stops at
+20 MiB. If it cannot be written, the report says
+`Archive: not written (<reason>)` and the verdict is unchanged. There is
+no retention: remove old runs with `rm -rf .reviews/<run-id>`.
+
 ## Output for scripts
 
 `--json` prints the terminal state and its reasons, every finding with
 its verdict, every cell with its evidence and verification, each pass
-with its state, model and token usage, and the totals. Nothing is logged
-to a file; redirect stdout if you want to keep it.
+with its state, model and token usage, and the totals. It also has an `archive` field, `{dir}` or `{skipped}`. Redirect stdout
+if you want to keep the rest.
