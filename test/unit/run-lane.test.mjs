@@ -1,10 +1,10 @@
-// Process tests for scripts/run-lane.mjs: the real helper against fake `codex`/`pi` binaries on
+// Process tests for scripts/run-lane.mjs: the real helper against fake `codex`/`pi`/`claude` binaries on
 // PATH (test/fixtures/fake-lane.mjs). T=1 throughout; the time bounds come from the plan's
 // arithmetic table plus a generous margin for process start-up.
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -15,13 +15,13 @@ const HELPER = join(ROOT, "scripts/run-lane.mjs")
 const FAKE = join(ROOT, "test/fixtures/fake-lane.mjs")
 const CRASH = join(ROOT, "test/fixtures/crash-run-lane.mjs")
 
-function workspace() {
+function workspace(bins = ["codex", "pi", "claude"]) {
   const dir = mkdtempSync(join(tmpdir(), "run-lane-"))
   const bin = join(dir, "bin")
   const repo = join(dir, "repo")
   mkdirSync(bin)
   mkdirSync(repo)
-  for (const name of ["codex", "pi"]) {
+  for (const name of bins) {
     writeFileSync(join(bin, name), `#!/bin/sh\nexec "${process.execPath}" "${FAKE}" ${name} "$@"\n`)
     chmodSync(join(bin, name), 0o755)
   }
@@ -31,11 +31,11 @@ function workspace() {
 }
 
 /** Launch the helper (or `script`), resolving { code, seconds, proc } once it exits. */
-function launch(ws, argv, { script = HELPER, fake = "ok", onStart } = {}) {
+function launch(ws, argv, { script = HELPER, fake = "ok", onStart, env = {} } = {}) {
   const started = performance.now()
   const proc = spawn(process.execPath, [script, ...argv], {
     stdio: "ignore",
-    env: { ...process.env, PATH: `${ws.bin}:${process.env.PATH}`, FAKE_DIR: ws.dir, FAKE_SCRIPT: fake },
+    env: { ...process.env, PATH: `${ws.bin}:${process.env.PATH}`, FAKE_DIR: ws.dir, FAKE_SCRIPT: fake, ...env },
   })
   onStart?.(proc)
   return new Promise((resolve) => proc.on("exit", (code) => resolve({ code, seconds: (performance.now() - started) / 1000 })))
@@ -92,8 +92,8 @@ test("1b: pi runs in the repo cwd and reports its model", async () => {
     await launch(ws, runArgs(ws, "pi"))
     const s = status(ws, "pi")
     assert.equal(s.display, "ok")
-    assert.equal(s.model, "m1")
-    assert.equal(s.provider, "fake")
+    assert.equal(s.model, "gemini-test")
+    assert.equal(s.provider, "google")
     assert.equal(readFileSync(join(ws.dir, "pi.1.cwd"), "utf8"), ws.repo)
     assert.deepEqual(JSON.parse(readFileSync(join(ws.dir, "pi.json"), "utf8")), { findings: [] })
   } finally {
@@ -223,7 +223,9 @@ test("4: SIGTERM to the helper → exit 143, group dead, no status; decide → h
     await assertDead(pid(ws, "codex.1.pid"), pid(ws, "codex.1.gc"))
     assert.equal(existsSync(join(ws.dir, "codex.status.json")), false)
     await decide(ws, "review", "codex")
-    assert.equal(decision(ws, "review").lanes.codex.display, "failed: helper error (no status written)")
+    const { display, kind, brief, requestedModel } = decision(ws, "review").lanes.codex
+    assert.deepEqual({ display, kind, brief, requestedModel },
+      { display: "failed: helper error (no status written)", kind: "codex", brief: null, requestedModel: null })
   } finally {
     ws.cleanup()
   }
@@ -260,7 +262,10 @@ test("4d: --from-decision missing, invalid or without an entry → helper error,
     for (const content of [null, "{broken", '{"refuters":{}}']) {
       if (content !== null) writeFileSync(path, content)
       await launch(ws, args)
-      assert.equal(status(ws, "codex-refuter").display, "failed: helper error (no review decision)")
+      const { display, kind, brief, requestedModel } = status(ws, "codex-refuter")
+      // The helper error keeps the run's own facts: a known brief is not overwritten with null.
+      assert.deepEqual({ display, kind, brief, requestedModel },
+        { display: "failed: helper error (no review decision)", kind: "codex", brief: "brief.txt", requestedModel: null })
     }
     assert.equal(launches(ws), 0)
   } finally {
@@ -453,5 +458,176 @@ test("a decision entry or status that breaks the contract is a helper error", as
     }
   } finally {
     ws.cleanup()
+  }
+})
+
+const argv = (ws, name, n) => JSON.parse(readFileSync(join(ws.dir, `${name}.${n}.argv`), "utf8"))
+const flag = (args, f) => args[args.indexOf(f) + 1]
+
+test("claude-cli ok: repo cwd, --add-dir <wd>, effective model and the status facts", async () => {
+  const ws = workspace()
+  try {
+    await launch(ws, runArgs(ws, "claude-cli"), { env: { CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: "s1" } })
+    const s = status(ws, "claude-cli")
+    assert.equal(s.display, "ok")
+    assert.deepEqual([s.kind, s.brief, s.requestedModel, s.model], ["claude-cli", "brief.txt", null, "claude-sonnet-5-5"])
+    assert.equal(s.schema, join(ROOT, "contracts/finding.schema.json"))
+    assert.deepEqual(JSON.parse(readFileSync(join(ws.dir, "claude-cli.json"), "utf8")), { findings: [] })
+    assert.equal(readFileSync(join(ws.dir, "claude.1.cwd"), "utf8"), ws.repo)
+    const args = argv(ws, "claude", 1)
+    assert.equal(flag(args, "--add-dir"), ws.dir)
+    assert.equal(flag(args, "--model"), "sonnet")
+    // the nested claude must not join the calling Claude Code session
+    assert.deepEqual(JSON.parse(readFileSync(join(ws.dir, "claude.1.env"), "utf8")), { CLAUDECODE: null, CLAUDE_CODE_SESSION_ID: null })
+  } finally {
+    ws.cleanup()
+  }
+})
+
+test("claude-cli: prose then ok → ok (retried: unparseable); config → one launch; timeout retried", async () => {
+  for (const [fake, display, count] of [
+    ["prose,ok", "ok (retried: unparseable)", 2],
+    ["config,ok", /^failed: There's an issue with the selected model/, 1],
+    ["sleep,ok", "ok (retried: timeout)", 2],
+  ]) {
+    const ws = workspace()
+    try {
+      await launch(ws, runArgs(ws, "claude-cli"), { fake })
+      const s = status(ws, "claude-cli")
+      if (typeof display === "string") assert.equal(s.display, display, fake)
+      else assert.match(s.display, display, fake)
+      assert.equal(launches(ws, "claude"), count, fake)
+    } finally {
+      ws.cleanup()
+    }
+  }
+})
+
+test("claude-cli refuter: verdict schema by default, votes counted", async () => {
+  const ws = workspace()
+  try {
+    await launch(ws, runArgs(ws, "claude-cli", ["--name", "claude-cli-refuter", "--require-key", "verdicts",
+      "--ids-file", join(ws.dir, "ids.json"), "--model", "opus"]), { fake: "votes" })
+    const s = status(ws, "claude-cli-refuter")
+    assert.equal(s.display, "ok")
+    assert.equal(s.schema, join(ROOT, "contracts/verdict.schema.json"))
+    assert.equal(s.requestedModel, "opus")
+    assert.equal(flag(argv(ws, "claude", 1), "--model"), "opus")
+  } finally {
+    ws.cleanup()
+  }
+})
+
+test("--skip unavailable --skip-reason r → unavailable (r), facts recorded", async () => {
+  const ws = workspace()
+  try {
+    await launch(ws, runArgs(ws, "pi", ["--skip", "unavailable", "--skip-reason", "forced, not installed"]))
+    const s = status(ws, "pi")
+    assert.deepEqual([s.status, s.display, s.kind, s.brief], ["unavailable", "unavailable (forced, not installed)", "pi", "brief.txt"])
+    assert.equal(launches(ws, "pi"), 0)
+  } finally {
+    ws.cleanup()
+  }
+})
+
+/** `run-lane select` with only `bins` on PATH; returns { code, out, stderr }. */
+function select(ws, args = [], env = {}) {
+  const r = spawnSync(process.execPath, [HELPER, "select", ...args], {
+    encoding: "utf8", env: { ...process.env, PATH: ws.bin, FAKE_DIR: ws.dir, ...env },
+  })
+  return { code: r.status, out: r.stdout ? JSON.parse(r.stdout) : null, stderr: r.stderr }
+}
+const lanesOf = (out) => out.lanes.map((l) => [l.name, l.model, l.skip, l.skipReason])
+
+test("select: the cascade over installed subsets, a forced consultant, extra and a listing failure", () => {
+  for (const [bins, args, env, lanes, listed] of [
+    [[], [], {}, [["codex", null, "unavailable", null]], false],
+    [["codex", "pi", "claude"], [], {}, [["codex", null, null, null]], false],
+    [["pi", "claude"], [], {}, [["pi", "openai-codex/gpt-6.1-terra", null, null]], true],
+    [["claude"], [], {}, [["claude-cli", "sonnet", null, null]], false],
+    [["pi", "claude"], [], { FAKE_PI_LIST: "fail" }, [["claude-cli", "sonnet", null, null]], true],
+    [["codex", "claude"], ["--consultant", "pi"], {}, [["pi", null, "unavailable", "forced, not installed"]], false],
+    [["codex", "pi"], ["--consultant", "claude"], {}, [["claude-cli", null, "unavailable", "forced, not installed"]], false],
+    [["codex", "pi"], ["--extra"], {}, [["codex", null, null, null], ["pi", "opencode-go/glm-5.3", null, null]], true],
+    [["codex", "pi"], ["--extra", "--extra-model", "x/y"], {}, [["codex", null, null, null], ["pi", "x/y", null, null]], false],
+    [["pi"], ["--consultant", "pi"], { FAKE_PI_LIST: "fail" }, [["pi", null, "unavailable", "pi --list-models failed"]], true],
+  ]) {
+    const ws = workspace(bins)
+    try {
+      const r = select(ws, args, env)
+      const label = JSON.stringify([bins, args, env])
+      assert.equal(r.code, 0, `${label}: ${r.stderr}`)
+      assert.deepEqual(lanesOf(r.out), lanes, label)
+      assert.equal(typeof r.out.reason, "string")
+      assert.equal(existsSync(join(ws.dir, "pi.list")), listed, `${label}: pi --list-models run only when needed`)
+      // The catalog must match what a run can use: a run loads no extensions, so neither does the listing.
+      if (listed) assert.deepEqual(JSON.parse(readFileSync(join(ws.dir, "pi.list"), "utf8")), ["--no-extensions", "--list-models"], label)
+      assert.equal(existsSync(join(ws.dir, "consultants.json")), false, "without --wd nothing is written")
+    } finally {
+      ws.cleanup()
+    }
+  }
+})
+
+test("select --wd writes consultants.json as printed; an unknown consultant is a usage error", () => {
+  const ws = workspace()
+  try {
+    const r = select(ws, ["--wd", ws.dir, "--consultant", "pi", "--extra"])
+    assert.equal(r.code, 0, r.stderr)
+    assert.deepEqual(JSON.parse(readFileSync(join(ws.dir, "consultants.json"), "utf8")), r.out)
+    assert.equal(r.out.extraNote, "skipped (pi is the consultant)")
+    const bad = select(ws, ["--consultant", "opencode"])
+    assert.equal(bad.code, 2)
+    assert.equal(bad.out, null)
+    assert.match(bad.stderr, /unknown consultant "opencode"/)
+  } finally {
+    ws.cleanup()
+  }
+})
+
+/** Runs every lane of consultants.json as §5 does, then decides the review. */
+async function runSelected(ws, fake) {
+  const { lanes } = JSON.parse(readFileSync(join(ws.dir, "consultants.json"), "utf8"))
+  for (const l of lanes) {
+    const extra = ["--brief-file", join(ws.dir, "brief.txt"), ...(l.model ? ["--model", l.model] : []),
+      ...(l.skip ? ["--skip", l.skip, "--skip-reason", l.skipReason ?? ""] : [])]
+    await launch(ws, runArgs(ws, l.name, extra), { fake })
+  }
+  await decide(ws, "review", lanes.map((l) => l.name).join(","))
+  return lanes
+}
+
+test("primary pi plus extra: one pi lane through run and decide, its status kept", async () => {
+  const ws = workspace(["pi", "claude"])
+  try {
+    assert.equal(select(ws, ["--wd", ws.dir, "--extra"]).code, 0)
+    const lanes = await runSelected(ws)
+    assert.deepEqual(lanes.map((l) => l.name), ["pi"])
+    assert.equal(launches(ws, "pi"), 1)
+    const d = decision(ws, "review")
+    assert.deepEqual(Object.keys(d.lanes), ["pi"])
+    assert.deepEqual(Object.keys(d.refuters), ["pi-refuter"])
+    const s = status(ws, "pi")
+    assert.deepEqual([s.display, s.requestedModel, s.provider, s.model], ["ok", "openai-codex/gpt-6.1-terra", "google", "gemini-test"])
+  } finally {
+    ws.cleanup()
+  }
+})
+
+test("--model handoff: select → run pi → run pi --name pi-refuter, the selected model both times", async () => {
+  for (const [args, model] of [[[], "openai-codex/gpt-6.1-terra"], [["--extra-model", "opencode-go/qwen3.8-max"], "opencode-go/qwen3.8-max"]]) {
+    const ws = workspace(["pi"])
+    try {
+      assert.equal(select(ws, ["--wd", ws.dir, "--consultant", "pi", ...args]).code, 0)
+      const [lane] = await runSelected(ws, "ok,votes")
+      assert.equal(lane.model, model)
+      await launch(ws, runArgs(ws, "pi", ["--name", "pi-refuter", "--model", lane.model, "--require-key", "verdicts",
+        "--ids-file", join(ws.dir, "ids.json"), "--from-decision", join(ws.dir, "review.decision.json")]), { fake: "ok,votes" })
+      assert.equal(status(ws, "pi-refuter").display, "ok")
+      assert.equal(status(ws, "pi-refuter").requestedModel, model)
+      assert.deepEqual([1, 2].map((n) => flag(argv(ws, "pi", n), "--model")), [model, model])
+    } finally {
+      ws.cleanup()
+    }
   }
 })

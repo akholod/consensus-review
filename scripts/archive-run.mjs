@@ -14,12 +14,12 @@ import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import { canArchive, deriveEvents, runId, writeArchive } from "./lib/archive.mjs"
+import { BRIEFS } from "./lib/lanes.mjs"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const OPTIONS = { wd: { type: "string" }, report: { type: "string" }, "args-json": { type: "string" }, off: { type: "boolean" } }
 const USAGE = "usage: archive-run.mjs finish --wd <dir> [--report <path>] [--args-json '<json>'] [--off]"
-const LANES = ["codex", "pi", "codex-refuter", "pi-refuter"]
-const BRIEFS = { codex: "brief.md", pi: "brief-pi.md", "codex-refuter": "refuter-brief.md", "pi-refuter": "refuter-brief-pi.md" }
+const REFUTER = /-refuter$/
 const AGENTS = { architecture: "arch-reviewer", arch: "arch-reviewer", quality: "quality-reviewer", impact: "impact-reviewer", tests: "test-reviewer" }
 const UNAVAILABLE = "host does not expose the Task prompt/transcript"
 
@@ -86,10 +86,13 @@ function finish(v) {
   const files = readdirSync(wd)
 
   const statuses = {}
-  for (const name of LANES) {
+  for (const name of files.filter((f) => f.endsWith(".status.json")).map((f) => f.slice(0, -".status.json".length)).sort()) {
     const s = readJson(at(`${name}.status.json`))
     if (s && typeof s === "object") statuses[name] = s
   }
+  const names = Object.keys(statuses)
+  const prompt = (name) => (statuses[name].brief && basename(String(statuses[name].brief))) ??
+    BRIEFS[statuses[name].kind ?? name.replace(REFUTER, "")]?.[REFUTER.test(name) ? 1 : 0]
   const decisions = {}
   for (const phase of ["review", "sceptic"]) {
     const d = readJson(at(`${phase}.decision.json`))
@@ -103,7 +106,8 @@ function finish(v) {
 
   const notWritten = {}
   const panel = []
-  for (const [source, file] of [["codex", "codex.json"], ["pi", "pi.json"], ["claude", "claude-findings.json"]]) {
+  const sources = [...names.filter((name) => !REFUTER.test(name)).map((name) => [name, `${name}.json`]), ["claude", "claude-findings.json"]]
+  for (const [source, file] of sources) {
     const findings = readJson(at(file))?.findings
     if (Array.isArray(findings)) panel.push(...findings.map((f) => ({ ...f, source })))
   }
@@ -115,21 +119,21 @@ function finish(v) {
   // Order is the cap priority: events, statuses/decisions, findings, prompts, the command, outputs, logs.
   const entries = [{ to: "events.jsonl", content: events.map((e) => JSON.stringify(e)).join("\n") + (events.length ? "\n" : "") }]
   const copy = (from, to) => has(from) && entries.push({ to, from: at(from) })
-  for (const name of LANES) copy(`${name}.status.json`, `sources/${name}/status.json`)
-  for (const name of ["ids.json", "review.decision.json", "sceptic.decision.json"]) copy(name, `decisions/${name}`)
+  for (const name of names) copy(`${name}.status.json`, `sources/${name}/status.json`)
+  for (const name of ["consultants.json", "ids.json", "review.decision.json", "sceptic.decision.json"]) copy(name, `decisions/${name}`)
   entries.push({ to: "findings/panel.json", content: json({ findings: panel }) })
   if (joined.value) entries.push({ to: "findings/verification.json", content: json(joined.value) })
   copy("synthesis.json", "findings/synthesis.json")
   copy("claude-findings.json", "findings/claude.json")
   copy("verifier.verdicts.json", "sources/finding-verifier/output.json")
-  for (const name of LANES) copy(BRIEFS[name], `sources/${name}/prompt.md`)
+  for (const name of names) if (prompt(name)) copy(prompt(name), `sources/${name}/prompt.md`)
   entries.push({ to: "sources/arbiter/command.md", from: join(ROOT, "commands/consensus-review.md") })
   const attempts = (name, ext) => files
     .map((f) => f.match(new RegExp(`^${name}\\.a(\\d+)\\.${ext}$`)))
     .filter(Boolean)
     .sort((a, b) => Number(a[1]) - Number(b[1]))
-  for (const name of LANES) for (const m of attempts(name, "json")) copy(m[0], `sources/${name}/output-a${m[1]}.json`)
-  for (const name of LANES) for (const m of attempts(name, "log")) copy(m[0], `sources/${name}/attempt-${m[1]}.log`)
+  for (const name of names) for (const m of attempts(name, "json")) copy(m[0], `sources/${name}/output-a${m[1]}.json`)
+  for (const name of names) for (const m of attempts(name, "log")) copy(m[0], `sources/${name}/attempt-${m[1]}.log`)
 
   const transcribed = [
     ["synthesis.json", "findings/synthesis.json"], ["claude-findings.json", "findings/claude.json"],
@@ -143,7 +147,9 @@ function finish(v) {
 
   const sceptic = String(flags.sceptic ?? (flags["no-sceptic"] ? "off" : "strict")).toLowerCase()
   const p0p1 = (synthesis?.findings ?? []).some((f) => f?.severity === "P0" || f?.severity === "P1")
-  const expected = [...(statuses.codex ? ["brief.md"] : []), "diff.patch", "triage.json", "claude-findings.json", "synthesis.json"]
+  // Every lane's prompt, deduplicated; a refuter's brief is written only for a refuter marked `run`.
+  const briefed = names.filter((name) => !(REFUTER.test(name) && ["skipped", "unavailable"].includes(statuses[name].status)))
+  const expected = [...new Set(briefed.map(prompt).filter(Boolean)), "diff.patch", "triage.json", "claude-findings.json", "synthesis.json"]
   if (sceptic !== "off" && p0p1) expected.push(...(sceptic === "strict" ? ["ids.json"] : []), "verifier.verdicts.json")
 
   const diff = has("diff.patch") ? readFileSync(at("diff.patch")) : null

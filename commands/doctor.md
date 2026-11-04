@@ -1,15 +1,15 @@
 ---
 description: Diagnose the consensus-review setup — consultants, code graph, contracts and live probes — and say what a broken piece would silently do to a review
-argument-hint: "[offline] [repo=<path>] [json]"
+argument-hint: "[offline] [repo=<path>] [consultant=<codex|pi|claude-cli>] [json]"
 ---
 
 Run the diagnostic and present its output.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/doctor.mjs" [--offline] [--repo <path>] [--json]
+node "${CLAUDE_PLUGIN_ROOT}/scripts/doctor.mjs" [--offline] [--repo <path>] [--consultant <x>] [--json]
 ```
 
-Flags map straight through: `offline` → `--offline`, `repo=<path>` → `--repo <path>`, `json` → `--json`. As everywhere in this plugin, a leading `--` is also accepted.
+Flags map straight through: `offline` → `--offline`, `repo=<path>` → `--repo <path>`, `consultant=<x>` → `--consultant <x>` (checks the consultant a review forced with `consultant=`), `json` → `--json`. As everywhere in this plugin, a leading `--` is also accepted.
 
 ## What it is for
 
@@ -39,10 +39,10 @@ them, and the summary says so.
 | Section | Catches |
 |---|---|
 | plugin | version skew against the latest release; Node below the required 20 |
-| consultants | `codex` missing (every review becomes single-source), `pi`, `gh` present **and authenticated** |
+| consultants | which consultant a review would pick (`codex → pi → claude-cli`) and why; `codex`, `pi`, `gh` present **and authenticated** |
 | code graph | `codegraph` CLI, a graph in the repo, and whether that graph is **older than the last commit** — agents are told "absent/stale → grep" but cannot detect staleness from inside a review |
 | contracts | the five agents resolve and keep their read-only guarantee; generated prompt blocks match the canonical schema; which model each dimension runs on |
 | workspace | a git work tree with commits; `.reviews/` writable and ignored — an unignored report becomes an untracked change the *next* review picks up |
-| live | the `claude -p` envelope, and codex accepting our schema |
+| live | the `claude -p` envelope, codex accepting our schema, and — when `claude-cli` is the consultant — its read-only probe (tools, MCP, repo hook, unchanged repo) |
 
 Exit code is `1` when anything is `FAIL`, `0` otherwise; `WARN` never fails the command.

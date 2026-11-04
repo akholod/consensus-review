@@ -17,12 +17,14 @@
 //   node scripts/doctor.mjs --offline       skip everything that costs a call
 //   node scripts/doctor.mjs --repo <path>   diagnose another repository
 //   node scripts/doctor.mjs --json          machine-readable
+//   node scripts/doctor.mjs --consultant <x> check the consultant a review forced with consultant=<x>
 import { execFileSync } from "node:child_process"
 import { existsSync, statSync, readFileSync, accessSync, constants } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
 import { lint } from "./lint-prompts.mjs"
-import { probeClaude, probeCodex, toolVersion } from "./lib/probe.mjs"
+import { listPiModels, probeClaude, probeClaudeCli, probeCodex, toolVersion } from "./lib/probe.mjs"
+import { selectConsultants } from "./lib/lanes.mjs"
 
 const SELF = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -38,7 +40,7 @@ const sh = (cmd, args, opts = {}) => {
  * Run every check and return the results. Exported so the tests can drive it in-process against
  * deliberately broken workspaces — the same shape `lint-prompts.mjs` uses.
  */
-export function diagnose({ root = SELF, repo = process.cwd(), offline = false } = {}) {
+export function diagnose({ root = SELF, repo = process.cwd(), offline = false, consultant: forced = null } = {}) {
   const ROOT = root
   const REPO = repo
   const OFFLINE = offline
@@ -86,11 +88,11 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false } 
   {
     const codex = toolVersion("codex")
     add("consultants", "codex", codex ? "ok" : "warn", codex ?? "not installed",
-      codex ? "" : "every review runs single-source; the report says so in its Sources line, but nothing stops it")
+      codex ? "" : "the review falls back to pi or claude-cli (see the consultant line)")
 
     const pi = toolVersion("pi")
     add("consultants", "pi", pi ? "ok" : "skip", pi ?? "not installed",
-      pi ? "" : "only needed for `extra-advisor`; without it that flag has no second advisor")
+      pi ? "" : "the consultant when codex is missing, and the `extra-advisor` lane; without it neither runs pi")
 
     const gh = toolVersion("gh")
     if (!gh) {
@@ -101,6 +103,24 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false } 
       add("consultants", "gh", auth ? "ok" : "warn", auth ? gh : `${gh} — not authenticated`,
         auth ? "" : "PR mode falls back to fetching the .diff by URL")
     }
+  }
+
+  // The same selection the review makes (with `consultant=` mirrored by `--consultant`), so doctor
+  // and review name the same lane. `pi --list-models` is a local catalog, not a paid call, so it runs
+  // under --offline too; it is only listed (~2 s) when the selection can actually land on pi.
+  const wantsPi = forced === "pi" || (!forced && !toolVersion("codex"))
+  const piModels = wantsPi && toolVersion("pi") ? listPiModels() : null
+  const selection = selectConsultants({
+    consultant: forced,
+    installed: { codex: Boolean(toolVersion("codex")), pi: Boolean(toolVersion("pi")), claude: Boolean(toolVersion("claude")) },
+    piModels,
+  })
+  const consultant = selection.lanes[0]
+  {
+    const presence = "selection uses presence only: installed (and, for pi, a listed model) does not mean authenticated, " +
+      "and nothing falls back to the next consultant at run time"
+    add("consultants", `consultant: ${consultant.name}`, consultant.skip ? "warn" : "ok", selection.reason,
+      consultant.skip ? `every review runs single-source; ${presence}` : presence)
   }
 
   // ── Code graph ───────────────────────────────────────────────────────────────────────────────
@@ -187,6 +207,10 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false } 
   if (OFFLINE) {
     add("live", "claude envelope", "skip", "--offline", "stale auth and envelope drift go undetected")
     add("live", "codex schema", "skip", "--offline", "stale auth and schema rejection go undetected")
+    if (consultant.name === "claude-cli" && !consultant.skip) {
+      add("live", "claude-cli read-only", "skip", "--offline",
+        "a claude-cli consultant with a write tool, an MCP server or a live repo hook goes undetected")
+    }
   } else {
     const claudeVersion = toolVersion("claude")
     if (!claudeVersion) {
@@ -207,6 +231,14 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false } 
         probe.ok ? `accepted the findings schema (${probe.findings} finding(s) on the probe diff)` : probe.reason,
         probe.ok ? "" : "the codex lane will be reported `failed` and its findings lost — a config bug, not a clean review")
     }
+
+    // Only for the lane the review would run: one paid call, on the user's own Claude quota.
+    if (consultant.name === "claude-cli" && !consultant.skip) {
+      const probe = probeClaudeCli({ root: ROOT })
+      add("live", "claude-cli read-only", probe.ok ? "ok" : "fail",
+        probe.ok ? `${probe.checks.length}/${probe.checks.length} (one paid call on your Claude quota)` : probe.detail,
+        probe.ok ? "" : "the claude-cli consultant is not provably read-only or not working; do not rely on its lane")
+    }
   }
 
   return results
@@ -225,7 +257,7 @@ const valueOf = (f, d) => {
 const OFFLINE = has("offline") || has("no-live")
 const JSON_OUT = has("json")
 
-const results = diagnose({ root: SELF, repo: valueOf("repo", process.cwd()), offline: OFFLINE })
+const results = diagnose({ root: SELF, repo: valueOf("repo", process.cwd()), offline: OFFLINE, consultant: valueOf("consultant", null) })
 const fails = results.filter((r) => r.status === "fail")
 const warns = results.filter((r) => r.status === "warn")
 

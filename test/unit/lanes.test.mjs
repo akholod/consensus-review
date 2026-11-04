@@ -1,12 +1,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
-  allExternalDown, classifyCodexResult, classifyPiResult, decideRetry, decideReview,
-  decideSceptic, helperError, killGrace, laneCommand, laneStatus, parsePiOutput, parseVerdicts, selectRefuters,
-  tallyVotes, validIds, validRefuterEntry, validStatus,
+  CLAUDE_CLI_MODEL, allExternalDown, classifyClaudeResult, classifyCodexResult, classifyPiResult, decideRetry,
+  decideReview, decideSceptic, family, helperError, killGrace, laneCommand, laneStatus, parsePiModels, parsePiOutput,
+  parseVerdicts, pickPiModel, selectConsultants, selectRefuters, tallyVotes, validIds, validRefuterEntry, validStatus,
 } from "../../scripts/lib/lanes.mjs"
 
 // Every row of the plan's arithmetic table: elapsed is attempt 1 fully settled, incl. TERM→KILL.
@@ -209,7 +209,8 @@ test("laneCommand keeps the read-only flags exactly", () => {
     ["exec", "-s", "read-only", "-C", "/r", "--skip-git-repo-check", "--output-schema", "/s.json", "-o", "/o.json", "B"])
   const pi = laneCommand("pi", { ...opts, model: "x/y" })
   assert.equal(pi.cwd, "/r")
-  assert.deepEqual(pi.args, ["-p", "--mode", "json", "--tools", "read,grep,find,ls", "--no-mcp", "--model", "x/y", "B"])
+  assert.deepEqual(pi.args, ["-p", "--mode", "json", "--tools", "read,grep,find,ls", "--no-mcp", "--no-extensions", "--no-session",
+    "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-approve", "--model", "x/y", "B"])
   assert.throws(() => laneCommand("bash", opts))
 })
 
@@ -327,4 +328,337 @@ test("decideSceptic: every sent id gets a decision, whatever the verifier return
   const noIds = decideSceptic(lanes, null, [], refuter)
   assert.equal(noIds.error, "failed: helper error (no ids)")
   assert.deepEqual(noIds.perFinding, {})
+})
+
+const FIXTURES = new URL("../fixtures/", import.meta.url).pathname
+const fixture = (name) => readFileSync(join(FIXTURES, name), "utf8")
+
+test("family: positive match, first wins (anthropic first), anything else unknown", () => {
+  assert.equal(family("codex"), "openai")
+  assert.equal(family("claude-cli"), "anthropic")
+  const pi = (provider, model) => family("pi", { provider, model })
+  const cases = [
+    ["claude-bridge", "claude-sonnet-5-5", "anthropic"], ["anthropic", "x", "anthropic"],
+    ["google-vertex", "claude-opus-5", "anthropic"], ["amazon-bedrock", "claude-haiku-5-5", "anthropic"],
+    ["openai-codex", "gpt-6.1-terra", "openai"], ["opencode-go", "gpt-6-luna", "openai"],
+    ["openrouter", "google/gemini-3-pro", "google"], ["openrouter", "o3-mini", "openai"],
+    ["opencode-go", "glm-5.3", "zhipu"], ["opencode-go", "kimi-k3.1-pro", "moonshot"],
+    ["opencode-go", "qwen3.8-max", "qwen"], ["opencode-go", "grok-4.7", "xai"],
+    ["opencode-go", "deepseek-v4-pro", "deepseek"], ["acme", "x1", "unknown"], ["opencode-go", "hy3", "unknown"],
+    ["google", "gemini-test", "google"],
+  ]
+  for (const [provider, model, want] of cases) assert.equal(pi(provider, model), want, `${provider} ${model}`)
+  assert.equal(family("pi", { provider: null, model: null }), "unknown")
+  assert.equal(family("pi", undefined), "unknown")
+  assert.equal(family("pi", { provider: "opencode-go", model: null }), "unknown", "opencode-go must not match /codex/")
+  assert.equal(family("opencode"), "unknown")
+})
+
+const CATALOG = parsePiModels(fixture("pi-list-models.txt"))
+
+test("parsePiModels: the captured table, header dropped", () => {
+  assert.equal(CATALOG.length, 52)
+  assert.deepEqual(CATALOG[0], { provider: "claude-bridge", model: "claude-fable-5" })
+  assert.deepEqual(CATALOG.at(-1), { provider: "opencode-go", model: "step-5-preview" })
+  assert.deepEqual(parsePiModels(""), [])
+  assert.deepEqual(parsePiModels("provider  model  context\n"), [])
+})
+
+test("pickPiModel on the captured catalog", () => {
+  const without = (re) => CATALOG.filter((r) => !re.test(r.model))
+  assert.equal(pickPiModel("primary", CATALOG).model, "openai-codex/gpt-6.1-terra")
+  assert.equal(pickPiModel("primary", CATALOG.filter((r) => r.provider !== "openai-codex")).model, "opencode-go/gpt-6-luna")
+  assert.equal(pickPiModel("primary", without(/^gpt/)).model, "opencode-go/glm-5.3")
+  assert.equal(pickPiModel("extra", CATALOG).model, "opencode-go/glm-5.3")
+  assert.equal(pickPiModel("extra", without(/^glm/)).model, "opencode-go/qwen3.8-max")
+  assert.equal(pickPiModel("extra", without(/^(glm|qwen)/)).model, "opencode-go/kimi-k3.1-pro")
+  // never a Claude model, even when it is the only row
+  const claudeOnly = CATALOG.filter((r) => family("pi", r) === "anthropic")
+  assert.deepEqual(pickPiModel("primary", claudeOnly), { none: "no non-Claude pi model" })
+  assert.deepEqual(pickPiModel("extra", claudeOnly), { none: "no independent pi model" })
+  assert.deepEqual(pickPiModel("primary", []), { none: "no non-Claude pi model" })
+  assert.deepEqual(pickPiModel("extra", []), { none: "no independent pi model" })
+  for (const role of ["primary", "extra"]) {
+    for (const rows of [CATALOG, without(/^gpt/), without(/^(gpt|glm)/), without(/^(gpt|glm|qwen)/)]) {
+      const got = pickPiModel(role, rows)
+      if (got.model) assert.doesNotMatch(got.model, /claude/)
+    }
+  }
+})
+
+test("pickPiModel: deterministic newest — numeric order, flash/free/mini dropped, ties by catalog order", () => {
+  const rows = (...pairs) => pairs.map(([provider, model]) => ({ provider, model }))
+  assert.equal(pickPiModel("primary", rows(["openai-codex", "gpt-6.1-sol"], ["openai-codex", "gpt-6.1-terra"])).model, "openai-codex/gpt-6.1-terra")
+  assert.equal(pickPiModel("primary", rows(["openai-codex", "gpt-6.1-terra"], ["openai-codex", "gpt-6.1-sol"])).model, "openai-codex/gpt-6.1-terra")
+  assert.equal(pickPiModel("extra", rows(["opencode-go", "kimi-k3.1-pro"], ["opencode-go", "kimi-k3"])).model, "opencode-go/kimi-k3.1-pro")
+  assert.equal(pickPiModel("extra", rows(["opencode-go", "glm-5.10"], ["opencode-go", "glm-5.9"])).model, "opencode-go/glm-5.10")
+  assert.equal(pickPiModel("extra", rows(["opencode-go", "glm-6-flash"], ["opencode-go", "glm-6-free"], ["x", "glm-5"])).model, "x/glm-5")
+  assert.equal(pickPiModel("primary", rows(["a", "gpt-7-mini"], ["b", "gpt-6"])).model, "b/gpt-6")
+  assert.equal(pickPiModel("primary", rows(["first", "gpt-6-luna"], ["second", "gpt-6-luna"])).model, "first/gpt-6-luna")
+})
+
+const ALL = { codex: true, pi: true, claude: true }
+const names = (sel) => sel.lanes.map((l) => l.name)
+
+test("selectConsultants: the cascade over all 8 installed subsets, no flags", () => {
+  for (let mask = 0; mask < 8; mask++) {
+    const installed = { codex: Boolean(mask & 1), pi: Boolean(mask & 2), claude: Boolean(mask & 4) }
+    const sel = selectConsultants({ installed, piModels: CATALOG })
+    const want = installed.codex ? "codex" : installed.pi ? "pi" : installed.claude ? "claude-cli" : "codex"
+    assert.deepEqual(names(sel), [want], JSON.stringify(installed))
+    assert.equal(sel.lanes[0].skip, mask === 0 ? "unavailable" : null, JSON.stringify(installed))
+    assert.equal(sel.extraNote, null)
+    assert.equal(typeof sel.reason, "string")
+  }
+  const pi = selectConsultants({ installed: { pi: true, claude: true }, piModels: CATALOG }).lanes[0]
+  assert.deepEqual(pi, { name: "pi", brief: "brief-pi.md", refuterBrief: "refuter-brief-pi.md",
+    model: "openai-codex/gpt-6.1-terra", skip: null, skipReason: null })
+  const cli = selectConsultants({ installed: { claude: true } })
+  assert.deepEqual(cli.lanes, [{ name: "claude-cli", brief: "brief.md", refuterBrief: "refuter-brief.md",
+    model: CLAUDE_CLI_MODEL, skip: null, skipReason: null }])
+  assert.equal(CLAUDE_CLI_MODEL, "sonnet")
+  assert.deepEqual(selectConsultants({ installed: {} }).lanes[0],
+    { name: "codex", brief: "brief.md", refuterBrief: "refuter-brief.md", model: null, skip: "unavailable", skipReason: null })
+})
+
+test("selectConsultants: an automatic pi without a usable model gives way to claude-cli", () => {
+  for (const piModels of [null, [], CATALOG.filter((r) => family("pi", r) === "anthropic")]) {
+    const sel = selectConsultants({ installed: { pi: true, claude: true }, piModels })
+    assert.deepEqual(names(sel), ["claude-cli"], JSON.stringify(piModels))
+    assert.match(sel.reason, /pi not usable/)
+  }
+  // nothing to give way to: codex unavailable, as today
+  assert.deepEqual(names(selectConsultants({ installed: { pi: true }, piModels: [] })), ["codex"])
+  // an explicit model pins the automatic pi without the catalog
+  assert.equal(selectConsultants({ installed: { pi: true, claude: true }, piModels: null, extraModel: "x/y" }).lanes[0].model, "x/y")
+})
+
+test("selectConsultants: a forced consultant is never substituted", () => {
+  for (const consultant of ["codex", "pi", "claude-cli", "claude"]) {
+    const want = consultant === "claude" ? "claude-cli" : consultant
+    const here = selectConsultants({ installed: ALL, consultant, piModels: CATALOG }).lanes
+    assert.deepEqual(here.map((l) => [l.name, l.skip]), [[want, null]], consultant)
+    const key = want === "claude-cli" ? "claude" : want
+    const missing = selectConsultants({ installed: { ...ALL, [key]: false }, consultant, piModels: CATALOG })
+    assert.deepEqual(missing.lanes.map((l) => [l.name, l.skip, l.skipReason]), [[want, "unavailable", "forced, not installed"]], consultant)
+  }
+  for (const [piModels, skipReason] of [[null, "pi --list-models failed"], [[], "no non-Claude pi model"],
+    [CATALOG.filter((r) => family("pi", r) === "anthropic"), "no non-Claude pi model"]]) {
+    const sel = selectConsultants({ installed: ALL, consultant: "pi", piModels })
+    assert.deepEqual(sel.lanes.map((l) => [l.name, l.skip, l.skipReason]), [["pi", "unavailable", skipReason]])
+    // with an explicit model the forced pi runs on it, catalog or not
+    assert.deepEqual(selectConsultants({ installed: ALL, consultant: "pi", piModels, extraModel: "m/x" }).lanes
+      .map((l) => [l.name, l.model, l.skip]), [["pi", "m/x", null]])
+  }
+  assert.throws(() => selectConsultants({ installed: ALL, consultant: "opencode" }), /unknown consultant/)
+})
+
+test("selectConsultants: extra", () => {
+  const sel = selectConsultants({ installed: ALL, extra: true, piModels: CATALOG })
+  assert.deepEqual(sel.lanes.map((l) => [l.name, l.model, l.skip]), [["codex", null, null], ["pi", "opencode-go/glm-5.3", null]])
+  assert.match(sel.reason, /pi as extra: opencode-go\/glm-5\.3 \(glm preferred for independence\)/)
+  assert.equal(selectConsultants({ installed: ALL, extra: true, extraModel: "openai/gpt-x", piModels: null }).lanes[1].model, "openai/gpt-x")
+  for (const piModels of [null, [], CATALOG.filter((r) => !/^(glm|qwen|kimi)/.test(r.model))]) {
+    assert.deepEqual(selectConsultants({ installed: ALL, extra: true, piModels }).lanes[1],
+      { name: "pi", brief: "brief-pi.md", refuterBrief: "refuter-brief-pi.md", model: null, skip: "unavailable", skipReason: "no independent pi model" })
+  }
+  assert.deepEqual(selectConsultants({ installed: { codex: true }, extra: true }).lanes.map((l) => [l.name, l.skip]),
+    [["codex", null], ["pi", "unavailable"]])
+  const cli = selectConsultants({ installed: ALL, consultant: "claude", extra: true, piModels: CATALOG })
+  assert.deepEqual(names(cli), ["claude-cli", "pi"])
+  // primary pi + extra: exactly one pi lane, and the extra model still pins it
+  for (const installed of [{ pi: true, claude: true }, ALL]) {
+    const one = selectConsultants({ installed, consultant: installed.codex ? "pi" : undefined, extra: true, extraModel: "m/x", piModels: CATALOG })
+    assert.deepEqual(one.lanes.map((l) => [l.name, l.model]), [["pi", "m/x"]])
+    assert.equal(one.extraNote, "skipped (pi is the consultant)")
+  }
+})
+
+test("laneCommand claude-cli: the spike's read-only argv, schema inline, model default in one place", () => {
+  const schema = join(new URL("../../contracts/", import.meta.url).pathname, "finding.schema.json")
+  process.env.CLAUDE_CODE_SESSION_ID = "s"
+  process.env.CLAUDECODE = "1"
+  process.env.CLAUDE_CODE_USE_BEDROCK = "1"
+  try {
+    const cmd = laneCommand("claude-cli", { repo: "/r", wd: "/w", schema, brief: "B" })
+    assert.equal(cmd.bin, "claude")
+    assert.equal(cmd.cwd, "/r")
+    assert.deepEqual(cmd.args, ["--safe-mode", "--restricted", "--tools", "Read,Grep,Glob", "--add-dir", "/w",
+      "--no-session-persistence", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "dontAsk",
+      "--json-schema", JSON.stringify(JSON.parse(readFileSync(schema, "utf8"))), "--output-format", "stream-json", "--verbose",
+      "--model", "sonnet", "-p", "B"])
+    for (const banned of ["Bash", "Edit", "Write"]) assert.ok(!cmd.args.join(" ").includes(banned))
+    assert.equal(cmd.env.CLAUDECODE, undefined)
+    assert.equal(cmd.env.CLAUDE_CODE_SESSION_ID, undefined)
+    assert.equal(cmd.env.PATH, process.env.PATH)
+    assert.equal(cmd.env.CLAUDE_CODE_USE_BEDROCK, "1", "auth/provider variables are kept")
+    const pinned = laneCommand("claude-cli", { repo: "/r", wd: "/w", schema, brief: "B", model: "opus" }).args
+    assert.equal(pinned[pinned.indexOf("--model") + 1], "opus")
+  } finally {
+    delete process.env.CLAUDE_CODE_SESSION_ID
+    delete process.env.CLAUDECODE
+    delete process.env.CLAUDE_CODE_USE_BEDROCK
+  }
+})
+
+test("classifyClaudeResult on the captured envelopes", () => {
+  const ok = classifyClaudeResult({ rc: 0, timedOut: false, out: fixture("claude-cli/ok.json") })
+  assert.equal(ok.status, "ok")
+  assert.equal(ok.payload.findings.length, 1)
+  assert.equal(ok.model, "claude-sonnet-5-5")
+  const stream = classifyClaudeResult({ rc: 0, timedOut: false, out: fixture("claude-cli/ok-stream.jsonl") })
+  assert.equal(stream.status, "ok")
+  assert.equal(stream.model, "claude-sonnet-5-5")
+  // with --json-schema a refusal is a valid empty payload: indistinguishable from a clean review
+  assert.deepEqual(classifyClaudeResult({ rc: 0, timedOut: false, out: fixture("claude-cli/refusal-empty-findings.json") }).payload, { findings: [] })
+  const prose = classifyClaudeResult({ rc: 0, timedOut: false, out: fixture("claude-cli/prose-synth.json") })
+  assert.equal(prose.status, "unparseable")
+  const model = classifyClaudeResult({ rc: 1, timedOut: false, out: fixture("claude-cli/error-model.json") })
+  assert.equal(model.status, "config")
+  assert.match(model.reason, /issue with the selected model/)
+})
+
+const envelope = (patch) => JSON.stringify({ type: "result", subtype: "success", is_error: false, stop_reason: "tool_use",
+  result: "", structured_output: { findings: [] }, ...patch })
+
+test("classifyClaudeResult: the last result line of a mixed log decides", () => {
+  const stderr = "Warning: no stdin data received in 3s, proceeding without it..."
+  const first = envelope({ structured_output: { findings: [1] } })
+  const out = [stderr, JSON.stringify({ type: "system", subtype: "init", model: "m" }), first, "not json", envelope({}), stderr].join("\n")
+  assert.deepEqual(classifyClaudeResult({ rc: 0, timedOut: false, out }), { status: "ok", payload: { findings: [] }, model: "m" })
+  assert.equal(classifyClaudeResult({ rc: 0, timedOut: false, out: `${envelope({})}\n${first}` }).status, "unparseable")
+})
+
+test("classifyClaudeResult: config only on the error text, is_error over subtype, max_tokens, no envelope", () => {
+  const run = (out, rc = 0, timedOut = false) => classifyClaudeResult({ rc, timedOut, out })
+  for (const text of ["Invalid API key · Please run /login", "Please run /login", "Credit balance is too low",
+    "model X may not exist or you may not have access to it"]) {
+    assert.equal(run(envelope({ is_error: true, result: text }), 1).status, "config", text)
+  }
+  // a config word in the transcript is content; the envelope's own error is transient
+  const log = ["+ throw new Error('Invalid API key')", envelope({ is_error: true, result: "Overloaded" })].join("\n")
+  assert.deepEqual(run(log, 1), { status: "failed", reason: "Overloaded", model: null })
+  assert.equal(run(envelope({ is_error: true, subtype: "success", result: "API Error: 500" })).status, "failed")
+  assert.equal(run(envelope({ stop_reason: "max_tokens" })).status, "unparseable")
+  assert.equal(run(envelope({ structured_output: undefined })).status, "unparseable")
+  assert.equal(run(envelope({ structured_output: { findings: [{ title: "x" }] } })).status, "unparseable")
+  assert.equal(run(envelope({ structured_output: { verdicts: [] } })).status, "unparseable")
+  assert.equal(classifyClaudeResult({ rc: 0, timedOut: false, out: envelope({ structured_output: { verdicts: [] } }), requireKey: "verdicts" }).status, "ok")
+  assert.equal(run("", 0, true).status, "timeout")
+  assert.equal(run("partial", 143, true).status, "timeout")
+  assert.equal(run("socket hang up", 1).status, "failed")
+  assert.equal(run("").status, "failed")
+  assert.equal(run("", 127).status, "config")
+})
+
+const piLane = (provider, model, status = "ok") => ({ ...lane(status), provider, model })
+
+test("selectRefuters: one per lane present, one per family, none from the panel or unknown", () => {
+  assert.deepEqual(selectRefuters({ pi: piLane("openai-codex", "gpt-6.1-terra") }), { "pi-refuter": "run" })
+  assert.deepEqual(selectRefuters({ "claude-cli": lane("ok") }), { "claude-cli-refuter": "skipped (same-family)" })
+  assert.deepEqual(selectRefuters({ codex: lane("ok"), pi: piLane("openai-codex", "gpt-6.1-terra") }),
+    { "codex-refuter": "run", "pi-refuter": "skipped (same-family as codex)" })
+  assert.deepEqual(selectRefuters({ codex: lane("ok"), pi: piLane(null, null) }),
+    { "codex-refuter": "run", "pi-refuter": "skipped (independence unknown)" })
+  assert.deepEqual(selectRefuters({ codex: lane("ok"), pi: piLane("opencode-go", "glm-5.3", "degraded") }),
+    { "codex-refuter": "run", "pi-refuter": "run" })
+  assert.deepEqual(selectRefuters({ "claude-cli": lane("ok"), pi: piLane("claude-bridge", "claude-opus-5") }),
+    { "claude-cli-refuter": "skipped (same-family)", "pi-refuter": "skipped (same-family)" })
+  assert.deepEqual(selectRefuters({}), {})
+})
+
+test("helperError: a synthetic status carries kind (from the name), brief and requestedModel", () => {
+  assert.deepEqual(helperError("pi-refuter", "no ids"), {
+    lane: "pi-refuter", kind: "pi", brief: null, requestedModel: null, status: "failed", display: "failed: helper error (no ids)", attempts: [],
+  })
+  assert.ok(validStatus(helperError("codex", "x"), "codex"))
+})
+
+test("decideReview: extraSameEngine ignores a primary that never ran", () => {
+  const d = decideReview({
+    codex: { lane: "codex", kind: "codex", status: "unavailable", display: "unavailable", attempts: [] },
+    pi: { lane: "pi", kind: "pi", status: "ok", display: "ok", attempts: [], provider: "openai-codex", model: "gpt-6.1-terra" },
+  })
+  assert.equal(d.extraSameEngine, false)
+})
+
+test("decideReview: family per lane — codex plus pi on OpenAI is one family, not two", () => {
+  const same = decideReview({ codex: lane("ok"), pi: piLane("openai-codex", "gpt-6.1-terra") })
+  assert.deepEqual(same.family, { codex: "openai", pi: "openai" })
+  assert.equal(new Set(Object.values(same.family).filter((fam) => fam !== "unknown")).size, 1)
+  assert.deepEqual(decideReview({ "claude-cli": lane("ok"), pi: piLane(null, null, "failed") }).family,
+    { "claude-cli": "anthropic", pi: "unknown" })
+  assert.deepEqual(decideReview({ codex: lane("ok"), pi: piLane("opencode-go", "glm-5.3") }).family, { codex: "openai", pi: "zhipu" })
+})
+
+test("decideReview: independence per lane and extraSameEngine", () => {
+  const same = decideReview({ codex: lane("ok"), pi: piLane("openai-codex", "gpt-6.1-terra") })
+  assert.deepEqual(same.independence, { codex: "model", pi: "model" })
+  assert.equal(same.extraSameEngine, true)
+  const cli = decideReview({ "claude-cli": lane("ok"), pi: piLane("claude-bridge", "claude-opus-5") })
+  assert.deepEqual(cli.independence, { "claude-cli": "context", pi: "context" })
+  assert.equal(cli.extraSameEngine, true)
+  const mixed = decideReview({ codex: lane("ok"), pi: piLane("opencode-go", "glm-5.3") })
+  assert.equal(mixed.extraSameEngine, false)
+  assert.deepEqual(mixed.refuters, { "codex-refuter": "run", "pi-refuter": "run" })
+  const unknown = decideReview({ codex: lane("ok"), pi: piLane(null, null, "failed") })
+  assert.deepEqual(unknown.independence, { codex: "model", pi: "unknown" })
+  assert.equal(unknown.extraSameEngine, false)
+  assert.equal(decideReview({ codex: lane("ok") }).extraSameEngine, false)
+  assert.equal(decideReview({ pi: piLane(null, null), "claude-cli": lane("ok") }).extraSameEngine, false)
+})
+
+const votes = (pairs) => ({ verdicts: Object.entries(pairs).map(([id, verdict]) => ({ id, verdict, evidence: "" })) })
+
+test("vote: codex + pi on OpenAI, verifier refuted, both would-be refuters confirmed → unconfirmed", () => {
+  const review = decideReview({ codex: lane("ok"), pi: piLane("openai-codex", "gpt-6.1-terra") })
+  assert.equal(review.refuters["pi-refuter"], "skipped (same-family as codex)")
+  const lanes = { "codex-refuter": lane("ok"), "pi-refuter": lane("skipped", review.refuters["pi-refuter"], []) }
+  const got = decideSceptic(lanes, ["F1"], [{ id: "F1", verdict: "refuted" }],
+    { "codex-refuter": votes({ F1: "confirmed" }), "pi-refuter": null })
+  assert.equal(got.voteMode, "strict")
+  assert.deepEqual(got.perFinding.F1, { decision: "unconfirmed", voters: "2 of 2", noVote: [] })
+  assert.deepEqual(got.excluded, {})
+})
+
+test("vote: 3 voters, codex + pi on glm: verifier and codex confirmed, pi refuted → confirmed (2 of 3)", () => {
+  const review = decideReview({ codex: lane("ok"), pi: piLane("opencode-go", "glm-5.3") })
+  assert.deepEqual(review.refuters, { "codex-refuter": "run", "pi-refuter": "run" })
+  const lanes = { "codex-refuter": lane("ok"), "pi-refuter": piLane("opencode-go", "glm-5.3") }
+  const got = decideSceptic(lanes, ["F1"], [{ id: "F1", verdict: "confirmed" }],
+    { "codex-refuter": votes({ F1: "confirmed" }), "pi-refuter": votes({ F1: "refuted" }) })
+  assert.equal(got.voteMode, "strict")
+  assert.deepEqual(got.perFinding.F1, { decision: "confirmed", voters: "3 of 3", noVote: [] })
+})
+
+test("vote: a refuter whose own run is not independent is excluded; verifier confirmed stays confirmed", () => {
+  for (const [provider, model, reason] of [["claude-bridge", "claude-opus-5", "family anthropic (panel)"],
+    [null, null, "family unknown"], ["openai-codex", "gpt-6.1-terra", "family openai (as codex-refuter)"]]) {
+    const lanes = { "codex-refuter": lane("ok"), "pi-refuter": piLane(provider, model) }
+    const got = decideSceptic(lanes, ["F1"], [{ id: "F1", verdict: "confirmed" }],
+      { "codex-refuter": votes({}), "pi-refuter": votes({ F1: "refuted" }) })
+    assert.deepEqual(got.excluded, { "pi-refuter": reason })
+    assert.deepEqual(got.perFinding.F1, { decision: "confirmed", voters: "1 of 2", noVote: ["codex-refuter"] }, reason)
+  }
+  // alone: voters read 1 of 1, and the mode names why
+  const alone = decideSceptic({ "pi-refuter": piLane("claude-bridge", "claude-opus-5") }, ["F1"],
+    [{ id: "F1", verdict: "confirmed" }], { "pi-refuter": votes({ F1: "refuted" }) })
+  assert.deepEqual(alone.perFinding.F1, { decision: "confirmed", voters: "1 of 1", noVote: [] })
+  assert.equal(alone.voteMode, "strict → basic (no independent refuter)")
+  // `kind` wins over the name
+  const kinded = decideSceptic({ x: { ...lane("ok"), kind: "claude-cli" } }, ["F1"], [], { x: votes({ F1: "refuted" }) })
+  assert.deepEqual(kinded.excluded, { x: "family anthropic (panel)" })
+})
+
+test("decideSceptic: a same-family skip gives the independent-refuter wording, a failed refuter the plain one", () => {
+  const skipped = decideSceptic({ "claude-cli-refuter": lane("skipped", "skipped (same-family)", []) }, ["F1"],
+    [{ id: "F1", verdict: "confirmed" }], { "claude-cli-refuter": null })
+  assert.equal(skipped.voteMode, "strict → basic (no independent refuter)")
+  assert.deepEqual(skipped.perFinding.F1, { decision: "confirmed", voters: "1 of 1", noVote: [] })
+  const unknown = decideSceptic({ "pi-refuter": lane("skipped", "skipped (independence unknown)", []) }, ["F1"], [], {})
+  assert.equal(unknown.voteMode, "strict → basic (no independent refuter)")
+  const failed = decideSceptic({ "codex-refuter": lane("degraded"), "pi-refuter": lane("skipped", "skipped (same-family as codex)", []) },
+    ["F1"], [], { "codex-refuter": null })
+  assert.equal(failed.voteMode, "strict → basic")
+  assert.equal(decideSceptic({ "codex-refuter": lane("skipped", "skipped (unavailable)", []) }, ["F1"], [], {}).voteMode, "strict → basic")
 })

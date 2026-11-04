@@ -121,6 +121,31 @@ test("external lanes run with read-only flags and no mutating tools", () => {
   for (const banned of ["bash", "edit", "write"]) assert.ok(!tools.includes(banned))
   // `--tools` keeps MCP tools; only `--no-mcp` keeps a server's tools away from pi
   assert.ok(pi.args.includes("--no-mcp"), "pi must run with --no-mcp")
+  // pi's equivalent of claude's --safe-mode --restricted: no extension code, no saved session, no
+  // skills, prompt templates, context files or project-local config
+  for (const flag of ["--no-extensions", "--no-session", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-approve"]) {
+    assert.ok(pi.args.includes(flag), `pi must run with ${flag}`)
+  }
   // codex waits on an open stdin forever, so every attempt is spawned with stdin ignored
   assert.match(source("scripts/run-lane.mjs"), /stdio: \["ignore", log, log\]/)
+})
+
+// Spike issue-3: no write tool exists at all, no MCP server, no hooks/settings from the reviewed
+// repo, and the file tools reach only cwd plus the work dir.
+test("the claude-cli lane runs with read tools only, no MCP and no repo settings", () => {
+  const cmd = laneCommand("claude-cli", { repo: "/r", wd: "/w", schema: join(ROOT, "contracts/finding.schema.json"), brief: "b" })
+  const { args } = cmd
+  assert.equal(cmd.bin, "claude")
+  assert.equal(cmd.cwd, "/r")
+  const tools = args[args.indexOf("--tools") + 1].split(",")
+  assert.deepEqual(tools, ["Read", "Grep", "Glob"])
+  for (const banned of ["Bash", "Edit", "Write", "NotebookEdit", "Task", "WebFetch"]) assert.ok(!tools.includes(banned), banned)
+  assert.ok(!args.includes("--allowed-tools") && !args.includes("--allowedTools"), "--tools is the allowlist")
+  assert.ok(args.includes("--strict-mcp-config"), "without it the empty config is merged, not substituted")
+  assert.deepEqual(JSON.parse(args[args.indexOf("--mcp-config") + 1]), { mcpServers: {} })
+  assert.equal(args[args.indexOf("--add-dir") + 1], "/w")
+  for (const f of ["--safe-mode", "--restricted", "--no-session-persistence"]) assert.ok(args.includes(f), f)
+  assert.equal(args[args.indexOf("--permission-mode") + 1], "dontAsk")
+  assert.ok(args.indexOf("--add-dir") < args.indexOf("-p") && args.at(-1) === "b", "flags must precede the prompt")
+  assert.equal(cmd.env.CLAUDECODE, undefined, "the nested claude must not join the calling session")
 })

@@ -34,7 +34,28 @@ is `FAIL`.
 - **`gh — not installed` or `not authenticated`** (`WARN`): pull
   requests come from a local clone, or by URL for a public repository. A
   private PR needs `gh` or a clone. Run `gh auth login`.
-- **`pi — not installed`** (`SKIP`): only matters with `extra-advisor`.
+- **`pi — not installed`** (`SKIP`): matters when pi is the fallback
+  consultant or with `extra-advisor`.
+- **pi does not see a model you use elsewhere**: pi runs without
+  extensions, skills, context files or a saved session
+  (`--no-extensions --no-session …`), and the catalog is read with
+  `pi --no-extensions --list-models`. A provider that only an extension
+  supplies (such as `claude-bridge`) is not available, so
+  `extra-advisor=<that model>` fails in read-only mode. Pick a built-in
+  provider's model.
+- **Which consultant ran, and why?** Read the report header,
+  `consultant: <name> (<reason>)`, and the doctor's consultant lines.
+  Selection is by presence only: an installed but unauthenticated `pi`
+  beats a working `claude`, and a model listed by `pi --list-models` is
+  not necessarily one you are logged in to. To get another consultant,
+  force it with `consultant=codex|pi|claude-cli` (`claude` is an alias).
+  A forced consultant that is not installed is reported `unavailable`
+  and is not replaced. `node scripts/doctor.mjs --consultant <x>` checks
+  the same forced choice (for `claude-cli` it runs the read-only probe).
+  opencode is not supported yet.
+- **`claude-cli` found nothing**: with `--json-schema` a refusal comes
+  back as empty findings, so an empty result is weak evidence. Admin
+  policy settings still apply under `--safe-mode`.
 
 ## code graph
 
@@ -127,7 +148,7 @@ Read the report's `Sources` line before reading its findings:
   crashed and left no status. Rerun the review.
 - A `Single-source review (Claude only)` warning under the title: no
   consultant produced a usable review.
-- `codex=unavailable`: codex is not installed.
+- `codex=unavailable`: codex is not installed (or forced and missing).
 - A review with no P0 or P1 has no sceptic section. That is expected:
   the sceptic only runs when there is something to refute.
 

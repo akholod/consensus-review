@@ -1,32 +1,45 @@
 #!/usr/bin/env node
-// Runs one external review lane (codex or pi) under the retry-once policy, and folds the lanes'
-// statuses into a decision. Every decision is in scripts/lib/lanes.mjs; this file owns only the
+// Picks the external review lanes, runs one of them (codex, pi or claude-cli) under the retry-once
+// policy, and folds the lanes' statuses into a decision. Every decision is in scripts/lib/lanes.mjs; this file owns only the
 // processes and the files, all of which live under --wd (never in the reviewed repository).
 //
-//   run <codex|pi> --wd <dir> --name <name> --repo <dir> --brief-file <file> --timeout <sec>
+//   select [--wd <dir>] [--consultant <codex|pi|claude-cli|claude>] [--extra [--extra-model <m>]]
+//   run <codex|pi|claude-cli> --wd <dir> --name <name> --repo <dir> --brief-file <file> --timeout <sec>
 //       [--schema <file>] [--model <m>] [--require-key findings|verdicts] [--ids-file <file>]
-//       [--skip <why>] [--from-decision <file>] [--kill-grace <sec>]
+//       [--skip <why> [--skip-reason <r>]] [--from-decision <file>] [--kill-grace <sec>]
 //   decide --wd <dir> --phase review|sceptic --lanes <name,name> [--ids-file <file>, default <wd>/ids.json]
 //
 // Each attempt runs in its own process group, which is killed whenever the attempt settles, so a
 // grandchild never outlives its attempt. A killed helper writes no status; `decide` reports that.
 
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { closeSync, existsSync, linkSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
 import { constants } from "node:os"
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import {
-  classifyCodexResult, classifyPiResult, decideRetry, decideReview, decideSceptic, helperError,
-  killGrace, laneCommand, laneStatus, parseVerdicts, validIds, validRefuterEntry, validStatus,
+  CLAUDE_CLI_MODEL, classifyClaudeResult, classifyCodexResult, classifyPiResult, decideRetry, decideReview,
+  decideSceptic, helperError, killGrace, laneCommand, laneStatus, parseVerdicts,
+  selectConsultants, validIds, validRefuterEntry, validStatus,
 } from "./lib/lanes.mjs"
+import { listPiModels } from "./lib/probe.mjs"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
-const OPTIONS = Object.fromEntries(
-  ["wd", "name", "repo", "brief-file", "timeout", "schema", "model", "require-key", "ids-file", "skip",
-    "from-decision", "kill-grace", "phase", "lanes"].map((k) => [k, { type: "string" }]),
-)
+const OPTIONS = {
+  ...Object.fromEntries(
+    ["wd", "name", "repo", "brief-file", "timeout", "schema", "model", "require-key", "ids-file", "skip", "skip-reason",
+      "from-decision", "kill-grace", "phase", "lanes", "consultant", "extra-model"].map((k) => [k, { type: "string" }]),
+  ),
+  extra: { type: "boolean" },
+}
+
+/** Each lane's classifier; `text` is the attempt's mixed stdout/stderr log. */
+const CLASSIFY = {
+  codex: ({ text, ...a }) => classifyCodexResult({ ...a, log: text }),
+  pi: ({ text, ...a }) => classifyPiResult({ ...a, out: text }),
+  "claude-cli": ({ text, ...a }) => classifyClaudeResult({ ...a, out: text }),
+}
 
 const readJson = (path) => {
   try {
@@ -68,7 +81,7 @@ let active = null // the attempt's group leader, killed on any helper exit
 function attempt({ lane, wd, file, cmd, seconds, grace, requireKey, onSpawned }) {
   const started = performance.now()
   const log = openSync(join(wd, `${file}.log`), "w")
-  const child = spawn(cmd.bin, cmd.args, { cwd: cmd.cwd, detached: true, stdio: ["ignore", log, log] })
+  const child = spawn(cmd.bin, cmd.args, { cwd: cmd.cwd, env: cmd.env, detached: true, stdio: ["ignore", log, log] })
   active = child
   onSpawned?.(child)
   let timedOut = false
@@ -89,10 +102,7 @@ function attempt({ lane, wd, file, cmd, seconds, grace, requireKey, onSpawned })
       active = null
       closeSync(log)
       const text = spawnError ?? readFileSync(join(wd, `${file}.log`), "utf8")
-      const outPath = join(wd, `${file}.json`)
-      const result = lane === "codex"
-        ? classifyCodexResult({ rc, timedOut, log: text, outPath, requireKey })
-        : classifyPiResult({ rc, timedOut, out: text, requireKey })
+      const result = CLASSIFY[lane]({ rc, timedOut, text, outPath: join(wd, `${file}.json`), requireKey })
       resolve({ ...result, rc, seconds: Number(((performance.now() - started) / 1000).toFixed(2)) })
     }
     child.once("error", (err) => settle(err.code === "ENOENT" ? 127 : 126, `${err.message}\n`))
@@ -103,11 +113,13 @@ function attempt({ lane, wd, file, cmd, seconds, grace, requireKey, onSpawned })
 async function runLane(lane, v, { onSpawned }) {
   const wd = v.wd
   const name = v.name ?? lane
-  const finish = (s) => (writeAtomic(join(wd, `${name}.status.json`), { lane: name, ...s }), 0)
+  // Every status records its own facts, so the decision files and the archive need no per-lane code.
+  const facts = { lane: name, kind: lane, brief: v["brief-file"] ? basename(v["brief-file"]) : null, requestedModel: v.model ?? null }
+  const finish = (s) => (writeAtomic(join(wd, `${name}.status.json`), { ...s, ...facts }), 0)
 
   if (v.skip) {
     return finish(v.skip === "unavailable"
-      ? { status: "unavailable", display: "unavailable", attempts: [] }
+      ? { status: "unavailable", display: v["skip-reason"] ? `unavailable (${v["skip-reason"]})` : "unavailable", attempts: [] }
       : { status: "skipped", display: `skipped (${v.skip})`, attempts: [] })
   }
   if (v["from-decision"]) {
@@ -131,7 +143,7 @@ async function runLane(lane, v, { onSpawned }) {
   let result
   for (let n = 1, seconds = T; n <= 2; n++) {
     const file = `${name}.a${n}`
-    const cmd = laneCommand(lane, { repo: v.repo, schema, out: join(wd, `${file}.json`), model: v.model, brief })
+    const cmd = laneCommand(lane, { repo: v.repo, wd, schema, out: join(wd, `${file}.json`), model: v.model, brief })
     const startedAt = new Date().toISOString()
     result = await attempt({ lane, wd, file, cmd, seconds, grace, requireKey, onSpawned })
     const record = { n, startedAt, status: result.status, reason: result.reason ?? null, rc: result.rc, seconds: result.seconds }
@@ -154,8 +166,34 @@ async function runLane(lane, v, { onSpawned }) {
   if (result.status === "ok") writeAtomic(join(wd, `${name}.json`), result.payload)
   const meta = lane === "pi"
     ? { model: result.model ?? null, provider: result.provider ?? null }
-    : { model: v.model ?? null, schema }
+    : lane === "claude-cli"
+      ? { model: result.model ?? v.model ?? CLAUDE_CLI_MODEL, schema }
+      : { model: v.model ?? null, schema }
   return finish({ ...laneStatus(attempts), attempts, ...meta })
+}
+
+/** Present = `<bin> --version` exits 0. Presence only: a broken login still counts as installed. */
+const installed = (bin) => spawnSync(bin, ["--version"], { stdio: "ignore", timeout: 10_000 }).status === 0
+
+function select(v) {
+  const has = { codex: installed("codex"), pi: installed("pi"), claude: installed("claude") }
+  const forced = v.consultant === "claude" ? "claude-cli" : v.consultant
+  // The catalog is read only when pi may run and no model is pinned.
+  const needed = has.pi && !v["extra-model"] && (forced === "pi" || (!forced && !has.codex) || v.extra)
+  let out
+  try {
+    out = selectConsultants({
+      installed: has, consultant: v.consultant, extra: Boolean(v.extra), extraModel: v["extra-model"],
+      piModels: needed ? listPiModels() : null,
+    })
+  } catch (err) {
+    process.stderr.write(`${err.message}\n`)
+    return 2
+  }
+  const wd = v.wd
+  if (wd) writeAtomic(join(wd, "consultants.json"), out)
+  process.stdout.write(`${JSON.stringify(out, null, 2)}\n`)
+  return 0
 }
 
 function decide(v) {
@@ -184,9 +222,10 @@ function decide(v) {
 
 export async function main(argv, hooks = {}) {
   const { values, positionals } = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true })
+  if (positionals[0] === "select") return select(values)
   if (!values.wd) throw new Error("--wd is required")
   if (positionals[0] === "decide") return decide(values)
-  if (positionals[0] !== "run") throw new Error("usage: run-lane.mjs run <codex|pi> … | decide …")
+  if (positionals[0] !== "run") throw new Error("usage: run-lane.mjs select … | run <codex|pi|claude-cli> … | decide …")
   // No orphans: whatever ends the helper also ends the active attempt's group. No status is written.
   process.on("exit", () => active && killGroup(active.pid, "SIGKILL"))
   process.on("SIGTERM", () => process.exit(143))

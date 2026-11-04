@@ -156,9 +156,74 @@ export function laneStatus(attempts) {
   return { status: "degraded", display: `degraded (${label(a1)}; ${label(a2)})` }
 }
 
+/** A claude-cli failure a retry cannot fix, matched on the envelope's error text only. */
+const CLAUDE_CONFIG_PATTERNS = [
+  /Invalid API key/i, /Please run \/login/i, /issue with the selected model/i,
+  /may not exist or you may not have access/i, /credit balance/i,
+]
+
+/**
+ * Classify one claude-cli attempt. The envelope is the last `type: "result"` JSON line of the mixed
+ * stdout/stderr log (stream-json; a single `--output-format json` envelope also qualifies). With
+ * `--json-schema` a refusal comes back as a valid empty payload, so it cannot be told from a clean run.
+ */
+export function classifyClaudeResult({ rc, timedOut, out = "", requireKey = "findings" }) {
+  let envelope = null
+  let init = null
+  for (const line of out.split("\n")) {
+    let event
+    try {
+      event = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (event?.type === "result") envelope = event
+    if (event?.type === "system" && event.subtype === "init") init = event
+  }
+  const model = init?.model ?? Object.keys(envelope?.modelUsage ?? {})[0] ?? null
+  const result = (() => {
+    if (timedOut) return { status: "timeout", reason: "timed out" }
+    if (!envelope) return rc !== 0 ? failure(rc, out) : { status: "failed", reason: "exited 0 with no result envelope" }
+    if (envelope.is_error || rc !== 0) {
+      const text = String(envelope.result || envelope.subtype || `exit ${rc}`)
+      const config = CLAUDE_CONFIG_PATTERNS.some((p) => p.test(text))
+      return { status: config ? "config" : "failed", reason: text.trim().slice(0, 200) }
+    }
+    if (envelope.stop_reason === "max_tokens") return { status: "unparseable", reason: "stopped at max_tokens" }
+    const problem = payloadProblem(envelope.structured_output, requireKey)
+    return problem ? { status: "unparseable", reason: problem } : { status: "ok", payload: envelope.structured_output }
+  })()
+  return { ...result, model }
+}
+
+/** The claude-cli model when none is requested: the only place this default lives. */
+export const CLAUDE_CLI_MODEL = "sonnet"
+
+/** A nested `claude -p` must not join the calling Claude Code session. Only the session-binding
+ *  variables go: auth/provider ones (`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_OAUTH_TOKEN`, …) stay. */
+const SESSION_ENV = /^(CLAUDECODE|CLAUDE_CODE_(SESSION_ID|ENTRYPOINT|MESSAGING_SOCKET\w*))$/
+const scrubbedEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => !SESSION_ENV.test(key)))
+
+/** pi's isolation flags; `run-lane select` lists models with `--no-extensions` too, so the catalog matches a run. */
+const PI_ISOLATION = ["--no-extensions", "--no-session", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-approve"]
+
 /** The exact read-only command for a lane. Changing these flags changes the read-only promise. */
-export function laneCommand(lane, { repo, schema, out, model, brief }) {
+export function laneCommand(lane, { repo, wd, schema, out, model, brief }) {
   const withModel = model ? ["--model", model] : []
+  if (lane === "claude-cli") {
+    // No write tool exists at all (--tools), no MCP, no hooks or settings from the reviewed repo
+    // (--safe-mode --restricted); the file tools reach only cwd and the work dir. Spike: issue-3.
+    const inlineSchema = JSON.stringify(JSON.parse(readFileSync(schema, "utf8")))
+    return {
+      bin: "claude",
+      args: ["--safe-mode", "--restricted", "--tools", "Read,Grep,Glob", "--add-dir", wd, "--no-session-persistence",
+        "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "dontAsk",
+        "--json-schema", inlineSchema, "--output-format", "stream-json", "--verbose",
+        "--model", model || CLAUDE_CLI_MODEL, "-p", brief],
+      cwd: repo,
+      env: scrubbedEnv(),
+    }
+  }
   if (lane === "codex") {
     return {
       bin: "codex",
@@ -170,9 +235,140 @@ export function laneCommand(lane, { repo, schema, out, model, brief }) {
   if (lane === "pi") {
     // pi has no sandbox flag: the toolset IS the enforcement, so never add bash, edit or write.
     // `--tools` keeps MCP tools unless told otherwise; `--no-mcp` connects no MCP server at all.
-    return { bin: "pi", args: ["-p", "--mode", "json", "--tools", "read,grep,find,ls", "--no-mcp", ...withModel, brief], cwd: repo }
+    // PI_ISOLATION is pi's equivalent of claude's --safe-mode --restricted: no extension code, no
+    // saved session, no skills, prompt templates, context files or project-local config.
+    return {
+      bin: "pi",
+      args: ["-p", "--mode", "json", "--tools", "read,grep,find,ls", "--no-mcp", ...PI_ISOLATION, ...withModel, brief],
+      cwd: repo,
+    }
   }
-  throw new Error(`unknown lane "${lane}" — expected codex or pi`)
+  throw new Error(`unknown lane "${lane}" — expected codex, pi or claude-cli`)
+}
+
+/** The panel's model family: a lane of this family is independent by context only. */
+const PANEL_FAMILY = "anthropic"
+
+/** pi's family by positive match over `${provider} ${model}`; first match wins, anthropic first. */
+const PI_FAMILIES = [
+  [/claude|anthropic/i, "anthropic"], [/openai|gpt|codex|\bo[1-9]\b/i, "openai"], [/gemini|google/i, "google"],
+  [/deepseek/i, "deepseek"], [/qwen/i, "qwen"], [/mistral/i, "mistral"], [/llama|meta/i, "meta"],
+  [/grok|xai/i, "xai"], [/glm|zhipu/i, "zhipu"], [/kimi|moonshot/i, "moonshot"],
+]
+
+/** The model family of a lane run. Anything not positively identified is `unknown`, which never votes. */
+export function family(kind, status) {
+  if (kind === "codex") return "openai"
+  if (kind === "claude-cli") return "anthropic"
+  if (kind !== "pi") return "unknown"
+  const text = `${status?.provider ?? ""} ${status?.model ?? ""}`.trim()
+  return (text && PI_FAMILIES.find(([pattern]) => pattern.test(text))?.[1]) || "unknown"
+}
+
+/** The lane kind of a status: its `kind`, else its name without `-refuter` (older work dirs). */
+const kindOf = (name, s) => s?.kind ?? name.replace(/-refuter$/, "")
+
+const independence = (fam) => (fam === "unknown" ? "unknown" : fam === PANEL_FAMILY ? "context" : "model")
+
+/** `pi --list-models` rows: a whitespace-aligned table, col 1 the provider, col 2 the model. */
+export function parsePiModels(text) {
+  return text.split("\n").map((line) => line.trim().split(/\s+/))
+    .filter(([provider, model], i) => model && !(i === 0 && provider === "provider"))
+    .map(([provider, model]) => ({ provider, model }))
+}
+
+const startsWith = (prefix) => (row) => row.model.startsWith(prefix)
+const INDEPENDENT_PI = [["glm", startsWith("glm")], ["qwen", startsWith("qwen")], ["kimi", startsWith("kimi")]]
+const PI_PREFERENCE = {
+  primary: [["openai-codex", (row) => row.provider === "openai-codex"], ["gpt", startsWith("gpt-")], ...INDEPENDENT_PI],
+  extra: INDEPENDENT_PI,
+}
+
+/**
+ * pi's model for a role: the newest row of the first preferred group present. Never a Claude model,
+ * never pi's unpinned default. "Newest" is the numeric-aware maximum; a tie keeps catalog order.
+ */
+export function pickPiModel(role, rows) {
+  const usable = (rows ?? []).filter((row) => !/flash|free|mini/.test(row.model) && family("pi", row) !== PANEL_FAMILY)
+  for (const [group, match] of PI_PREFERENCE[role]) {
+    const best = usable.filter(match).reduce((a, b) => (!a || b.model.localeCompare(a.model, undefined, { numeric: true }) > 0 ? b : a), null)
+    if (best) return { model: `${best.provider}/${best.model}`, group }
+  }
+  return { none: role === "primary" ? "no non-Claude pi model" : "no independent pi model" }
+}
+
+/** Prompt names by lane kind: [lane brief, refuter brief]. */
+export const BRIEFS = {
+  codex: ["brief.md", "refuter-brief.md"],
+  "claude-cli": ["brief.md", "refuter-brief.md"],
+  pi: ["brief-pi.md", "refuter-brief-pi.md"],
+}
+const INSTALLED_KEY = { codex: "codex", pi: "pi", "claude-cli": "claude" }
+
+/** `skipReason` undefined: the lane runs; a string or null: it is `unavailable` for that reason. */
+const consultantLane = (name, model, skipReason) => ({
+  name, brief: BRIEFS[name][0], refuterBrief: BRIEFS[name][1], model: model ?? null,
+  skip: skipReason === undefined ? null : "unavailable", skipReason: skipReason ?? null,
+})
+
+/**
+ * Which external lanes run, from the harnesses present: `codex → pi → claude-cli`, or the forced
+ * `consultant` (alias `claude`), never substituted. `piModels` is parsePiModels' rows, or null when
+ * the listing failed. Pure: the caller detects `installed` and lists pi's models.
+ */
+export function selectConsultants({ installed, consultant, extra, extraModel, piModels }) {
+  const forced = consultant === "claude" ? "claude-cli" : consultant || null
+  if (forced && !BRIEFS[forced]) throw new Error(`unknown consultant "${consultant}" — expected codex, pi or claude-cli`)
+  const piModel = (role) => {
+    if (extraModel) return { model: extraModel, why: "extra-advisor model" }
+    if (!piModels) return { none: role === "primary" ? "pi --list-models failed" : "no independent pi model" }
+    const pick = pickPiModel(role, piModels)
+    return pick.none ? pick : { model: pick.model, why: `${pick.group} preferred${role === "extra" ? " for independence" : ""}` }
+  }
+  const notes = []
+  let primary
+  if (forced) {
+    if (!installed[INSTALLED_KEY[forced]]) {
+      primary = consultantLane(forced, null, "forced, not installed")
+      notes.push(`consultant=${forced}: forced, not installed`)
+    } else if (forced === "pi") {
+      const pick = piModel("primary")
+      primary = consultantLane("pi", pick.model, pick.none)
+      notes.push(pick.none ? `consultant=pi: ${pick.none}` : `consultant=pi: ${pick.model} (${pick.why})`)
+    } else {
+      primary = consultantLane(forced, forced === "claude-cli" ? CLAUDE_CLI_MODEL : null)
+      notes.push(`consultant=${forced}: forced`)
+    }
+  } else if (installed.codex) {
+    primary = consultantLane("codex", null)
+    notes.push("codex: first installed")
+  } else {
+    if (installed.pi) {
+      const pick = piModel("primary")
+      if (pick.model) {
+        primary = consultantLane("pi", pick.model)
+        notes.push(`pi: codex not installed; ${pick.model} (${pick.why})`)
+      } else notes.push(`pi not usable (${pick.none})`)
+    }
+    if (!primary && installed.claude) {
+      primary = consultantLane("claude-cli", CLAUDE_CLI_MODEL)
+      notes.push("claude-cli: no other consultant usable")
+    }
+    if (!primary) {
+      primary = consultantLane("codex", null, null)
+      notes.push("no consultant installed")
+    }
+  }
+  const lanes = [primary]
+  let extraNote = null
+  if (extra && primary.name === "pi") extraNote = "skipped (pi is the consultant)"
+  else if (extra && !installed.pi) lanes.push(consultantLane("pi", null, "not installed"))
+  else if (extra) {
+    const pick = piModel("extra")
+    lanes.push(consultantLane("pi", pick.model, pick.none))
+    notes.push(pick.none ? `pi as extra: ${pick.none}` : `pi as extra: ${pick.model} (${pick.why})`)
+  }
+  return { lanes, extraNote, reason: notes.join("; ") }
 }
 
 /**
@@ -201,18 +397,24 @@ export function parseVerdicts(payload, sentIds) {
   return { status: Object.keys(votes).length ? "ok" : "unparseable", votes, ignored, duplicates }
 }
 
-/** The one source of truth for which refuters §8 runs; written into review.decision.json. */
-export function selectRefuters(lanes, extra) {
-  const pick = (name) => {
-    const s = lanes[name]
-    if (!s || s.status === "ok" || s.status === "degraded") return "run"
+/**
+ * The one source of truth for which refuters §8 runs; written into review.decision.json. One
+ * `<name>-refuter` per lane present; at most one runs per known family, none from the panel's.
+ */
+export function selectRefuters(lanes) {
+  const voting = {} // family → the first lane of it that votes
+  const pick = (name, s) => {
     if (s.status === "failed") return `skipped (${name} failed: ${s.attempts?.length ? "config" : "helper error"})`
     if (s.status === "unavailable") return "skipped (unavailable)"
-    return s.display
+    if (s.status !== "ok" && s.status !== "degraded") return s.display
+    const fam = family(kindOf(name, s), s)
+    if (fam === "unknown") return "skipped (independence unknown)"
+    if (fam === PANEL_FAMILY) return "skipped (same-family)"
+    if (voting[fam]) return `skipped (same-family as ${voting[fam]})`
+    voting[fam] = name
+    return "run"
   }
-  const refuters = { "codex-refuter": pick("codex") }
-  if (extra) refuters["pi-refuter"] = pick("pi")
-  return refuters
+  return Object.fromEntries(Object.entries(lanes).map(([name, s]) => [`${name}-refuter`, pick(name, s)]))
 }
 
 /**
@@ -261,13 +463,25 @@ export const validRefuterEntry = (entry) => entry === "run" || /^skipped \(.+\)$
 
 /** Lane status for a missing or unreadable status.json: never read as success. */
 export const helperError = (lane, reason) =>
-  ({ lane, status: "failed", display: `failed: helper error (${reason})`, attempts: [] })
+  ({ lane, kind: lane.replace(/-refuter$/, ""), brief: null, requestedModel: null, status: "failed", display: `failed: helper error (${reason})`, attempts: [] })
 
 /** True when no external lane produced a usable review — the report's single-source warning. */
 export const allExternalDown = (lanes) => !Object.values(lanes).some((s) => s.status === "ok")
 
+/** `lanes` in `--lanes` order: the primary first, then the extra. */
 export function decideReview(lanes) {
-  return { lanes, allExternalDown: allExternalDown(lanes), refuters: selectRefuters(lanes, "pi" in lanes) }
+  const families = Object.entries(lanes).map(([name, s]) => [name, family(kindOf(name, s), s)])
+  // Only lanes that produced a review can collide: an unavailable primary has no engine to share.
+  const usable = (name) => ["ok", "degraded"].includes(lanes[name]?.status)
+  const [primary, extra] = families.map(([name, fam]) => (usable(name) ? fam : undefined))
+  return {
+    lanes,
+    allExternalDown: allExternalDown(lanes),
+    family: Object.fromEntries(families),
+    independence: Object.fromEntries(families.map(([name, fam]) => [name, independence(fam)])),
+    extraSameEngine: primary !== undefined && extra !== undefined && extra !== "unknown" && extra === primary,
+    refuters: selectRefuters(lanes),
+  }
 }
 
 /**
@@ -275,7 +489,8 @@ export function decideReview(lanes) {
  * file is missing; a value that is not a verdict list is `invalid`. Either way the verifier casts no
  * vote and the report says so. `refuterPayloads` maps each refuter lane to its canonical payload
  * (null when it did not end ok). Skipped/unavailable refuters are not in the voter set; failed and
- * degraded ones are, with no vote.
+ * degraded ones are, with no vote. An ok refuter whose own run is of the panel's family, of a family
+ * already counted, or `unknown` is left out of the set and named in `excluded`.
  */
 export function decideSceptic(lanes, ids, verifierPayload, refuterPayloads) {
   const verifier = verifierPayload === undefined ? "missing"
@@ -283,10 +498,24 @@ export function decideSceptic(lanes, ids, verifierPayload, refuterPayloads) {
   if (!validIds(ids)) {
     return { lanes, error: "failed: helper error (no ids)", voteMode: null, verifier, perFinding: {} }
   }
-  const refuterBallots = Object.fromEntries(Object.entries(lanes)
-    .filter(([, s]) => s.status !== "skipped" && s.status !== "unavailable")
+  const excluded = {}
+  const counted = {} // family → the refuter that votes for it
+  const voters = Object.entries(lanes).filter(([name, s]) => {
+    if (s.status === "skipped" || s.status === "unavailable") return false
+    if (s.status !== "ok") return true
+    const fam = family(kindOf(name, s), s)
+    if (fam === "unknown") excluded[name] = "family unknown"
+    else if (fam === PANEL_FAMILY) excluded[name] = `family ${fam} (panel)`
+    else if (counted[fam]) excluded[name] = `family ${fam} (as ${counted[fam]})`
+    else counted[fam] = name
+    return !excluded[name]
+  })
+  const refuterBallots = Object.fromEntries(voters
     .map(([name]) => [name, refuterPayloads[name] ? parseVerdicts(refuterPayloads[name], ids).votes : {}]))
   const ballots = { verifier: verifier === "ok" ? parseVerdicts(verifierPayload, ids).votes : {}, ...refuterBallots }
-  const voteMode = Object.values(refuterBallots).some((b) => Object.keys(b).length) ? "strict" : "strict → basic"
-  return { lanes, voteMode, verifier, perFinding: tallyVotes(ids, ballots) }
+  const familySkip = Object.values(lanes).some((s) => /^skipped \((same-family|independence unknown)/.test(s.display))
+  const voteMode = Object.values(refuterBallots).some((b) => Object.keys(b).length) ? "strict"
+    : !voters.length && (familySkip || Object.keys(excluded).length) ? "strict → basic (no independent refuter)"
+      : "strict → basic"
+  return { lanes, voteMode, verifier, excluded, perFinding: tallyVotes(ids, ballots) }
 }

@@ -3,15 +3,16 @@
 // a diagnostic that always says PASS is worse than none, because it manufactures confidence.
 //
 // Every test here runs `--offline`: the live probes cost real model calls and belong to a release
-// gate, not to `node --test`.
+// gate, not to `node --test`. The claude-cli probe is driven directly against a fake `claude`.
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from "node:fs"
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { diagnose } from "../../scripts/doctor.mjs"
+import { probeClaudeCli } from "../../scripts/lib/probe.mjs"
 
 const ROOT = process.cwd()
 
@@ -200,4 +201,95 @@ test("optional tooling being absent must not fail the run", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("names the consultant a review would run, and why, with the presence-only caveat", () => {
+  const r = doctor(ROOT).results.find((x) => x.label.startsWith("consultant: "))
+  assert.ok(r, "no consultant line")
+  assert.match(r.label, /^consultant: (codex|pi|claude-cli)$/)
+  assert.ok(r.detail, "the selection reason is missing")
+  assert.match(r.consequence, /presence only/)
+})
+
+test("--consultant mirrors a forced consultant: forced claude-cli is named and reported as forced", () => {
+  const results = diagnose({ root: ROOT, repo: ROOT, offline: true, consultant: "claude-cli" })
+  const line = results.find((x) => x.label.startsWith("consultant: "))
+  assert.equal(line.label, "consultant: claude-cli")
+  assert.match(line.detail, /forced/)
+  assert.ok(results.some((x) => x.label === "claude-cli read-only"), "a forced claude-cli gets its read-only line")
+})
+
+/** A fake `claude` that emits a stream-json init and result line; FAKE_CLAUDE picks a defect. */
+const FAKE_CLAUDE = `#!/usr/bin/env node
+const { readFileSync, writeFileSync } = require("node:fs")
+const { execSync } = require("node:child_process")
+const mode = process.env.FAKE_CLAUDE ?? "ok"
+const tools = ["Glob", "Grep", "Read", "StructuredOutput", ...(mode === "bash" ? ["Bash"] : [])]
+const mcp_servers = mode === "mcp" ? [{ name: "fs", status: "connected" }] : []
+if (mode === "hook") execSync(JSON.parse(readFileSync(".claude/settings.json", "utf8")).hooks.SessionStart[0].hooks[0].command)
+if (mode === "write") writeFileSync("NOTES.md", "x")
+console.log(JSON.stringify({ type: "system", subtype: "init", tools, mcp_servers, model: "claude-sonnet-5-5" }))
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, stop_reason: "tool_use", structured_output: { findings: [] } }))
+`
+
+/** Put a fake `claude` first on PATH (as a .cjs-free script: no package.json above the temp dir). */
+function withFakeClaude(fn) {
+  const bin = mkdtempSync(join(tmpdir(), "doctor-fake-claude-"))
+  const path = process.env.PATH
+  try {
+    writeFileSync(join(bin, "claude"), FAKE_CLAUDE)
+    chmodSync(join(bin, "claude"), 0o755)
+    process.env.PATH = `${bin}:${path}`
+    return fn(bin)
+  } finally {
+    process.env.PATH = path
+    delete process.env.FAKE_CLAUDE
+    rmSync(bin, { recursive: true, force: true })
+  }
+}
+
+const probeWith = (mode) => {
+  process.env.FAKE_CLAUDE = mode
+  const probe = probeClaudeCli({ root: ROOT, timeoutMs: 20_000 })
+  return { ...probe, failed: probe.checks.filter(([, pass]) => !pass).map(([label]) => label) }
+}
+
+test("claude-cli probe passes on a read-only lane", () => {
+  withFakeClaude(() => {
+    const probe = probeWith("ok")
+    assert.equal(probe.ok, true, probe.detail)
+    assert.deepEqual(probe.failed, [])
+  })
+})
+
+for (const [mode, check] of [
+  ["bash", /^init tools within/],
+  ["mcp", /^no MCP servers$/],
+  ["hook", /^repo SessionStart hook did not fire$/],
+  ["write", /^repo snapshot unchanged$/],
+]) {
+  test(`claude-cli probe fails, distinctly, on a lane defect: ${mode}`, () => {
+    withFakeClaude(() => {
+      const probe = probeWith(mode)
+      assert.equal(probe.ok, false)
+      assert.equal(probe.failed.length, 1, probe.detail)
+      assert.match(probe.failed[0], check)
+    })
+  })
+}
+
+test("with only claude installed, doctor selects claude-cli and --offline skips its probe", () => {
+  withFakeClaude((bin) => {
+    for (const t of ["node", "git"]) {
+      const real = execFileSync("sh", ["-c", `command -v ${t}`], { encoding: "utf8" }).trim()
+      execFileSync("ln", ["-s", real, join(bin, t)])
+    }
+    const out = execFileSync("node", [join(ROOT, "scripts/doctor.mjs"), "--offline", "--json"], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: bin },
+    })
+    const results = JSON.parse(out).results
+    assert.ok(results.some((r) => r.label === "consultant: claude-cli"), "claude-cli not selected")
+    assert.equal(results.find((r) => r.label === "claude-cli read-only").status, "skip")
+  })
 })

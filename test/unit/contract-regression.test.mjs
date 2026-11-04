@@ -122,3 +122,83 @@ test("no-file still means zero writes", () => {
   assert.match(section(md, 0), /performs \*\*zero\*\* writes anywhere on disk/)
   assert.match(md.split("## Hard rules")[1], /with `no-file` there is no write at all/)
 })
+
+test("§0 documents the consultant cascade, the extra advisor and the family vote rules", () => {
+  // Selection lives in run-lane select; the prompt must expose the flag and never re-derive it.
+  const md = command()
+  const s0 = section(md, 0)
+  assert.match(md.split("\n---\n")[0], /consultant=<codex\|pi\|claude-cli\|claude>/, "argument-hint lists consultant=")
+  assert.match(s0, /`consultant=<codex\|pi\|claude-cli>`/)
+  assert.match(s0, /`claude` ≡ `claude-cli`/)
+  assert.match(s0, /`codex` → `pi` → `claude-cli`/)
+  assert.match(s0, /reported `unavailable`, never replaced/)
+  assert.match(s0, /skipped \(pi is the consultant\)/)
+  assert.match(s0, /pi --list-models/)
+  assert.match(s0, /never falls back to pi's unpinned default/)
+  assert.match(s0, /Read `extraSameEngine` from `review\.decision\.json`/)
+  assert.doesNotMatch(s0, /openai-codex` \/ `gpt-5\.x/, "the prose pi-vs-codex engine check is gone")
+  assert.match(s0, /with three voters .* 2 of 3 confirm/)
+  assert.match(s0, /\*\*One refuter per model family\*\* \(intended change\)/)
+})
+
+test("§2 selects the consultants with one run-lane select call", () => {
+  const s2 = section(command(), 2)
+  assert.match(s2, /run-lane\.mjs" select --wd <literal WD> \[--consultant <x>\] \[--extra \[--extra-model <m>\]\]/)
+  assert.equal(s2.split(" select --wd").length - 1, 1)
+  assert.match(s2, /\$WD\/consultants\.json/)
+  assert.doesNotMatch(s2, /codex --version|pi --version/)
+})
+
+test("§4 gives the graph CLI hint to codex only and names briefs from consultants.json", () => {
+  const s4 = section(command(), 4)
+  assert.match(s4, /\*\*in the codex brief only\*\*/)
+  assert.match(s4, /claude-cli and pi run without a shell/)
+  assert.match(s4, /each file named by a lane's `brief` in `consultants\.json`/)
+  assert.match(s4, /`\$WD\/brief\.md` serves the schema lanes \(codex, claude-cli\)/)
+})
+
+test("§5 and §8 run lanes and refuters from consultants.json values, not fixed codex/pi lines", () => {
+  const md = command()
+  const s5 = section(md, 5)
+  const s8 = section(md, 8)
+  for (const s of [s5, s8]) {
+    assert.doesNotMatch(s, /run (codex|pi) --wd/, "no hard-coded codex/pi lane line")
+    assert.match(s, /one line per consultants\.json lane/)
+  }
+  assert.match(s5, /run <name> --wd "\$WD" --name <name> .*--brief-file "\$WD\/<brief>" .*\[--model <model>\] \[--skip <skip> --skip-reason "<skipReason>"\] &/)
+  assert.match(s5, /--phase review --lanes <name>/)
+  assert.match(s8, /run <name> --wd "\$WD" --name <name>-refuter .*--brief-file "\$WD\/<refuterBrief>"/)
+  assert.match(s8, /--from-decision "\$WD\/review\.decision\.json"/)
+  assert.match(s8, /\$WD\/<name>-refuter\.status\.json/)
+  assert.match(s8, /--phase sceptic --lanes <name>-refuter/)
+  assert.match(s8, /`excluded`/)
+  assert.match(s8, /`strict → basic`, or `strict → basic \(no independent refuter\)`/)
+  assert.match(s8, /when no refuter voted at all, `voteMode` is `strict → basic`/i)
+  assert.match(s8, /with three, 2 of 3 confirm/)
+})
+
+test("§6/§7/§9 count families and name the consultant", () => {
+  const md = command()
+  const s6 = section(md, 6)
+  const s7 = section(md, 7)
+  const s9 = md.split("\n## 9. ")[1]?.split("\n## Hard rules")[0] // the report template has its own ## headings
+  // decideReview emits `family` and `independence` at the top level, not under `lanes.<name>`.
+  assert.match(s6, /top-level `family\.<name>` is the lane's model family/)
+  assert.match(s6, /top-level `independence\.<name>` is `model \| context \| unknown`/)
+  assert.doesNotMatch(s6, /`lanes\.<name>`[^;]*`independence`/)
+  assert.match(s7, /distinct \*\*known\*\* families/)
+  assert.match(s7, /every other lane's family is `family\.<name>` in `review\.decision\.json`/)
+  assert.match(s7, /`\[claude\|codex\|pi\]` with codex and pi both on `openai` is \*\*two\*\* sources/)
+  assert.match(s9, /`independence\.<name>` = "context" in review\.decision\.json/)
+  assert.match(s9, /counted from `family\.<name>`/)
+  assert.match(s6, /`extraSameEngine`/)
+  assert.match(s6, /an empty `claude-cli` result is weak evidence/)
+  assert.match(s7, /\*\*Agreement counts families, not tokens\.\*\*/)
+  assert.match(s7, /`\[claude\|claude-cli\]` is \*\*one\*\* source/)
+  assert.match(s7, /single source, i\.e\. one family/)
+  assert.match(s9, /consultant: <name> \(<reason>\)/)
+  assert.match(s9, /> Consultant is the same model family as the panel \(claude-cli\): context-independent only\./)
+  assert.match(s9, /claude-cli=ok/)
+  assert.match(s9, /`voteMode: strict \| strict → basic \| strict → basic \(no independent refuter\)`/)
+  assert.match(s9, /`extraSameEngine: true`/)
+})

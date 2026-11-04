@@ -6,7 +6,7 @@ every serious finding. Back to the [README](../README.md).
 
 ```text
 /consensus-review [<PR>] [deep|minimal] [dims=<list>|arch] [sceptic=off|basic|strict]
-                  [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped|full|off]
+                  [consultant=<codex|pi|claude-cli|claude>] [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped|full|off]
                   [out=<path>|no-file] [lang=<language>]
 ```
 
@@ -28,7 +28,8 @@ never passes for a default.
 | `sceptic=strict`          | the default: an independent verifier plus the consultants re-run as refuters, majority vote per finding                                      |
 | `sceptic=basic`           | the verifier alone, no vote                                                                                                                  |
 | `sceptic=off`             | no sceptic pass (`no-sceptic` is an alias)                                                                                                   |
-| `extra-advisor[=<model>]` | add `pi` as a second consultant; `=<model>` picks its model, for example `extra-advisor=sonnet:high`                                         |
+| `consultant=<name>`       | force the consultant: `codex`, `pi` or `claude-cli` (`claude` is an alias). A forced consultant that is missing is `unavailable`, never replaced |
+| `extra-advisor[=<model>]` | add `pi` as a second consultant; `=<model>` picks its model and overrides the automatic choice, for example `extra-advisor=sonnet:high`      |
 | `timeout=<sec>`           | wall clock per attempt, default `900`, clamped to `[30, 1800]`; retried once, at most 2×T per phase                                          |
 | `p2=grouped`              | the default: up to 7 P2s listed, the rest rolled up by theme                                                                                 |
 | `p2=full` / `p2=off`      | list every P2 / show only the count                                                                                                          |
@@ -62,12 +63,15 @@ codex review of a small repository has been measured still working at
    Dockerfiles, CI and Terraform does) and its *blast radius* (shared modules, contracts,
    manifests, migrations, auth, fan-in; fan-in comes from `codegraph`
    when it is installed).
-3. **Review.** The tier's Claude agents run read-only. `codex` (and `pi`
-   with `extra-advisor`) review the same change independently from a
+3. **Review.** The tier's Claude agents run read-only. The consultant
+   (see below) and `pi` with `extra-advisor` review the same change independently from a
    short brief that does not lead them. The agents and codex may use a
    code graph; pi runs with a read-only toolset and no shell
    (`read,grep,find,ls`, with `--no-mcp` so no MCP server tools are
-   loaded), so it navigates by reading and grepping.
+   loaded), so it navigates by reading and grepping. It also runs
+   without extensions, skills, prompt templates, context files or a
+   saved session (`--no-extensions --no-session --no-skills
+   --no-prompt-templates --no-context-files --no-approve`).
 4. **Merge.** The arbiter deduplicates, tags each finding with its
    dimension and who found it (`[claude|codex|pi]`), and sets the final
    severity.
@@ -97,9 +101,35 @@ instead of piling up at T2.
 
 `extra-advisor` adds `pi` at every tier above T0.
 
+### The consultant
+
+The consultant is the first installed of `codex` → `pi` → `claude-cli`;
+`consultant=` overrides it. The report header says which ran and why
+(`consultant: <name> (<reason>)`). opencode is not supported yet.
+
+- **pi's model depends on its role.** Claude models are never picked
+  automatically, and pi's own default is never used unpinned.
+  - As the consultant: an OpenAI model first, then glm, qwen, kimi via
+    `opencode-go`.
+  - As the extra: glm, qwen, kimi.
+  - `extra-advisor=<model>` overrides the choice. See
+    [models.md](models.md#how-pi-picks-its-model). pi runs without
+    extensions, so a model whose provider only an extension supplies
+    (such as `claude-bridge`) is not available in read-only mode.
+- **claude-cli** is a separate `claude -p` process run with
+  `--safe-mode --restricted --tools Read,Grep,Glob`, no MCP servers and
+  no session persistence; the doctor proves it cannot write. It gives
+  *context* independence only, not model independence, so it counts as
+  the same source as the Claude panel. It uses your Claude quota. Under
+  `--json-schema` a refusal comes back as empty findings, so an empty
+  claude-cli result is weak evidence, not a clean bill. Admin-managed
+  policy settings still apply under `--safe-mode`.
+
 **Cost** follows the tier, so triage does most of the saving. `minimal`
 forces the floor; `deep` and `extra-advisor` raise it. Strict sceptic
-adds one codex run, and only on reviews that found a P0 or P1.
+adds one refuter run per voting consultant family (the consultant's,
+plus the extra's when it is another family; none for claude-cli, which
+is the panel's family), and only on reviews that found a P0 or P1.
 
 ### Severity, and the two bars
 
@@ -135,7 +165,14 @@ defend. It tries to refute each P0 and P1 with evidence.
 In `strict` mode the consultants also re-run as refuters and each
 finding is put to a vote. A tie is not a confirmation: with the default
 two voters (verifier and codex), a finding needs both to survive as
-stated. Add `extra-advisor` for a third voter.
+stated. Add `extra-advisor` for a third voter (2 of 3 confirm).
+
+At most one refuter votes per model family. A consultant of the
+panel's family (claude-cli, or pi on a Claude model), a second lane of
+a family that already votes, and any `unknown` family get no refuter.
+Changed in this release: codex plus pi on an OpenAI model now runs one
+refuter, not two. If no refuter is independent, the vote is
+`strict → basic (no independent refuter)`.
 
 Findings that do not survive move to the *Unconfirmed* or *Unverified*
 sections of the report. A P0 is never dropped silently, and every drop

@@ -56,10 +56,10 @@ What each one adds, and what a review does without it:
 
 | Tool        | Adds                                                     | Without it                                                    |
 | ----------- | -------------------------------------------------------- | ------------------------------------------------------------- |
-| `codex`     | the independent consultant and the sceptic's second vote | every review is Claude-only; the report says so               |
+| `codex`     | the default consultant and the sceptic's second vote     | the review falls back to `pi`, else `claude-cli` (context-independent only) |
 | `gh`        | pull requests by number or URL                           | a local clone, or the diff by URL for public repos; private PRs need a clone |
 | `codegraph` | fast, precise blast radius (`impact`, `callers`)         | reviewers trace consumers with grep: slower, less precise     |
-| `pi`        | a second consultant, only with the `extra-advisor` flag  | that flag has nothing to add                                  |
+| `pi`        | the consultant when codex is missing, or a second one with `extra-advisor` | no pi fallback; `extra-advisor` has nothing to add |
 
 `graphify` is also detected and used if present; it is optional
 (`uv tool install graphifyy`, with two `y`s).

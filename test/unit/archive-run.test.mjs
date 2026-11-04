@@ -50,12 +50,12 @@ function fullRun(wd, { strict = true } = {}) {
     "codex.a2.json": { findings: [{ title: "b", severity: "P0", dimension: "impact" }] },
     "codex.json": { findings: [{ title: "b", severity: "P0", dimension: "impact" }] },
     "codex.status.json": {
-      lane: "codex", status: "ok", display: "ok (retried: unparseable)", model: "gpt-x", schema: "/s.json",
+      lane: "codex", kind: "codex", brief: "brief.md", status: "ok", display: "ok (retried: unparseable)", model: "gpt-x", schema: "/s.json",
       attempts: [attempt(1, "unparseable", "2026-01-01T00:00:01.000Z"), attempt(2, "ok", "2026-01-01T00:00:03.000Z")],
     },
     "pi.a1.log": "pi raw output",
     "pi.json": { findings: [{ title: "c", severity: "P2", dimension: "tests" }] },
-    "pi.status.json": { lane: "pi", status: "ok", display: "ok", model: "m1", provider: "fake", attempts: [attempt(1, "ok", "2026-01-01T00:00:02.000Z")] },
+    "pi.status.json": { lane: "pi", kind: "pi", brief: "brief-pi.md", status: "ok", display: "ok", model: "m1", provider: "fake", attempts: [attempt(1, "ok", "2026-01-01T00:00:02.000Z")] },
     "review.decision.json": { lanes: {}, allExternalDown: false, refuters: { "codex-refuter": "run" } },
     "triage.json": { tier: "T2", dims: ["impact", "quality"], basis: "small change" },
     "claude-findings.json": { findings: [{ title: "a", severity: "P2", dimension: "quality", owner: "impact" }] },
@@ -69,8 +69,9 @@ function fullRun(wd, { strict = true } = {}) {
     "refuter-brief-pi.md": "refute these, pi",
     "codex-refuter.a1.log": "refuter log",
     "codex-refuter.a1.json": { verdicts: [{ id: "F2", verdict: "confirmed", evidence: "y" }] },
-    "codex-refuter.status.json": { lane: "codex-refuter", status: "ok", display: "ok", model: null, schema: "/v.json", attempts: [attempt(1, "ok", "2026-01-01T00:01:00.000Z")] },
+    "codex-refuter.status.json": { lane: "codex-refuter", kind: "codex", brief: "refuter-brief.md", status: "ok", display: "ok", model: null, schema: "/v.json", attempts: [attempt(1, "ok", "2026-01-01T00:01:00.000Z")] },
     "pi-refuter.a1.log": "pi refuter raw",
+    // no `brief`/`kind`: a status from before they were recorded, so the prompt comes from the fallback
     "pi-refuter.status.json": { lane: "pi-refuter", status: "ok", display: "ok", attempts: [attempt(1, "ok", "2026-01-01T00:01:00.000Z")] },
     "sceptic.decision.json": { lanes: {}, voteMode: "strict", verifier: "ok", perFinding: { F2: { decision: "confirmed", voters: "3 of 3", noVote: [] } } },
   })
@@ -113,6 +114,9 @@ test("a strict run is archived per the mapping, under the cwd repo even when the
   assert.equal(readFileSync(join(dir, "sources/codex/prompt.md"), "utf8"), "codex brief")
   assert.equal(readFileSync(join(dir, "sources/codex/attempt-1.log"), "utf8"), "attempt 1 prose, not json")
   assert.equal(readFileSync(join(dir, "sources/pi/attempt-1.log"), "utf8"), "pi raw output")
+  assert.equal(readFileSync(join(dir, "sources/pi/prompt.md"), "utf8"), "pi brief")
+  assert.equal(readFileSync(join(dir, "sources/codex-refuter/prompt.md"), "utf8"), "refute these")
+  assert.equal(readFileSync(join(dir, "sources/pi-refuter/prompt.md"), "utf8"), "refute these, pi", "fallback by kind")
   assert.equal(readFileSync(join(dir, "sources/arbiter/command.md"), "utf8"), readFileSync(join(ROOT, "commands/consensus-review.md"), "utf8"))
 
   const panel = readJson(dir, "findings/panel.json").findings
@@ -210,7 +214,41 @@ test("duplicate ids in verifier.verdicts.json: verification.json is not written"
   assert.equal(readJson(r.out.dir, "meta.json").notWritten["findings/verification.json"], "duplicate ids in verifier.verdicts.json: F2")
 })
 
-test("brief.md is expected only when a codex lane ran", (t) => {
+test("a claude-cli run: its prompt, attempts and findings in the panel, consultants.json in decisions", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  put(w.wd, {
+    "diff.patch": DIFF,
+    "brief.md": "claude-cli brief",
+    "consultants.json": { lanes: [{ name: "claude-cli", brief: "brief.md", refuterBrief: "refuter-brief.md", model: "sonnet", skip: null, skipReason: null }], extraNote: null, reason: "claude-cli: no other consultant usable" },
+    "claude-cli.a1.log": "stream-json",
+    "claude-cli.json": { findings: [{ title: "d", severity: "P1", dimension: "impact" }] },
+    "claude-cli.status.json": {
+      lane: "claude-cli", kind: "claude-cli", brief: "brief.md", requestedModel: null, status: "ok", display: "ok",
+      model: "claude-sonnet-5-5", schema: "/s.json", attempts: [attempt(1, "ok", "2026-01-01T00:00:02.000Z")],
+    },
+    "claude-cli-refuter.status.json": {
+      lane: "claude-cli-refuter", kind: "claude-cli", brief: "refuter-brief.md", status: "skipped", display: "skipped (same-family)", attempts: [],
+    },
+    "triage.json": { tier: "T1", dims: ["impact"] },
+    "claude-findings.json": { findings: [{ title: "a", severity: "P2", dimension: "impact" }] },
+    "synthesis.json": { findings: [] },
+  })
+  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
+  assert.equal(r.code, 0, r.stderr)
+  const dir = r.out.dir
+  const files = tree(dir)
+  for (const f of ["decisions/consultants.json", "sources/claude-cli/prompt.md", "sources/claude-cli/attempt-1.log",
+    "sources/claude-cli/status.json", "sources/claude-cli-refuter/status.json"]) assert.ok(files.includes(f), f)
+  assert.equal(files.includes("sources/claude-cli-refuter/prompt.md"), false, "refuter-brief.md was never written")
+  assert.equal(readFileSync(join(dir, "sources/claude-cli/prompt.md"), "utf8"), "claude-cli brief")
+  assert.deepEqual(readJson(dir, "findings/panel.json").findings.map((f) => [f.source, f.title]), [["claude-cli", "d"], ["claude", "a"]])
+  const meta = readJson(dir, "meta.json")
+  assert.deepEqual(meta.missing, [])
+  assert.equal(meta.lanes["claude-cli"].model, "claude-sonnet-5-5")
+})
+
+test("each lane's prompt file is expected: brief.md, brief-pi.md and the refuter briefs that ran", (t) => {
   const w = workspace()
   t.after(w.cleanup)
   // T0: the arbiter alone, no consultant statuses.
@@ -219,7 +257,24 @@ test("brief.md is expected only when a codex lane ran", (t) => {
   assert.deepEqual(meta.missing, [])
   put(w.wd, { "codex.status.json": { lane: "codex", status: "ok", display: "ok", attempts: [] } })
   meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r2.md", "--args-json", "{}"]).out.dir, "meta.json")
+  assert.deepEqual(meta.missing, ["brief.md"], "a status without brief falls back by kind")
+  rmSync(join(w.wd, "codex.status.json"))
+  put(w.wd, { "pi.status.json": { lane: "pi", kind: "pi", brief: "brief-pi.md", status: "ok", display: "ok", attempts: [] } })
+  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r3.md", "--args-json", "{}"]).out.dir, "meta.json")
+  assert.deepEqual(meta.missing, ["brief-pi.md"], "pi expects its own prompt, not brief.md")
+  put(w.wd, { "brief-pi.md": "pi brief" })
+  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r3b.md", "--args-json", "{}"]).out.dir, "meta.json")
+  assert.deepEqual(meta.missing, [])
+  put(w.wd, { "claude-cli.status.json": { lane: "claude-cli", kind: "claude-cli", brief: "brief.md", status: "unavailable", display: "unavailable", attempts: [] } })
+  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r4.md", "--args-json", "{}"]).out.dir, "meta.json")
   assert.deepEqual(meta.missing, ["brief.md"])
+  // A refuter that ran expects its brief; a skipped one never had one written.
+  put(w.wd, {
+    "pi-refuter.status.json": { lane: "pi-refuter", kind: "pi", brief: "refuter-brief-pi.md", status: "failed", display: "failed: x", attempts: [] },
+    "codex-refuter.status.json": { lane: "codex-refuter", kind: "codex", brief: "refuter-brief.md", status: "skipped", display: "skipped (x)", attempts: [] },
+  })
+  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r5.md", "--args-json", "{}"]).out.dir, "meta.json")
+  assert.deepEqual(meta.missing, ["brief.md", "refuter-brief-pi.md"])
 })
 
 test("salvage without --report: run-id salvage-<WD basename>-<ts>; an empty WD lists every expected file as missing", (t) => {

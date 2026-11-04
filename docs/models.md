@@ -19,7 +19,8 @@ without one too. `/consensus-review:doctor` prints what each agent runs on.
 | `test-reviewer`          | `sonnet`                  | session    | the same kind of work, for tests                                          |
 | `finding-verifier`       | `opus`                    | `high`     | see below                                                                 |
 | codex consultant         | codex's configured model  | codex's    | the plugin passes no `--model`                                            |
-| pi consultant            | pi's default, or `extra-advisor=<model>` | pi's | only with `extra-advisor`                                         |
+| pi consultant or extra   | picked by role, or `extra-advisor=<model>` | pi's | see [How pi picks its model](#how-pi-picks-its-model)                  |
+| claude-cli consultant    | `sonnet`                  | CLI default | a separate `claude -p`; same family as the panel                       |
 | `/loop-review` passes    | `sonnet`, or `--model=<m>` | CLI default | every pass and the verification use the same model                     |
 
 **Use Opus for the session.** The arbiter is whatever model the session
@@ -46,18 +47,59 @@ ones already on the panel. Three reviews by one model are one opinion.
 
 - **codex** runs on OpenAI's models, so it is different by default. Its
   model is set in codex's own config, not here.
-- **pi** often defaults to the same engine codex uses (`openai-codex`,
-  `gpt-5.x`). Then the extra lane mostly echoes codex. Pick another
-  model with `extra-advisor=<model>` (for example `extra-advisor=sonnet:high`
-  or `extra-advisor=gemini-2.5-pro`), or set another default in
-  `~/.pi/agent/settings.json`. The report prints pi's resolved
-  `provider/model` and flags the collision.
+- **pi** is pinned to a model of another family, chosen by role (below).
+  Pick your own with `extra-advisor=<model>`. The report prints pi's
+  resolved `provider/model` and flags a same-family collision.
+- **claude-cli** is a different process but the same model family as the
+  panel: context independence only.
+
+## How pi picks its model
+
+pi's model comes from `pi --no-extensions --list-models` (a local
+catalog), by role. pi runs without extensions, skills, context files or a
+saved session, so the catalog leaves out providers that only an extension
+supplies (such as `claude-bridge`); an explicit `extra-advisor=<model>`
+naming one is not available in read-only mode.
+
+- **pi is the consultant**: an OpenAI model first, then glm → qwen → kimi
+  via `opencode-go`.
+- **pi is the extra**: glm → qwen → kimi, so it differs from codex and
+  from the Claude panel.
+- Claude models are never picked automatically, and pi's default model is
+  never used unpinned. With no usable model, an automatic pi is skipped
+  (the cascade moves on); a forced or extra pi is `unavailable`.
+- **"Newest"** within a family: drop names matching `flash`, `free` or
+  `mini`, then take the highest by numeric-aware name order.
+- `extra-advisor=<model>` overrides all of this.
+- A listed model is not necessarily one you are logged in to.
+
+### Model families
+
+Independence and voting use one family per lane. codex is `openai` and
+claude-cli is `anthropic`. A pi lane is classified from its
+`provider model` string by the first match in this order, anthropic first:
+
+| Family     | Matches                                  |
+| ---------- | ---------------------------------------- |
+| `anthropic`| `claude`, `anthropic`                    |
+| `openai`   | `openai`, `gpt`, `codex`, `o1`..`o9`     |
+| `google`   | `gemini`, `google`                       |
+| `deepseek` | `deepseek`                               |
+| `qwen`     | `qwen`                                   |
+| `mistral`  | `mistral`                                |
+| `meta`     | `llama`, `meta`                          |
+| `xai`      | `grok`, `xai`                            |
+| `zhipu`    | `glm`, `zhipu`                           |
+| `moonshot` | `kimi`, `moonshot`                       |
+
+Only positive matches count. Anything else is `unknown`: it adds no
+independent source and never votes.
 
 ## Changing models
 
 - **Arbiter**: `/model` in your session.
 - **`/loop-review`**: `--model=<m>`, for example `--model=opus`.
-- **pi**: `extra-advisor=<model>`.
+- **pi**: `extra-advisor=<model>`; see above.
 - **codex**: codex's own configuration.
 - **The agents**: their model and effort are in the frontmatter of
   `agents/*.md`. A plugin's files are replaced on update, so changing

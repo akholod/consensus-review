@@ -20,8 +20,8 @@ It reviews a pull request or your uncommitted changes in four
 dimensions: architecture, quality, impact and tests. Two strategies:
 
 - **`/consensus-review`** runs a panel in parallel: Claude reviewers for
-  each dimension plus [`codex`](https://github.com/openai/codex) as an
-  independent consultant. An arbiter merges what they found and shows
+  each dimension plus one independent consultant: [`codex`](https://github.com/openai/codex),
+  else `pi`, else a separate read-only `claude -p`. An arbiter merges what they found and shows
   who agreed on each finding.
 - **`/loop-review`** builds the context once and reviews it in several
   passes. Each pass is told what is already covered, never why, so it
@@ -85,7 +85,10 @@ for fast blast-radius. None of them is required; see
 The report goes to the terminal and to `.reviews/`. Each finding carries
 its location, severity, a failure scenario and an agreement badge such
 as `[claude|codex]`. Its header says which sources ran, so a review that
-lost its consultant says so instead of looking complete.
+lost its consultant says so instead of looking complete. The header also
+names the consultant and why it was chosen. `claude-cli` is independent
+in context but not in model; agreement is counted per model family, so
+`[claude|claude-cli]` is one source.
 
 Small changes stay cheap: a triage step sizes the change and its blast
 radius first, and a docs-only diff skips the panel entirely.
@@ -94,7 +97,7 @@ radius first, and a docs-only diff skips the panel entirely.
 
 | Command                    | Does                                                         |
 | -------------------------- | ------------------------------------------------------------ |
-| `/consensus-review`        | parallel panel with an arbiter, codex consultant and sceptic |
+| `/consensus-review`        | panel, arbiter, consultant (codex→pi→claude-cli), sceptic    |
 | `/loop-review`             | sequential passes with evidence per risk cell                |
 | `/impact-review`           | correctness, regressions, security, the code around the diff |
 | `/quality-review`          | conventions, duplication, AI slop, contracts                 |
@@ -135,9 +138,14 @@ Everything the plugin runs, and where your code goes:
   run in your Claude Code session. `/consensus-review` gives the diff
   and a short brief to `codex exec` (through the lane helper below),
   which runs in a read-only sandbox, reads files in your repository,
-  and sends what it reads to OpenAI under your codex login. With
+  and sends what it reads to OpenAI under your codex login. Without
+  codex, the consultant is `pi`, else `claude-cli`: a separate
+  `claude -p` with a read-only toolset that sends what it reads to
+  Anthropic and uses your Claude quota. With
   `extra-advisor`, `pi` does the same with a read-only toolset and the
-  provider pi is set up for. `/loop-review` runs `claude -p`, which
+  provider pi is set up for. pi runs without extensions, skills, context
+  files or a saved session, so a provider that only an extension supplies
+  (such as `claude-bridge`) is not available to it. `/loop-review` runs `claude -p`, which
   sends the diff and its context to Anthropic.
 - **GitHub, for pull requests.** `gh pr diff` and `gh pr view` read the
   PR. Without `gh`, a local clone is used, or for a public repository
@@ -167,7 +175,9 @@ The Claude agents run with your session's tools and permissions, minus
 The panel is plain Claude Code: commands and read-only subagents
 (`disallowedTools: Write, Edit`), plus one small Node helper
 (`scripts/run-lane.mjs`) that runs `codex` and `pi` with their read-only
-flags (`pi`: `--tools read,grep,find,ls --no-mcp`), retries a failed run
+flags (`pi`: `--tools read,grep,find,ls --no-mcp --no-extensions
+--no-session --no-skills --no-prompt-templates --no-context-files
+--no-approve`), retries a failed run
 once and kills its process group on timeout. `/loop-review` is a small
 Node runtime with no dependencies. Its passes run as separate
 `claude -p` processes with every file, shell, web and MCP tool removed,

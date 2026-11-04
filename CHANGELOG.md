@@ -4,6 +4,25 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
 
 ## Unreleased
 
+- **The consultant is chosen from the harnesses the machine has**
+  ([#3](https://github.com/akholod/consensus-review/issues/3)). The
+  cascade is `codex → pi → claude-cli`; `consultant=<codex|pi|claude-cli|claude>`
+  forces one, and a forced one that is missing is `unavailable`, never
+  replaced. `claude-cli` is a separate read-only `claude -p`
+  (`--safe-mode --restricted --tools Read,Grep,Glob`, no MCP), proven by
+  the doctor; it gives context independence only and uses your Claude
+  quota, and admin-managed policy settings still apply under
+  `--safe-mode`. pi now runs isolated too (`--no-extensions --no-session
+  --no-skills --no-prompt-templates --no-context-files --no-approve`) and
+  lists its models with `--no-extensions`, so a provider that only an
+  extension supplies (such as `claude-bridge`) is not available. pi's model is picked by
+  role (consultant: OpenAI, then glm/qwen/kimi; extra: glm/qwen/kimi),
+  never a Claude model or pi's unpinned default. Agreement and votes now
+  count model families: `[claude|claude-cli]` is one source, `unknown`
+  families never vote. **Changed:** at most one refuter votes per family,
+  so codex plus pi on OpenAI runs one refuter, not two. opencode is not
+  supported yet.
+
 - **Each run leaves a private archive**
   ([#5](https://github.com/akholod/consensus-review/issues/5)).
   `.reviews/<run-id>/` keeps the diff, each source's prompt and raw
