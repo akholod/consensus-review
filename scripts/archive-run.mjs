@@ -14,7 +14,7 @@ import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import { canArchive, deriveEvents, runId, writeArchive } from "./lib/archive.mjs"
-import { BRIEFS } from "./lib/lanes.mjs"
+import { BRIEFS, fallbackVerdicts } from "./lib/lanes.mjs"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const OPTIONS = { wd: { type: "string" }, report: { type: "string" }, "args-json": { type: "string" }, off: { type: "boolean" } }
@@ -34,10 +34,11 @@ const readJson = (path) => {
 class UsageError extends Error {}
 
 /**
- * synthesis.json joined by id with the final verdict: strict from sceptic.decision.json, basic from
- * verifier.verdicts.json. A join over ids that do not line up is refused: `{ reason }`.
+ * synthesis.json joined by id with the final verdict: from sceptic.decision.json (mode from its
+ * voteMode), or, when there is no usable decision, the single safe fallback over
+ * verifier.verdicts.json (mode `fallback`; a missing verifier file leaves every P0/P1 `unconfirmed`). A join over ids that do not line up is refused: `{ reason }`.
  */
-function verification({ synthesis, sceptic, verdicts, ids }) {
+function verification({ synthesis, sceptic, verdicts, ids, scepticOff }) {
   if (!Array.isArray(synthesis?.findings)) return { reason: "no synthesis.json" }
   const raw = synthesis.findings.map((f) => f?.id)
   const invalid = raw.filter((id) => typeof id !== "string" || !id)
@@ -45,19 +46,16 @@ function verification({ synthesis, sceptic, verdicts, ids }) {
   const dupes = [...new Set(raw.filter((id, i) => raw.indexOf(id) !== i))]
   if (dupes.length) return { reason: `duplicate ids in synthesis.json: ${dupes.join(", ")}` }
   const known = new Set(synthesis.findings.map((f) => f.id))
-  const strict = sceptic && !sceptic.error && sceptic.perFinding && typeof sceptic.perFinding === "object"
-  const list = Array.isArray(verdicts) ? verdicts : Array.isArray(verdicts?.verdicts) ? verdicts.verdicts : null
-  if (!strict && !list) return { reason: "the sceptic did not run" }
-  const vids = strict ? [] : list.map((v) => v?.id)
-  const vdupes = [...new Set(vids.filter((id, i) => vids.indexOf(id) !== i))]
-  if (vdupes.length) return { reason: `duplicate ids in verifier.verdicts.json: ${vdupes.join(", ")}` }
-  const byId = strict
+  const decided = sceptic && !sceptic.error && sceptic.perFinding && typeof sceptic.perFinding === "object"
+  if (!decided && scepticOff) return { reason: "the sceptic did not run" }
+  const byId = decided
     ? new Map(Object.entries(sceptic.perFinding).map(([id, p]) => [id, { verdict: p.decision, voters: p.voters }]))
-    : new Map(list.map((v) => [v.id, { verdict: v.verdict, evidence: v.evidence }]))
-  const unknown = [...(strict && Array.isArray(ids) ? ids : []), ...byId.keys()].filter((id) => !known.has(id))
+    : new Map(Object.entries(fallbackVerdicts(synthesis.findings, verdicts)).map(([id, verdict]) => [id, { verdict }]))
+  const unknown = [...(decided && Array.isArray(ids) ? ids : []), ...byId.keys()].filter((id) => !known.has(id))
   if (unknown.length) return { reason: `ids not in synthesis.json: ${[...new Set(unknown)].join(", ")}` }
+  const mode = !decided ? "fallback" : sceptic.voteMode === "basic" ? "basic" : "strict"
   const findings = synthesis.findings.map((f) => ({ ...f, ...(byId.get(f.id) ?? { verdict: null }) }))
-  return { value: { mode: strict ? "strict" : "basic", findings } }
+  return { value: { mode, findings } }
 }
 
 function finish(v) {
@@ -111,7 +109,8 @@ function finish(v) {
     const findings = readJson(at(file))?.findings
     if (Array.isArray(findings)) panel.push(...findings.map((f) => ({ ...f, source })))
   }
-  const joined = verification({ synthesis, sceptic: decisions.sceptic, verdicts, ids })
+  const sceptic = String(flags.sceptic ?? (flags["no-sceptic"] ? "off" : "strict")).toLowerCase()
+  const joined = verification({ synthesis, sceptic: decisions.sceptic, verdicts, ids, scepticOff: sceptic === "off" })
   if (joined.reason) notWritten["findings/verification.json"] = joined.reason
 
   const json = (value) => `${JSON.stringify(value, null, 2)}\n`
@@ -145,12 +144,11 @@ function finish(v) {
   if (has("verifier.verdicts.json") || decisions.sceptic) agents.push("finding-verifier")
   const unavailable = agents.map((source) => ({ source, reason: UNAVAILABLE }))
 
-  const sceptic = String(flags.sceptic ?? (flags["no-sceptic"] ? "off" : "strict")).toLowerCase()
   const p0p1 = (synthesis?.findings ?? []).some((f) => f?.severity === "P0" || f?.severity === "P1")
   // Every lane's prompt, deduplicated; a refuter's brief is written only for a refuter marked `run`.
   const briefed = names.filter((name) => !(REFUTER.test(name) && ["skipped", "unavailable"].includes(statuses[name].status)))
   const expected = [...new Set(briefed.map(prompt).filter(Boolean)), "diff.patch", "triage.json", "claude-findings.json", "synthesis.json"]
-  if (sceptic !== "off" && p0p1) expected.push(...(sceptic === "strict" ? ["ids.json"] : []), "verifier.verdicts.json")
+  if (sceptic !== "off" && p0p1) expected.push("ids.json", "verifier.verdicts.json")
 
   const diff = has("diff.patch") ? readFileSync(at("diff.patch")) : null
   const lanes = Object.fromEntries(Object.entries(statuses).map(([name, s]) =>

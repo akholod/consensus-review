@@ -18,6 +18,8 @@ A P2 must name **both** the concrete cost of leaving it **and** a project-specif
 
 ## Verification vocabulary
 
-`finding-verifier` emits exactly three verdicts: `confirmed`, `unconfirmed`, `refuted`, plus an optional `suggested_severity`.
+The `/loop-review` verifier (`prompts/loop-review/verify.md`) emits exactly three verdicts: `confirmed`, `unconfirmed`, `refuted`, plus an optional `suggested_severity`.
 
 `reduced` is a **normalized** outcome, not a verifier output: it is `confirmed` accompanied by a `suggested_severity` lower than the reported severity. Consumers derive it; the verifier never emits it.
+
+`/consensus-review` sceptic votes (`finding-verifier` and the refuters) are defined by `contracts/verdict.schema.json`: `AGREE`, `DISAGREE_EVIDENCE` or `DISAGREE_CONCERN`, each with a `citation` and a `suggested_severity`. They are tallied into a decision per finding, and the decisions keep the words `confirmed`, `unconfirmed`, `refuted`.

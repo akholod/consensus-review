@@ -8,7 +8,13 @@
 import { existsSync, readFileSync } from "node:fs"
 import { validate } from "./json-schema.mjs"
 
-export const VERDICTS = ["confirmed", "unconfirmed", "refuted"]
+export const VERDICTS = ["AGREE", "DISAGREE_EVIDENCE", "DISAGREE_CONCERN"]
+
+/** Pre-#8 words, read by parseVotes only; `refuted` needs a valid citation to stay evidence. */
+const LEGACY_VERDICTS = { confirmed: "AGREE", unconfirmed: "DISAGREE_CONCERN", refuted: "DISAGREE_EVIDENCE" }
+
+/** The short vote kinds of `perFinding.<id>.label`, and nowhere else. */
+const DISPLAY_KIND = { AGREE: "AGREE", DISAGREE_EVIDENCE: "EVIDENCE", DISAGREE_CONCERN: "CONCERN" }
 
 const MARKERS = {
   findings: ["===FINDINGS_START===", "===FINDINGS_END==="],
@@ -59,7 +65,7 @@ function failure(rc, log) {
 
 let findingSchema = null // loaded on first use, so a missing file is probeCodex's diagnostic, not an import crash
 
-/** Findings must match the contract entry by entry; verdicts are checked per id by parseVerdicts. */
+/** Findings must match the contract entry by entry; verdicts are checked per id by parseVotes. */
 function payloadProblem(payload, requireKey) {
   if (!Array.isArray(payload?.[requireKey])) return `output has no ${requireKey} array — the schema was not honoured`
   if (requireKey !== "findings") return null
@@ -371,12 +377,31 @@ export function selectConsultants({ installed, consultant, extra, extraModel, pi
   return { lanes, extraNote, reason: notes.join("; ") }
 }
 
+/** `{file, line, quote}` with `line` as a string, or null. pi and the verifier are never schema-checked. */
+function validCitation(c) {
+  if (!c || typeof c !== "object" || Array.isArray(c)) return null
+  if (typeof c.file !== "string" || c.file === "" || typeof c.quote !== "string") return null
+  if (typeof c.line !== "string" && !(typeof c.line === "number" && Number.isFinite(c.line))) return null
+  return { file: c.file, line: String(c.line), quote: c.quote }
+}
+
+/** One vote in the schema's words: `{verdict, evidence, citation, reason}`; `reason` names a downgrade. */
+function toVote(item) {
+  const verdict = VERDICTS.includes(item.verdict) ? item.verdict : LEGACY_VERDICTS[item.verdict]
+  const evidence = typeof item.evidence === "string" ? item.evidence : item.evidence == null ? "" : JSON.stringify(item.evidence)
+  if (verdict !== "DISAGREE_EVIDENCE") return { verdict, evidence, citation: null, reason: null }
+  const citation = validCitation(item.citation)
+  if (citation) return { verdict, evidence, citation, reason: null }
+  const reason = item.verdict === "refuted" ? "legacy refuted without citation" : "malformed citation"
+  return { verdict: "DISAGREE_CONCERN", evidence, citation: null, reason }
+}
+
 /**
- * Count the refuter's votes. Only `id ∈ sentIds` with a known verdict counts; an unknown id is
+ * Read one voter's votes. Only `id ∈ sentIds` with a known verdict counts; an unknown id is
  * ignored (and reported); a duplicated id invalidates that id's vote. `payload` is `{ verdicts }`
  * or a bare array (finding-verifier's own format).
  */
-export function parseVerdicts(payload, sentIds) {
+export function parseVotes(payload, sentIds) {
   const items = Array.isArray(payload) ? payload : Array.isArray(payload?.verdicts) ? payload.verdicts : []
   const sent = new Set(sentIds)
   const seen = new Map()
@@ -386,13 +411,13 @@ export function parseVerdicts(payload, sentIds) {
       ignored.push(item?.id)
       continue
     }
-    seen.set(item.id, seen.has(item.id) ? null : item.verdict)
+    seen.set(item.id, seen.has(item.id) ? null : item)
   }
   const votes = {}
   const duplicates = []
-  for (const [id, verdict] of seen) {
-    if (verdict === null) duplicates.push(id)
-    else if (VERDICTS.includes(verdict)) votes[id] = verdict
+  for (const [id, item] of seen) {
+    if (item === null) duplicates.push(id)
+    else if (VERDICTS.includes(item.verdict) || Object.hasOwn(LEGACY_VERDICTS, item.verdict)) votes[id] = toVote(item)
   }
   return { status: Object.keys(votes).length ? "ok" : "unparseable", votes, ignored, duplicates }
 }
@@ -418,26 +443,77 @@ export function selectRefuters(lanes) {
 }
 
 /**
- * Lenient majority per finding over the voters that returned a valid verdict for it. A strict
- * majority decides; a tie or no vote at all is `unconfirmed`. Without a vote from the `verifier`
- * ballot the finding is `unconfirmed` whatever the refuters said: a refuter never decides alone.
- * `ballots` maps each voter in the set (the verifier first) to its votes; every id gets an entry,
- * `voters` reads "<n that voted> of <set size>" and `noVote` names who did not vote on it.
+ * The vote rules per finding, over checked votes (a DISAGREE_EVIDENCE here has a verified quote).
+ * `ballots` maps each voter in the set (the verifier first) to `{id: schema word}`. In order:
+ * no verifier vote → unconfirmed; E > A and (verifier EVIDENCE or 2E > cast) → refuted;
+ * A > E and (verifier AGREE or 2A > cast) → confirmed; else unconfirmed. Concerns count in `cast`
+ * only. `voters` reads "<n that voted> of <set size>" and `noVote` names who did not vote on it.
  */
 export function tallyVotes(ids, ballots) {
   const perFinding = {}
   for (const id of ids) {
-    const cast = Object.values(ballots).map((b) => b[id]).filter(Boolean)
-    const counts = {}
-    for (const v of cast) counts[v] = (counts[v] ?? 0) + 1
-    const winner = Object.keys(counts).find((v) => counts[v] * 2 > cast.length)
+    const votes = Object.fromEntries(Object.entries(ballots).filter(([, b]) => b[id]).map(([name, b]) => [name, b[id]]))
+    const cast = Object.values(votes)
+    const A = cast.filter((v) => v === "AGREE").length
+    const E = cast.filter((v) => v === "DISAGREE_EVIDENCE").length
+    const own = votes.verifier
+    const decision = !own ? "unconfirmed"
+      : E > A && (own === "DISAGREE_EVIDENCE" || 2 * E > cast.length) ? "refuted"
+        : A > E && (own === "AGREE" || 2 * A > cast.length) ? "confirmed"
+          : "unconfirmed"
     perFinding[id] = {
-      decision: (ballots.verifier?.[id] && winner) || "unconfirmed",
+      decision,
       voters: `${cast.length} of ${Object.keys(ballots).length}`,
       noVote: Object.keys(ballots).filter((name) => !ballots[name][id]),
+      votes,
     }
   }
   return perFinding
+}
+
+const shortName = (voter) => voter.replace(/-refuter$/, "")
+const MAX_NOTE = 500
+// Runs of C0/C1 controls (newlines and tabs included) and the whitespace around them.
+const LINE_BREAKS = /\s*[\x00-\x1F\x7F-\x9F]+\s*/g
+
+function noteText(evidence) {
+  const text = evidence.replace(LINE_BREAKS, " ").trim()
+  return text.length > MAX_NOTE ? `${text.slice(0, MAX_NOTE - 1)}…` : text
+}
+
+/** A fence that a quote cannot close: one backtick longer than its longest run, at least 3. */
+const fenceFor = (quote) => "`".repeat(Math.max(3, ...(quote.match(/`+/g) ?? []).map((run) => run.length + 1)))
+
+/**
+ * The language-neutral tokens the report copies: `label`, each concern's own words collapsed to
+ * one line, and on a `refuted` finding the verified quote (the verifier's first) with its fence.
+ */
+export function renderSceptic(entry) {
+  const notes = Object.entries(entry.notes ?? {})
+  const concerns = notes.filter(([, n]) => n.kind === "DISAGREE_CONCERN")
+    .map(([voter, n]) => ({ voter: shortName(voter), text: n.text.replace(LINE_BREAKS, " ").trim() }))
+  const cited = entry.decision === "refuted" ? notes.find(([, n]) => n.citation) : undefined
+  const refutation = cited ? {
+    voter: shortName(cited[0]),
+    loc: `${cited[1].citation.file}:${cited[1].citation.line}`.replace(LINE_BREAKS, " ").replaceAll("`", ""),
+    quote: cited[1].citation.quote,
+    fence: fenceFor(cited[1].citation.quote),
+  } : null
+  return { label: entry.label, concerns, refutation }
+}
+
+/**
+ * The single safe fallback when sceptic.decision.json is missing or carries `error`: every P0/P1 id
+ * of synthesis.json is `confirmed` only on one verifier AGREE (or legacy `confirmed`) for it, and
+ * `unconfirmed` otherwise, a duplicated vote included. Never `refuted`: no quote was checked.
+ */
+export function fallbackVerdicts(synthesisFindings, verifierPayload) {
+  const ids = (Array.isArray(synthesisFindings) ? synthesisFindings : [])
+    .filter((f) => f?.severity === "P0" || f?.severity === "P1").map((f) => f.id)
+  const items = Array.isArray(verifierPayload) ? verifierPayload : Array.isArray(verifierPayload?.verdicts) ? verifierPayload.verdicts : []
+  const count = (id) => items.filter((v) => v?.id === id).length
+  const agree = (id) => items.some((v) => v?.id === id && (v.verdict === "AGREE" || v.verdict === "confirmed"))
+  return Object.fromEntries(ids.map((id) => [id, count(id) === 1 && agree(id) ? "confirmed" : "unconfirmed"]))
 }
 
 /** The ids sent to the voters: a non-empty array of non-empty strings, or null (fail closed). */
@@ -491,8 +567,10 @@ export function decideReview(lanes) {
  * (null when it did not end ok). Skipped/unavailable refuters are not in the voter set; failed and
  * degraded ones are, with no vote. An ok refuter whose own run is of the panel's family, of a family
  * already counted, or `unknown` is left out of the set and named in `excluded`.
+ * Before the tally each DISAGREE_EVIDENCE quote goes through the injected `verifyCitation`; one that
+ * does not verify, or any when none is injected, is a DISAGREE_CONCERN named in `downgraded`.
  */
-export function decideSceptic(lanes, ids, verifierPayload, refuterPayloads) {
+export function decideSceptic(lanes, ids, verifierPayload, refuterPayloads, { verifyCitation } = {}) {
   const verifier = verifierPayload === undefined ? "missing"
     : Array.isArray(verifierPayload) || Array.isArray(verifierPayload?.verdicts) ? "ok" : "invalid"
   if (!validIds(ids)) {
@@ -510,12 +588,37 @@ export function decideSceptic(lanes, ids, verifierPayload, refuterPayloads) {
     else counted[fam] = name
     return !excluded[name]
   })
-  const refuterBallots = Object.fromEntries(voters
-    .map(([name]) => [name, refuterPayloads[name] ? parseVerdicts(refuterPayloads[name], ids).votes : {}]))
-  const ballots = { verifier: verifier === "ok" ? parseVerdicts(verifierPayload, ids).votes : {}, ...refuterBallots }
+  const check = (vote) => {
+    if (vote.verdict !== "DISAGREE_EVIDENCE") return vote
+    let result = { verified: false, reason: "no citation check" }
+    if (verifyCitation) {
+      try {
+        result = verifyCitation(vote.citation)
+      } catch {
+        result = { verified: false, reason: "check failed" }
+      }
+    }
+    return result?.verified ? vote
+      : { ...vote, verdict: "DISAGREE_CONCERN", citation: null, reason: result?.reason ?? "citation not verified" }
+  }
+  const parse = (payload) => Object.fromEntries(Object.entries(parseVotes(payload, ids).votes).map(([id, v]) => [id, check(v)]))
+  const refuterBallots = Object.fromEntries(voters.map(([name]) => [name, refuterPayloads[name] ? parse(refuterPayloads[name]) : {}]))
+  const ballots = { verifier: verifier === "ok" ? parse(verifierPayload) : {}, ...refuterBallots }
+  const words = Object.fromEntries(Object.entries(ballots)
+    .map(([name, b]) => [name, Object.fromEntries(Object.entries(b).map(([id, v]) => [id, v.verdict]))]))
+  const perFinding = tallyVotes(ids, words)
+  for (const [id, entry] of Object.entries(perFinding)) {
+    const cast = Object.keys(entry.votes).map((name) => [name, ballots[name][id]])
+    entry.downgraded = Object.fromEntries(cast.filter(([, v]) => v.reason).map(([name, v]) => [name, v.reason]))
+    entry.label = cast.map(([name, v]) => `${shortName(name)}: ${DISPLAY_KIND[v.verdict]}`).join(", ")
+    entry.notes = Object.fromEntries(cast.map(([name, v]) =>
+      [name, { kind: v.verdict, text: noteText(v.evidence), ...(v.citation && { citation: v.citation }) }]))
+    entry.render = renderSceptic(entry)
+  }
   const familySkip = Object.values(lanes).some((s) => /^skipped \((same-family|independence unknown)/.test(s.display))
-  const voteMode = Object.values(refuterBallots).some((b) => Object.keys(b).length) ? "strict"
-    : !voters.length && (familySkip || Object.keys(excluded).length) ? "strict → basic (no independent refuter)"
-      : "strict → basic"
-  return { lanes, voteMode, verifier, excluded, perFinding: tallyVotes(ids, ballots) }
+  const voteMode = !Object.keys(lanes).length ? "basic"
+    : Object.values(refuterBallots).some((b) => Object.keys(b).length) ? "strict"
+      : !voters.length && (familySkip || Object.keys(excluded).length) ? "strict → basic (no independent refuter)"
+        : "strict → basic"
+  return { lanes, voteMode, verifier, excluded, perFinding }
 }

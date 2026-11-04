@@ -17,7 +17,7 @@ function typeExpr(root, node) {
   if (node.enum) return node.enum.map((v) => (v === null ? "null" : JSON.stringify(v))).join("|")
   const types = Array.isArray(node.type) ? node.type : [node.type]
   if (types.includes("array")) return `[${node.items ? typeExpr(root, node.items) : "any"}]`
-  if (types.includes("object")) return objectExpr(root, node)
+  if (types.includes("object")) return objectExpr(root, node) + (types.includes("null") ? "|null" : "")
   return types.map((t) => SCALAR[t] ?? t).join("|")
 }
 

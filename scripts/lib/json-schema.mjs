@@ -108,14 +108,15 @@ export function validate(root, value, entry = null) {
  * violates this is rejected with `invalid_json_schema` before any review work starts.
  */
 export function assertStrictSchema(root, path = "$") {
-  if (root && typeof root === "object" && root.type === "object") {
+  const types = Array.isArray(root?.type) ? root.type : [root?.type]
+  if (root && typeof root === "object" && types.includes("object")) {
     if (root.additionalProperties !== false) throw new Error(`${path}: missing "additionalProperties": false`)
     const props = Object.keys(root.properties ?? {})
     const required = root.required ?? []
     for (const p of props) if (!required.includes(p)) throw new Error(`${path}: "required" omits "${p}"`)
     for (const p of props) assertStrictSchema(root.properties[p], `${path}.${p}`)
   }
-  if (root && root.type === "array" && root.items) assertStrictSchema(root.items, `${path}[]`)
+  if (root && types.includes("array") && root.items) assertStrictSchema(root.items, `${path}[]`)
 }
 
 export { resolveRef }

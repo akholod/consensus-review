@@ -25,8 +25,8 @@ never passes for a default.
 | `minimal`                 | the smallest tier, with a shallow exploration budget                                                                                         |
 | `dims=<list>`             | set the lanes: `dims=impact,quality` replaces the tier's set, `dims=+tests,-quality` adjusts it; `dims=+tests` is the only way to review tests when the diff has no test files |
 | `arch`                    | same as `dims=+architecture`                                                                                                                 |
-| `sceptic=strict`          | the default: an independent verifier plus the consultants re-run as refuters, majority vote per finding                                      |
-| `sceptic=basic`           | the verifier alone, no vote                                                                                                                  |
+| `sceptic=strict`          | the default: an independent verifier plus the consultants re-run as refuters; typed votes per finding (see The sceptic)                      |
+| `sceptic=basic`           | the verifier alone, the same vote rules with one voter                                                                                       |
 | `sceptic=off`             | no sceptic pass (`no-sceptic` is an alias)                                                                                                   |
 | `consultant=<name>`       | force the consultant: `codex`, `pi` or `claude-cli` (`claude` is an alias). A forced consultant that is missing is `unavailable`, never replaced |
 | `extra-advisor[=<model>]` | add `pi` as a second consultant; `=<model>` picks its model and overrides the automatic choice, for example `extra-advisor=sonnet:high`      |
@@ -162,10 +162,49 @@ The verifier is a separate agent with a fresh context. It is not one of
 the reviewers and not the arbiter, so it has no findings of its own to
 defend. It tries to refute each P0 and P1 with evidence.
 
-In `strict` mode the consultants also re-run as refuters and each
-finding is put to a vote. A tie is not a confirmation: with the default
-two voters (verifier and codex), a finding needs both to survive as
-stated. Add `extra-advisor` for a third voter (2 of 3 confirm).
+In `strict` mode the consultants also re-run as refuters and vote
+with the verifier. In `basic` mode the verifier votes alone, under the
+same rules. Each vote is one of:
+
+- `AGREE`: the finding holds, with the harm path at `file:line`;
+- `DISAGREE_EVIDENCE`: a contiguous verbatim quote of the reviewed code,
+  with its `file:line`, that shows the finding is wrong;
+- `DISAGREE_CONCERN`: a doubt without such a quote.
+
+A `DISAGREE_EVIDENCE` whose quote cannot be found near the cited line
+counts as a concern, and the report logs why (`cannot verify outside
+diff`, `elided quote`, …). The check proves only that the quote exists
+there, not that it is relevant. It reads the diff, and outside the diff
+only the local clone at the PR's head commit. In PR mode, a head commit
+missing from the local clone turns every quote outside the diff into a
+concern.
+
+Per finding, with `A` the `AGREE` votes, `E` the verified
+`DISAGREE_EVIDENCE` votes and `cast` every vote (concerns included),
+the rules apply in order:
+
+1. no verifier vote: `unconfirmed`;
+2. `E > A`, and the verifier voted a verified `DISAGREE_EVIDENCE` or
+   `2·E > cast`: `refuted`;
+3. `A > E`, and the verifier voted `AGREE` or `2·A > cast`:
+   `confirmed`, with the concerns shown next to it;
+4. otherwise: `unconfirmed`.
+
+| Votes (V = verifier, R = refuter) | Decision |
+|---|---|
+| V AGREE, every other vote a concern | confirmed |
+| V EVIDENCE, every other vote a concern | refuted |
+| AGREE and EVIDENCE tied | unconfirmed |
+| V CONCERN and one R AGREE or EVIDENCE | unconfirmed |
+| V CONCERN and two R AGREE / two R EVIDENCE | confirmed / refuted |
+| V AGREE and two R EVIDENCE | refuted |
+| no verifier vote, or only concerns | unconfirmed |
+
+So doubt never removes a finding the verifier grounded, and a lone
+refuter can neither confirm nor refute. Add `extra-advisor` for a third
+voter. If the decision step fails, the verifier's `AGREE` confirms and
+everything else is `unconfirmed`; nothing is refuted without a checked
+quote.
 
 At most one refuter votes per model family. A consultant of the
 panel's family (claude-cli, or pi on a Claude model), a second lane of

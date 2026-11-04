@@ -17,6 +17,9 @@ const SELF_DIR = dirname(fileURLToPath(import.meta.url))
 /** Agents that review or verify, and must therefore never hold a mutating tool. */
 const READ_ONLY_REQUIRED = /-reviewer$|-verifier$/
 
+/** Marker of the generated vote sketch every verifier must carry. */
+const VERDICT_BLOCK = "<!-- BEGIN GENERATED: contracts/verdict.schema.json"
+
 /**
  * Parse the leading `---` frontmatter as flat `key: value` pairs, which is all these files use.
  * Returns null when there is no frontmatter at all. Values keep their raw text; comparisons that
@@ -41,8 +44,8 @@ export function parseFrontmatter(text) {
  * counted — `agents/impact-reviewer.md` says "(Original P3 collapses here.)" about a severity it
  * does not use, and treating that as drift was a false positive.
  *
- * Tokenising *within* each span matters as much as finding the spans: the verifier declares its
- * severities inside one backticked JSON template, `"suggested_severity": "P0|P1|P2|null"`. Matching
+ * Tokenising *within* each span matters as much as finding the spans: the verifier once declared
+ * its severities inside one backticked JSON template, `"suggested_severity": "P0|P1|P2|null"`. Matching
  * only whole-span `` `P0` `` missed those, which would have let an invented severity hide inside a
  * template — the exact direction L5b exists to catch.
  */
@@ -57,18 +60,6 @@ export function vocabulary(text, re) {
   return found
 }
 
-/**
- * The verdict set the verifier declares in its own output template, e.g. from
- * `"verdict": "confirmed|unconfirmed|refuted"`. This is the one place the vocabulary appears as a
- * CLOSED set, which is why it can be compared for equality in both directions — unlike a search for
- * unknown words, which cannot find what it cannot name.
- */
-export function verdictAlternation(text) {
-  const m = text.match(/"verdict"\s*:\s*"([A-Za-z|]+)"/)
-  if (!m) return null
-  return new Set(m[1].split("|").filter(Boolean))
-}
-
 export function lint(root) {
   const problems = []
   const fail = (file, line, message) => problems.push({ file, line, message })
@@ -81,10 +72,6 @@ export function lint(root) {
 
   const bars = readFileSync(barsPath, "utf8")
   const contractSeverities = vocabulary(bars, "P[0-9]")
-  const contractVerdicts = vocabulary(bars, "confirmed|unconfirmed|refuted|reduced")
-  // `reduced` is a normalized outcome the verifier never emits (contracts/severity-bars.md), so it
-  // is permitted to appear and is never required of anyone.
-  const emittedVerdicts = new Set([...contractVerdicts].filter((v) => v !== "reduced"))
 
   const agentFiles = readdirSync(agentsDir).filter((f) => f.endsWith(".md")).sort()
   const agentNames = new Set()
@@ -123,15 +110,8 @@ export function lint(root) {
 
     // L5a — the vocabulary the agent is contracted to emit must still be there.
     const severities = vocabulary(text, "P[0-9]")
-    const verdicts = vocabulary(text, "confirmed|unconfirmed|refuted|reduced")
     for (const sev of contractSeverities) {
       if (!severities.has(sev)) fail(rel, 1, `L5a: agent no longer names the contracted severity \`${sev}\``)
-    }
-    // Only the verifier emits verdicts; the reviewers legitimately never mention them.
-    if (stem.endsWith("-verifier")) {
-      for (const v of emittedVerdicts) {
-        if (!verdicts.has(v)) fail(rel, 1, `L5a: verifier no longer names the contracted verdict \`${v}\``)
-      }
     }
 
     // L5b — nothing outside the contract. This works for severities because `P[0-9]` is a SHAPE:
@@ -141,20 +121,10 @@ export function lint(root) {
         fail(rel, 1, `L5b: \`${sev}\` is not a severity contracts/severity-bars.md defines`)
       }
     }
-    // There is deliberately no L5b for verdicts. The pattern that finds them IS the contract list,
-    // so an invented word like `maybe` cannot match it — searching for unknown verdicts by name is
-    // vacuous. L5c below covers the direction that is actually reachable.
-    if (stem.endsWith("-verifier")) {
-      const declared = verdictAlternation(text)
-      if (!declared) {
-        fail(rel, 1, "L5c: no `\"verdict\": \"a|b|c\"` alternation found — the verifier's emission contract is unreadable")
-      } else {
-        const want = [...emittedVerdicts].sort().join("|")
-        const got = [...declared].sort().join("|")
-        if (want !== got) {
-          fail(rel, 1, `L5c: the verifier's declared verdict set is \`${got}\`, but the contract's is \`${want}\``)
-        }
-      }
+    // L5c — the verifier's vote shape is generated from contracts/verdict.schema.json, so the lint
+    // only checks the block is there; `gen-contracts --check` guards what it says.
+    if (stem.endsWith("-verifier") && !text.includes(VERDICT_BLOCK)) {
+      fail(rel, 1, `L5c: no \`${VERDICT_BLOCK}\` block — the verifier's vote contract is not generated`)
     }
   }
 

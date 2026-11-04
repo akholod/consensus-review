@@ -51,15 +51,18 @@ test("every schema sent via --output-schema is OpenAI strict-mode compliant", ()
   }
 })
 
-test("the refuter verdict enum stays inside the shared verification vocabulary", () => {
-  const bars = readFileSync(new URL("../../contracts/severity-bars.md", import.meta.url), "utf8")
-  const section = bars.split("## Verification vocabulary")[1]
-  assert.ok(section, "contracts/severity-bars.md must keep its Verification vocabulary section")
-  const vocabulary = section.split("\n\n")[1]
-  const words = [...vocabulary.matchAll(/`([a-z_]+)`/g)].map((m) => m[1])
+test("the sceptic vote enum is pinned, and lanes.mjs accepts exactly it", () => {
   const verdicts = contract("verdict.schema.json").properties.verdicts.items.properties.verdict.enum
-  for (const v of verdicts) assert.ok(words.includes(v), `${v} is not in the verification vocabulary`)
-  assert.deepEqual(verdicts, VERDICTS, "scripts/lib/lanes.mjs must accept exactly the schema's verdicts")
+  assert.deepEqual(verdicts, ["AGREE", "DISAGREE_EVIDENCE", "DISAGREE_CONCERN"])
+  assert.deepEqual(VERDICTS, verdicts, "scripts/lib/lanes.mjs must accept exactly the schema's verdicts")
+})
+
+test("the verifier and the pi refuter brief no longer ask for the legacy verdict words", () => {
+  const verifier = readFileSync(new URL("../../agents/finding-verifier.md", import.meta.url), "utf8")
+  // §8 still applies the decisions `confirmed|unconfirmed|refuted`; only the brief must not ask for them.
+  const brief = command().split("\n").find((line) => line.includes("refuter-brief-pi.md") && line.includes("VERDICTS_START"))
+  assert.ok(brief, "§8 must keep the pi refuter brief line")
+  for (const text of [verifier, brief]) assert.doesNotMatch(text, /\b(?:confirmed|unconfirmed|refuted)\b/)
 })
 
 test("§5 runs the consultants only through the lane helper, in one backgrounded call", () => {
@@ -137,7 +140,8 @@ test("§0 documents the consultant cascade, the extra advisor and the family vot
   assert.match(s0, /never falls back to pi's unpinned default/)
   assert.match(s0, /Read `extraSameEngine` from `review\.decision\.json`/)
   assert.doesNotMatch(s0, /openai-codex` \/ `gpt-5\.x/, "the prose pi-vs-codex engine check is gone")
-  assert.match(s0, /with three voters .* 2 of 3 confirm/)
+  assert.match(s0, /with three voters .* 2 of 3 matching votes decide/)
+  assert.match(s0, /a lone refuter can neither confirm nor refute/)
   assert.match(s0, /\*\*One refuter per model family\*\* \(intended change\)/)
 })
 
@@ -174,7 +178,6 @@ test("§5 and §8 run lanes and refuters from consultants.json values, not fixed
   assert.match(s8, /`excluded`/)
   assert.match(s8, /`strict → basic`, or `strict → basic \(no independent refuter\)`/)
   assert.match(s8, /when no refuter voted at all, `voteMode` is `strict → basic`/i)
-  assert.match(s8, /with three, 2 of 3 confirm/)
 })
 
 test("§6/§7/§9 count families and name the consultant", () => {
@@ -199,6 +202,41 @@ test("§6/§7/§9 count families and name the consultant", () => {
   assert.match(s9, /consultant: <name> \(<reason>\)/)
   assert.match(s9, /> Consultant is the same model family as the panel \(claude-cli\): context-independent only\./)
   assert.match(s9, /claude-cli=ok/)
-  assert.match(s9, /`voteMode: strict \| strict → basic \| strict → basic \(no independent refuter\)`/)
+  assert.match(s9, /`voteMode: basic \| strict \| strict → basic \| strict → basic \(no independent refuter\)`, or `fallback \(<why>\)`/)
+  assert.match(s9, /F1: 2 of 2 voters — verifier: AGREE, codex: CONCERN/, "§9 shows the votes per finding, not only n of m")
   assert.match(s9, /`extraSameEngine: true`/)
+})
+
+test("§8 runs decide in both modes, states one fallback rule and the four vote rules", () => {
+  const md = command()
+  const s8 = section(md, 8)
+  const strict = s8.indexOf("**Strict — the default.**")
+  // ids.json is shared by both modes, so it is written before the basic/strict split
+  assert.ok(s8.indexOf("$WD/ids.json") >= 0 && s8.indexOf("$WD/ids.json") < strict, "ids.json is written before the split")
+  assert.match(s8, /\*\*Decide — both modes\.\*\*/)
+  assert.ok(s8.indexOf("**Decide — both modes.**") > strict, "decide comes after the strict branch, outside it")
+  assert.match(s8, /basic passes `--lanes ""`/)
+  assert.match(s8, /Add `--repo` only when there is a clone, and `--head-sha` only when §1 recorded a non-empty `HEAD_SHA`; diff-only mode passes neither/)
+  assert.match(s8, /read `\$WD\/sceptic\.decision\.json` \(both modes\)/)
+  // exactly one fallback rule, and it never refutes
+  assert.equal(s8.split("**Fallback — the one rule.**").length - 1, 1)
+  assert.equal((s8.match(/fall back/gi) ?? []).length, 0, "no second fallback sentence")
+  assert.match(s8, /`AGREE` \(or the legacy `confirmed`\) → `confirmed`; anything else .* → `unconfirmed`/)
+  assert.match(s8, /Nothing is `refuted` without `decide`/)
+  assert.match(s8, /a duplicated vote/)
+  for (const rule of [/1\. no verifier vote → `unconfirmed`/, /2\. `E > A` and .*`2·E > cast`\) → `refuted`/,
+    /3\. `A > E` and .*`2·A > cast`\) → `confirmed`/, /4\. anything else → `unconfirmed`/]) assert.match(s8, rule)
+  assert.match(s8, /not that it is relevant/)
+  assert.match(s8, /head commit missing from the local clone makes every quote outside the diff a concern/)
+  assert.match(s8, /never from the raw verifier or refuter payloads/)
+  assert.match(s8, /a doubt without a quote does not count against the finding/)
+})
+
+test("no text still says a tie needs both voters", () => {
+  const docs = readFileSync(new URL("../../docs/consensus-review.md", import.meta.url), "utf8")
+  for (const [name, text] of [["commands/consensus-review.md", command()], ["docs/consensus-review.md", docs]]) {
+    assert.doesNotMatch(text, /needs? both (voters )?to survive|tie is `?unconfirmed`?, so/i, name)
+    assert.doesNotMatch(text, /majority vote\*\* per finding/, name)
+  }
+  assert.match(docs, /a lone\s+refuter can neither confirm nor refute/)
 })

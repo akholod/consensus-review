@@ -149,6 +149,10 @@ Read the report's `Sources` line before reading its findings:
 - A `Single-source review (Claude only)` warning under the title: no
   consultant produced a usable review.
 - `codex=unavailable`: codex is not installed (or forced and missing).
+- `EVIDENCE → CONCERN (cannot verify outside diff)` under *Dropped /
+  Downgraded (sceptic)*: a refutation quoted a file the check could not
+  read, so it counted as a doubt and did not remove the finding. In PR
+  mode, fetch the PR's head commit into the local clone.
 - A review with no P0 or P1 has no sceptic section. That is expected:
   the sceptic only runs when there is something to refute.
 

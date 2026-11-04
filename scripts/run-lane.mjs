@@ -8,6 +8,7 @@
 //       [--schema <file>] [--model <m>] [--require-key findings|verdicts] [--ids-file <file>]
 //       [--skip <why> [--skip-reason <r>]] [--from-decision <file>] [--kill-grace <sec>]
 //   decide --wd <dir> --phase review|sceptic --lanes <name,name> [--ids-file <file>, default <wd>/ids.json]
+//       [--repo <dir>] [--diff <file>, default <wd>/diff.patch] [--head-sha <worktree|40-hex>]   (sceptic only)
 //
 // Each attempt runs in its own process group, which is killed whenever the attempt settles, so a
 // grandchild never outlives its attempt. A killed helper writes no status; `decide` reports that.
@@ -20,16 +21,17 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import {
   CLAUDE_CLI_MODEL, classifyClaudeResult, classifyCodexResult, classifyPiResult, decideRetry, decideReview,
-  decideSceptic, helperError, killGrace, laneCommand, laneStatus, parseVerdicts,
+  decideSceptic, helperError, killGrace, laneCommand, laneStatus, parseVotes,
   selectConsultants, validIds, validRefuterEntry, validStatus,
 } from "./lib/lanes.mjs"
 import { listPiModels } from "./lib/probe.mjs"
+import { makeVerifyCitation } from "./lib/quote-check.mjs"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const OPTIONS = {
   ...Object.fromEntries(
     ["wd", "name", "repo", "brief-file", "timeout", "schema", "model", "require-key", "ids-file", "skip", "skip-reason",
-      "from-decision", "kill-grace", "phase", "lanes", "consultant", "extra-model"].map((k) => [k, { type: "string" }]),
+      "from-decision", "kill-grace", "phase", "lanes", "consultant", "extra-model", "diff", "head-sha"].map((k) => [k, { type: "string" }]),
   ),
   extra: { type: "boolean" },
 }
@@ -148,7 +150,7 @@ async function runLane(lane, v, { onSpawned }) {
     result = await attempt({ lane, wd, file, cmd, seconds, grace, requireKey, onSpawned })
     const record = { n, startedAt, status: result.status, reason: result.reason ?? null, rc: result.rc, seconds: result.seconds }
     if (result.status === "ok" && ids) {
-      const { status, ignored, duplicates } = parseVerdicts(result.payload, ids)
+      const { status, ignored, duplicates } = parseVotes(result.payload, ids)
       Object.assign(record, { ignored, duplicates })
       if (status !== "ok") {
         result = { ...result, status: "unparseable", reason: "no valid verdict for any sent id" }
@@ -196,6 +198,15 @@ function select(v) {
   return 0
 }
 
+/** Citation check for the sceptic tally; clone reads only per --repo/--head-sha, never without both. */
+export function buildVerifyCitation(v) {
+  let diffText = ""
+  try {
+    diffText = readFileSync(v.diff ?? join(v.wd, "diff.patch"), "utf8")
+  } catch {}
+  return makeVerifyCitation({ diffText, repo: v.repo, headSha: v["head-sha"] })
+}
+
 function decide(v) {
   const wd = v.wd
   const lanes = {}
@@ -215,7 +226,8 @@ function decide(v) {
     const verifierPath = join(wd, "verifier.verdicts.json")
     const verifier = existsSync(verifierPath) ? readJson(verifierPath) : undefined
     const ids = readJson(v["ids-file"] ?? join(wd, "ids.json"))
-    writeAtomic(join(wd, "sceptic.decision.json"), decideSceptic(lanes, ids, verifier, payloads))
+    writeAtomic(join(wd, "sceptic.decision.json"), decideSceptic(lanes, ids, verifier, payloads,
+      { verifyCitation: buildVerifyCitation(v) }))
   } else throw new Error(`--phase must be review or sceptic (got ${JSON.stringify(v.phase)})`)
   return 0
 }

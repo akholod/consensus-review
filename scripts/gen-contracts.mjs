@@ -5,20 +5,26 @@
 //   commands/consensus-review.md      <- contracts/finding.schema.json          (verbatim JSON)
 //   prompts/loop-review/discovery.md  <- loop-payload.schema.json#/$defs/discoveryPayload (sketch)
 //   prompts/loop-review/verify.md     <- loop-payload.schema.json#/$defs/verifierPayload  (sketch)
+//   agents/finding-verifier.md, and the §8 pi refuter brief in commands/consensus-review.md
+//                                     <- verdict.schema.json#/properties/verdicts/items   (sketch)
 //
 // It also checks that loopFinding is still the declared projection of the consensus finding.
 //
 //   node scripts/gen-contracts.mjs          rewrite the blocks
 //   node scripts/gen-contracts.mjs --check  exit non-zero if anything is out of sync
+//   ... --dir DIR                            work on a copy of the repo (used by the tests)
 import { readFileSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
 import { assertStrictSchema, resolveRef } from "./lib/json-schema.mjs"
 import { renderSketch } from "./lib/sketch.mjs"
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
+const dirFlag = process.argv.indexOf("--dir")
+const ROOT = dirFlag >= 0 ? process.argv[dirFlag + 1] : join(dirname(fileURLToPath(import.meta.url)), "..")
 const FINDING = "contracts/finding.schema.json"
 const LOOP = "contracts/loop-payload.schema.json"
+const VERDICT = "contracts/verdict.schema.json"
+const VOTE = "#/properties/verdicts/items"
 const END = "<!-- END GENERATED -->"
 
 const check = process.argv.includes("--check")
@@ -27,9 +33,11 @@ const read = (rel) => readFileSync(join(ROOT, rel), "utf8")
 const findingSchema = read(FINDING).trimEnd()
 const findingRoot = JSON.parse(findingSchema)
 const loopRoot = JSON.parse(read(LOOP))
+const verdictRoot = JSON.parse(read(VERDICT))
 
 // Fail loudly rather than emitting a schema OpenAI strict mode would reject at run time.
 assertStrictSchema(findingRoot)
+assertStrictSchema(verdictRoot)
 
 /**
  * loopFinding must remain the consensus finding minus exactly the declared omissions. Any other
@@ -100,6 +108,11 @@ const JOBS = [
     source: `${LOOP}#/$defs/verifierPayload`,
     body: `\`\`\`\n${renderSketch(loopRoot, "#/$defs/verifierPayload")}\n\`\`\``,
   },
+  ...["agents/finding-verifier.md", "commands/consensus-review.md"].map((target) => ({
+    target,
+    source: `${VERDICT}${VOTE}`,
+    body: `\`\`\`\n${renderSketch(verdictRoot, VOTE)}\n\`\`\``,
+  })),
 ]
 
 let changed = 0

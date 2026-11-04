@@ -60,7 +60,7 @@ export const HIGH_RISK = Object.freeze([RISK.SECURITY, RISK.DATA, RISK.CONTRACT]
 export const SEVERITY = Object.freeze(["P0", "P1", "P2"])
 export const ACTIONABLE = Object.freeze(["P0", "P1"])
 
-/** finding-verifier's real vocabulary. `reduced` is derived, never emitted — see contracts/severity-bars.md. */
+/** The loop verifier's real vocabulary. `reduced` is derived, never emitted — see contracts/severity-bars.md. */
 export const VERDICT = Object.freeze(["confirmed", "unconfirmed", "refuted"])
 
 /**

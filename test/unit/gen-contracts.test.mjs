@@ -1,7 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { execFileSync } from "node:child_process"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { renderSketch } from "../../scripts/lib/sketch.mjs"
 import { projectionProblems } from "../../scripts/gen-contracts.mjs"
 import { resolveRef } from "../../scripts/lib/json-schema.mjs"
@@ -155,7 +157,7 @@ test("a long object body wraps at property boundaries, never mid-property", () =
 
 test("--check passes on the committed tree", () => {
   const out = execFileSync("node", ["scripts/gen-contracts.mjs", "--check"], { encoding: "utf8" })
-  assert.match(out, /in sync \(3 generated blocks, projection verified\)/)
+  assert.match(out, /in sync \(5 generated blocks, projection verified\)/)
 })
 
 test("--check fails when a generated block is edited by hand", () => {
@@ -175,4 +177,51 @@ test("--check fails when a generated block is edited by hand", () => {
     execFileSync("node", ["-e", `require("fs").writeFileSync(${JSON.stringify(path)}, ${JSON.stringify(original)})`])
   }
   assert.equal(readFileSync(path, "utf8"), original, "the test must leave the tree as it found it")
+})
+
+/** Run `--check` on a copy of the repo after `mutate(path)`; returns the error output, or null on success. */
+function checkCopy(mutate) {
+  const dir = mkdtempSync(join(tmpdir(), "gen-contracts-"))
+  try {
+    for (const part of ["agents", "commands", "contracts", "prompts"]) cpSync(part, join(dir, part), { recursive: true })
+    mutate((rel) => join(dir, rel))
+    execFileSync("node", ["scripts/gen-contracts.mjs", "--check", "--dir", dir], { encoding: "utf8", stdio: "pipe" })
+    return null
+  } catch (err) {
+    return String(err.stderr ?? err.message)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+const editCopy = (path, rel, from, to) => {
+  const text = readFileSync(path(rel), "utf8")
+  assert.ok(text.includes(from), `${rel} must contain ${from}`)
+  writeFileSync(path(rel), text.replace(from, to))
+}
+
+test("--check passes on an unmodified copy", () => {
+  assert.equal(checkCopy(() => {}), null)
+})
+
+for (const rel of ["agents/finding-verifier.md", "commands/consensus-review.md"]) {
+  test(`--check fails when the vote block in ${rel} is edited by hand`, () => {
+    const err = checkCopy((path) => editCopy(path, rel, '"quote": str}|null', '"quote": str}'))
+    assert.match(err ?? "", new RegExp(`${rel} is OUT OF SYNC with contracts/verdict.schema.json`))
+  })
+}
+
+test("a vote schema whose citation allows extra properties is rejected", () => {
+  const err = checkCopy((path) => {
+    const schema = JSON.parse(readFileSync(path("contracts/verdict.schema.json"), "utf8"))
+    delete schema.properties.verdicts.items.properties.citation.additionalProperties
+    writeFileSync(path("contracts/verdict.schema.json"), JSON.stringify(schema, null, 2))
+  })
+  assert.match(err ?? "", /citation: missing "additionalProperties": false/)
+})
+
+test("a nullable object renders as its body followed by |null", () => {
+  const VERDICT = JSON.parse(readFileSync("contracts/verdict.schema.json", "utf8"))
+  const rendered = renderSketch(VERDICT, "#/properties/verdicts/items")
+  assert.match(rendered, /^  "citation": \{"file": str, "line": str, "quote": str\}\|null,$/m)
 })

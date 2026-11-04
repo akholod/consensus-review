@@ -5,10 +5,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { validStatus } from "../../scripts/lib/lanes.mjs"
+import { makeReadHeadFile } from "../../scripts/lib/quote-check.mjs"
+import { buildVerifyCitation } from "../../scripts/run-lane.mjs"
 
 const ROOT = new URL("../..", import.meta.url).pathname
 const HELPER = join(ROOT, "scripts/run-lane.mjs")
@@ -69,6 +71,7 @@ async function waitFor(path) {
 }
 const decide = (ws, phase, lanes) => launch(ws, ["decide", "--wd", ws.dir, "--phase", phase, "--lanes", lanes])
 const decision = (ws, phase) => JSON.parse(readFileSync(join(ws.dir, `${phase}.decision.json`), "utf8"))
+const core = ({ decision, voters, noVote }) => ({ decision, voters, noVote })
 
 test("1: fail then ok → ok (retried: failed), canonical output written", async () => {
   const ws = workspace()
@@ -354,10 +357,10 @@ test("5: §5 → §8 handoff launches a refuter only where the decision says run
       const d = decision(ws, "sceptic")
       assert.equal(d.voteMode, "strict → basic")
       assert.equal(d.verifier, "ok")
-      assert.deepEqual(d.perFinding, {
-        F1: { decision: "confirmed", voters: "1 of 2", noVote: ["codex-refuter"] },
-        F2: { decision: "refuted", voters: "1 of 2", noVote: ["codex-refuter"] },
-      })
+      // a legacy `refuted` without a citation is a concern now: F2 is no longer refuted on its word alone
+      assert.deepEqual(core(d.perFinding.F1), { decision: "confirmed", voters: "1 of 2", noVote: ["codex-refuter"] })
+      assert.deepEqual(core(d.perFinding.F2), { decision: "unconfirmed", voters: "1 of 2", noVote: ["codex-refuter"] })
+      assert.deepEqual(d.perFinding.F2.downgraded, { verifier: "legacy refuted without citation" })
     } finally {
       ws.cleanup()
     }
@@ -370,13 +373,32 @@ test("5: §5 → §8 handoff launches a refuter only where the decision says run
       await decide(ws, "sceptic", "codex-refuter")
       const d = decision(ws, "sceptic")
       assert.equal(d.voteMode, "strict")
-      assert.deepEqual(d.perFinding.F1, { decision: "unconfirmed", voters: "2 of 2", noVote: [] })
+      // the fake refuter's uncited legacy `refuted` is a concern, so V AGREE + R CONCERN survives
+      assert.deepEqual(core(d.perFinding.F1), { decision: "confirmed", voters: "2 of 2", noVote: [] })
+      assert.equal(d.perFinding.F1.label, "verifier: AGREE, codex: CONCERN")
       // the refuter's attempt record keeps the ids it was not asked about
       assert.deepEqual(status(ws, "codex-refuter").attempts[0].ignored, [])
     } finally {
       ws.cleanup()
     }
   })
+})
+
+test("basic: decide --phase sceptic --lanes \"\" tallies the verifier alone, voteMode basic", async () => {
+  const ws = workspace()
+  try {
+    writeFileSync(join(ws.dir, "verifier.verdicts.json"), JSON.stringify([
+      { id: "F1", verdict: "AGREE", evidence: "a.js:1", citation: null, suggested_severity: null },
+      { id: "F2", verdict: "DISAGREE_CONCERN", evidence: "unsure", citation: null, suggested_severity: null },
+    ]))
+    await decide(ws, "sceptic", "")
+    const d = decision(ws, "sceptic")
+    assert.equal(d.voteMode, "basic")
+    assert.deepEqual(core(d.perFinding.F1), { decision: "confirmed", voters: "1 of 1", noVote: [] })
+    assert.deepEqual(core(d.perFinding.F2), { decision: "unconfirmed", voters: "1 of 1", noVote: [] })
+  } finally {
+    ws.cleanup()
+  }
 })
 
 test("MAJOR 1: sceptic decide covers every sent id when the verifier is missing or partial", async () => {
@@ -386,16 +408,15 @@ test("MAJOR 1: sceptic decide covers every sent id when the verifier is missing 
     await decide(ws, "sceptic", "codex-refuter")
     const missing = decision(ws, "sceptic")
     assert.equal(missing.verifier, "missing")
-    assert.deepEqual(missing.perFinding, {
-      F1: { decision: "unconfirmed", voters: "1 of 2", noVote: ["verifier"] }, // a refuter never decides alone
-      F2: { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex-refuter"] },
-    })
+    assert.deepEqual(core(missing.perFinding.F1), { decision: "unconfirmed", voters: "1 of 2", noVote: ["verifier"] }) // a refuter never decides alone
+    assert.deepEqual(core(missing.perFinding.F2), { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex-refuter"] })
     writeFileSync(join(ws.dir, "verifier.verdicts.json"), JSON.stringify([{ id: "F1", verdict: "refuted", evidence: "" }]))
     await decide(ws, "sceptic", "codex-refuter")
     const partial = decision(ws, "sceptic")
     assert.equal(partial.verifier, "ok")
-    assert.deepEqual(partial.perFinding.F1, { decision: "refuted", voters: "2 of 2", noVote: [] })
-    assert.deepEqual(partial.perFinding.F2, { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex-refuter"] })
+    // both votes are uncited legacy `refuted`, so both are concerns: no quote, no refutation
+    assert.deepEqual(core(partial.perFinding.F1), { decision: "unconfirmed", voters: "2 of 2", noVote: [] })
+    assert.deepEqual(core(partial.perFinding.F2), { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex-refuter"] })
     rmSync(join(ws.dir, "ids.json"))
     await decide(ws, "sceptic", "codex-refuter")
     assert.equal(decision(ws, "sceptic").error, "failed: helper error (no ids)")
@@ -629,5 +650,110 @@ test("--model handoff: select → run pi → run pi --name pi-refuter, the selec
     } finally {
       ws.cleanup()
     }
+  }
+})
+
+/** A repo with commits base and head; the guard exists only at head; HEAD is checked out at base. */
+function quoteRepo() {
+  const dir = mkdtempSync(join(tmpdir(), "quote-repo-"))
+  const repo = join(dir, "repo")
+  mkdirSync(repo)
+  const git = (...args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" }).stdout.trim()
+  git("init", "-q")
+  git("config", "user.email", "t@t")
+  git("config", "user.name", "t")
+  writeFileSync(join(repo, "app.js"), "export const app = 1\n")
+  git("add", ".")
+  git("commit", "-qm", "base")
+  const base = git("rev-parse", "HEAD")
+  writeFileSync(join(repo, "guard.js"), "// guard\nexport function guard(user) {\n  if (!isAdmin(user)) return deny()\n}\n")
+  git("add", ".")
+  git("commit", "-qm", "head")
+  const head = git("rev-parse", "HEAD")
+  git("checkout", "-q", base)
+  writeFileSync(join(dir, "diff.patch"), `diff --git a/app.js b/app.js
+--- a/app.js
++++ b/app.js
+@@ -1,1 +1,2 @@
+ export const app = 1
++export const checkedValue = validate(app)
+`)
+  return { dir, repo, base, head, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
+}
+
+const GUARD = { file: "guard.js", line: "3", quote: "if (!isAdmin(user)) return deny()" }
+const NEW_SIDE = { file: "app.js", line: "2", quote: "export const checkedValue = validate(app)" }
+
+test("decide --phase sceptic: --head-sha <head> blob-reads a file outside the diff; <base> does not", () => {
+  const r = quoteRepo()
+  try {
+    const at = (sha) => buildVerifyCitation({ wd: r.dir, repo: r.repo, "head-sha": sha })
+    assert.deepEqual(at(r.head)(GUARD), { verified: true, reason: null, source: "head" })
+    assert.equal(at(r.base)(GUARD).verified, false)
+    assert.equal(at(r.base)(GUARD).reason, "file not readable at head")
+    assert.equal(at(r.head)(NEW_SIDE).source, "diff")
+  } finally {
+    r.cleanup()
+  }
+})
+
+test("decide --phase sceptic: absent, empty, 'abc' or a missing 40-hex --head-sha → no clone reads", () => {
+  const r = quoteRepo()
+  try {
+    for (const sha of [undefined, "", "abc", r.head.toUpperCase(), "0".repeat(40)]) {
+      assert.equal(makeReadHeadFile({ repo: r.repo, headSha: sha }), null, String(sha))
+      const verify = buildVerifyCitation({ wd: r.dir, repo: r.repo, "head-sha": sha })
+      assert.equal(verify(GUARD).reason, "cannot verify outside diff", String(sha))
+    }
+    assert.equal(makeReadHeadFile({ headSha: r.head }), null)
+  } finally {
+    r.cleanup()
+  }
+})
+
+test("decide --phase sceptic: worktree reads the working file, never through ../, an absolute path or a symlink out", () => {
+  const r = quoteRepo()
+  try {
+    const verify = buildVerifyCitation({ wd: r.dir, repo: r.repo, "head-sha": "worktree" })
+    assert.equal(verify(GUARD).reason, "file not readable at head")
+    writeFileSync(join(r.repo, "guard.js"), "// guard\n  if (!isAdmin(user)) return deny()\n")
+    assert.equal(verify(GUARD).source, "head")
+    writeFileSync(join(r.dir, "outside.js"), "  if (!isAdmin(user)) return deny()\n")
+    symlinkSync(join(r.dir, "outside.js"), join(r.repo, "leak.js"))
+    const read = makeReadHeadFile({ repo: r.repo, headSha: "worktree" })
+    assert.equal(read("leak.js"), null)
+    assert.equal(read("../outside.js"), null)
+    assert.equal(read(join(r.dir, "outside.js")), null)
+    assert.equal(verify({ ...GUARD, file: "leak.js", line: "1" }).verified, false)
+    assert.equal(verify({ ...GUARD, file: "../outside.js", line: "1" }).reason, "unsafe path")
+  } finally {
+    r.cleanup()
+  }
+})
+
+test("decide --phase sceptic: diff-only (no --repo, no --head-sha) verifies only new-side quotes", () => {
+  const r = quoteRepo()
+  try {
+    const verify = buildVerifyCitation({ wd: r.dir })
+    assert.equal(verify(NEW_SIDE).source, "diff")
+    assert.equal(verify(GUARD).reason, "cannot verify outside diff")
+    const explicit = buildVerifyCitation({ wd: r.dir, diff: join(r.dir, "missing.patch") })
+    assert.equal(explicit(NEW_SIDE).reason, "cannot verify outside diff")
+  } finally {
+    r.cleanup()
+  }
+})
+
+test("decide --phase sceptic accepts --repo, --diff and --head-sha", async () => {
+  const ws = workspace()
+  const r = quoteRepo()
+  try {
+    const { code } = await launch(ws, ["decide", "--wd", ws.dir, "--phase", "sceptic", "--lanes", "codex-refuter",
+      "--repo", r.repo, "--diff", join(r.dir, "diff.patch"), "--head-sha", r.head])
+    assert.equal(code, 0)
+    assert.ok(decision(ws, "sceptic").perFinding)
+  } finally {
+    r.cleanup()
+    ws.cleanup()
   }
 })
