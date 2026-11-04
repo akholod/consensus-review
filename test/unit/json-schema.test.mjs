@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { validate, resolveRef } from "../../scripts/lib/json-schema.mjs"
+import { assertStrictSchema, validate, resolveRef } from "../../scripts/lib/json-schema.mjs"
 
 const ROOT = JSON.parse(readFileSync("contracts/loop-payload.schema.json", "utf8"))
 
@@ -94,4 +94,15 @@ test("every entrypoint the generator uses resolves", () => {
   for (const entry of ["#/$defs/discoveryPayload", "#/$defs/verifierPayload", "#/$defs/loopFinding"]) {
     assert.ok(resolveRef(ROOT, entry), entry)
   }
+})
+
+test("assertStrictSchema checks an object whose type is an array, like a plain object", () => {
+  const schema = (citation) => ({
+    type: "object", additionalProperties: false, required: ["citation"],
+    properties: { citation: { type: ["object", "null"], required: ["file"], properties: { file: { type: "string" } }, ...citation } },
+  })
+  assert.throws(() => assertStrictSchema(schema({})), /\$\.citation: missing "additionalProperties": false/)
+  assert.doesNotThrow(() => assertStrictSchema(schema({ additionalProperties: false })))
+  const list = { type: ["array", "null"], items: { type: "object", properties: {} } }
+  assert.throws(() => assertStrictSchema(list), /\$\[\]: missing "additionalProperties": false/)
 })

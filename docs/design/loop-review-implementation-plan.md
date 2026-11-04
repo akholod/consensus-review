@@ -81,7 +81,7 @@ Layout `test/unit/`, `test/fixtures/`, `test/e2e/`; runner `node --test test/` (
 - **Unit** — diff parsing (renames, binary, new, deleted); generated-file detection; changed-line mapping; content capping; glob matching (positive globs then `!` exclusions); cell derivation; diff hashing (stable on rerun, changes on any edit); prompt-prefix byte-stability across passes; fingerprint generation from structured fields only; budget accounting; the stopping-rule state machine over all four terminal states; the bounded YAML subset parser.
 - **Adapter fixtures** — `test/fixtures/adapter/{ok,malformed,truncated,timeout,exit-nonzero,refusal}.json`, each asserting a specific terminal state; a table test asserts none yields `CLEAN`.
 - **Contract parity** — `node scripts/gen-contracts.mjs --check` regenerates the fenced block in `commands/consensus-review.md` from `contracts/finding.schema.json`; non-zero exit on drift. Mandatory in CI.
-- **Verdict compatibility** — normalization asserted against `agents/finding-verifier.md:44-48`; `reduced` = `confirmed` + lower `suggested_severity`.
+- **Verdict compatibility** — normalization asserted against `agents/finding-verifier.md:44-48`; `reduced` = `confirmed` + lower `suggested_severity`. (Since #8 the consensus `finding-verifier` emits typed votes per `contracts/verdict.schema.json`; `/loop-review` keeps its own `confirmed|unconfirmed|refuted` vocabulary in `prompts/loop-review/verify.md`.)
 - **Hostile input** — an instruction file attempting to relax read-only, budgets, admission, stopping or escalation rules must be clamped.
 
 **Seeded fixture manifest** (`test/e2e/seeded/`, restored after v4 dropped it):

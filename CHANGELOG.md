@@ -4,6 +4,20 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
 
 ## Unreleased
 
+- **Sceptic votes are typed**
+  ([#8](https://github.com/akholod/consensus-review/issues/8)). The
+  verifier and the refuters vote `AGREE`, `DISAGREE_EVIDENCE` (a verbatim
+  quote of the reviewed code with `file:line`, checked against the diff
+  or the clone at the head commit) or `DISAGREE_CONCERN`. **Changed:** a
+  refutation whose quote does not match no longer downgrades a finding;
+  it counts as a concern and is logged. Verifier `AGREE` plus a refuter
+  concern now survives. A lone refuter can neither confirm nor refute.
+  An uncited legacy `refuted` no longer refutes. `sceptic=basic` now
+  runs the same decision step, and when that step fails only a verifier
+  `AGREE` confirms; nothing is refuted. The report shows each finding's
+  votes. No claim is made about review quality until the paired
+  real-PR measurement in `docs/design/sceptic-typed-votes.md` is done.
+
 - **The consultant is chosen from the harnesses the machine has**
   ([#3](https://github.com/akholod/consensus-review/issues/3)). The
   cascade is `codex → pi → claude-cli`; `consultant=<codex|pi|claude-cli|claude>`

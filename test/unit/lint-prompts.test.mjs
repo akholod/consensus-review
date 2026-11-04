@@ -9,7 +9,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, cpSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { lint, parseFrontmatter, vocabulary, verdictAlternation } from "../../scripts/lint-prompts.mjs"
+import { lint, parseFrontmatter, vocabulary } from "../../scripts/lint-prompts.mjs"
 
 /** Copy the parts of the repo the lint reads, apply `mutate`, and lint the copy. */
 function lintWith(mutate) {
@@ -94,10 +94,6 @@ red("L5a: a contracted severity deleted from an agent's vocabulary",
   ({ edit }) => edit("agents/test-reviewer.md", (t) => t.replace(/`P2`/g, "medium")),
   /L5a: agent no longer names the contracted severity `P2`/)
 
-red("L5a: a contracted verdict deleted from the verifier",
-  ({ edit }) => edit("agents/finding-verifier.md", (t) => t.replace(/refuted/g, "rejected")),
-  /L5a: verifier no longer names the contracted verdict `refuted`/)
-
 // -------------------------------------------------------------------------------------------
 // L5b — nothing outside the contract (catches addition)
 // -------------------------------------------------------------------------------------------
@@ -107,43 +103,29 @@ red("L5b: an invented severity in an agent's output vocabulary",
   /L5b: `P4` is not a severity/)
 
 red("L5b: an invented severity hidden inside a backticked JSON template",
-  ({ edit }) => edit("agents/finding-verifier.md", (t) => t.replace('"P0|P1|P2|null"', '"P0|P1|P2|P3|null"')),
+  ({ edit }) => edit("agents/finding-verifier.md", (t) => `${t}\n\n\`"suggested_severity": "P0|P1|P2|P3|null"\`\n`),
   /L5b: `P3` is not a severity/)
 
-// There is deliberately no "invented verdict by name" test: L5b cannot reach it, because the pattern
-// that finds verdicts IS the contract list. L5c covers the direction that is reachable — the closed
-// alternation in the verifier's own output template.
-red("L5c: the verifier's declared verdict set gains a member",
+// L5c — the verifier's vote shape is generated; the lint only requires the block to be there.
+red("L5c: the generated vote block removed from the verifier",
   ({ edit }) => edit("agents/finding-verifier.md", (t) =>
-    t.replace('"verdict": "confirmed|unconfirmed|refuted"', '"verdict": "confirmed|unconfirmed|refuted|maybe"')),
-  /L5c: the verifier's declared verdict set is/)
+    t.replace(/<!-- BEGIN GENERATED: contracts\/verdict\.schema\.json[\s\S]*?<!-- END GENERATED -->\n/, "")),
+  /L5c: no `<!-- BEGIN GENERATED: contracts\/verdict\.schema\.json` block/)
 
-red("L5c: the verifier's declared verdict set loses a member",
-  ({ edit }) => edit("agents/finding-verifier.md", (t) =>
-    t.replace('"verdict": "confirmed|unconfirmed|refuted"', '"verdict": "confirmed|unconfirmed"')),
-  /L5c|L5a/)
+test("the real agents/finding-verifier.md passes, severities included", () => {
+  // Its only backticked severities are the prose line about `suggested_severity`: the generated
+  // block is fenced, which vocabulary() does not read.
+  assert.deepEqual(lint(process.cwd()).filter((p) => p.file === "agents/finding-verifier.md"), [])
+})
 
-red("L5c: the verifier's output template becomes unreadable",
-  ({ edit }) => edit("agents/finding-verifier.md", (t) =>
-    t.replace('"verdict": "confirmed|unconfirmed|refuted"', '"verdict": <one of the three>')),
-  /L5c: no .* alternation found/)
-
-red("L5a: every occurrence of a contracted verdict renamed",
-  // A global replace, unlike the earlier string form which changed only the first occurrence and so
-  // proved nothing.
-  ({ edit }) => edit("agents/finding-verifier.md", (t) => t.replace(/unconfirmed/g, "undetermined")),
-  /L5a: verifier no longer names the contracted verdict `unconfirmed`/)
+red("L5a: the verifier's prose line about suggested_severity removed",
+  ({ edit }) => edit("agents/finding-verifier.md", (t) => t.replace(/^.*`suggested_severity` is `P0`.*\n/m, "")),
+  /agents\/finding-verifier\.md:1: L5a: agent no longer names the contracted severity `P0`/)
 
 green("L5b: a severity named only in prose, never in the output vocabulary",
   // This is the exact false positive that scoping to backticks exists to avoid. It is a regression
   // test, not a nicety: `agents/impact-reviewer.md:62` already reads "(Original P3 collapses here.)"
   ({ edit }) => edit("agents/quality-reviewer.md", (t) => `${t}\n\nHistorically P3 and P4 collapsed into P2.\n`))
-
-green("L5b: `reduced` present is fine — it is in the contract but never emitted",
-  ({ edit }) => edit("agents/finding-verifier.md", (t) => `${t}\n\nA \`confirmed\` with a lower \`suggested_severity\` normalises to \`reduced\`.\n`))
-
-green("L5a: `reduced` absent is fine — it is never required of anyone",
-  ({ edit }) => edit("agents/finding-verifier.md", (t) => t.replace(/reduced/g, "lowered")))
 
 green("prose rewritten around an unchanged contract",
   ({ edit }) => edit("agents/impact-reviewer.md", (t) =>
@@ -190,9 +172,4 @@ test("vocabulary reads inside backtick spans and ignores prose", () => {
 
 test("vocabulary does not match a token that merely contains the pattern", () => {
   assert.deepEqual([...vocabulary("`P00` `XP0`", "P[0-9]")], [])
-})
-
-test("verdictAlternation reads the closed set, or reports that it cannot", () => {
-  assert.deepEqual([...verdictAlternation('`"verdict": "confirmed|refuted"`')].sort(), ["confirmed", "refuted"])
-  assert.equal(verdictAlternation("no template here"), null)
 })

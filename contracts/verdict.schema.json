@@ -14,19 +14,56 @@
           "verdict": {
             "type": "string",
             "enum": [
-              "confirmed",
-              "unconfirmed",
-              "refuted"
+              "AGREE",
+              "DISAGREE_EVIDENCE",
+              "DISAGREE_CONCERN"
             ]
           },
           "evidence": {
             "type": "string"
+          },
+          "citation": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "string"
+              },
+              "quote": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file",
+              "line",
+              "quote"
+            ]
+          },
+          "suggested_severity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "P0",
+              "P1",
+              "P2",
+              null
+            ]
           }
         },
         "required": [
           "id",
           "verdict",
-          "evidence"
+          "evidence",
+          "citation",
+          "suggested_severity"
         ]
       }
     }

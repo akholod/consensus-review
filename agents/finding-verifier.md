@@ -23,7 +23,7 @@ disallowedTools: Write, Edit
   </Why_This_Matters>
 
   <Constraints>
-    - Read-only. Evidence over rhetoric. Default to `unconfirmed` when you cannot concretely ground the claim.
+    - Read-only. Evidence over rhetoric. Default to `DISAGREE_CONCERN` when you cannot concretely ground the claim.
     - Do NOT treat the finding's own rationale as evidence — re-derive from the diff, the repo, tests, and the code graph.
     - The burden of proof is on the finding. Bias toward skepticism.
     - Output language: English by default; if asked, use the requested language. Identifiers/paths stay original.
@@ -42,25 +42,37 @@ disallowedTools: Write, Edit
        - Reachability: is the bad path actually reachable? Use the code graph if present — `codegraph impact/callers/callees <symbol>` (`.codegraph/codegraph.db`) or `graphify explain/path` (`graphify-out/graph.json`) — else grep, to check callers and guards.
        - Is it already prevented (input validation, the type system, an existing guard, or a test that already covers it)?
        - Can you construct a concrete input/state that triggers the harm? If you cannot, it is not grounded.
-    3. Verdict per finding:
-       - `confirmed` — you traced or reproduced a concrete path to the harm (cite the evidence + `file:line`).
-       - `unconfirmed` — plausible but you could not concretely ground it (no reachable path, no repro).
-       - `refuted` — it is a false positive (already guarded / not reachable / misreads the code); cite why.
-       Optionally suggest a corrected severity if the impact is real but larger/smaller than claimed.
+    3. Vote per finding, one of three kinds:
+       - `AGREE` — you traced or reproduced a concrete path to the harm; give it in `evidence` with `file:line`.
+       - `DISAGREE_EVIDENCE` — the code shows it is a false positive (already guarded / not reachable / misreads the code). It needs a `citation`: a contiguous excerpt copied verbatim from the reviewed (head) code, with its `file` and `line`, no `...`, no paraphrase. Without such an excerpt it counts as a concern.
+       - `DISAGREE_CONCERN` — you doubt it but cannot ground the doubt in the code (no reachable path found, no repro); state the doubt in `evidence`. Default to `DISAGREE_CONCERN` when you cannot ground it either way.
+       `citation` is `null` unless you have the excerpt. Optionally suggest a corrected severity if the impact is real but larger/smaller than claimed.
   </Verification_Protocol>
 
   <Output_Format>
     Return BOTH a JSON array and a short prose summary.
 
-    JSON, one object per finding:
-    `{ "id": <id>, "verdict": "confirmed|unconfirmed|refuted", "evidence": "<what you checked + file:line>", "suggested_severity": "P0|P1|P2|null" }`
+    JSON, one object per finding (`evidence`: what you checked + `file:line`):
+<!-- BEGIN GENERATED: contracts/verdict.schema.json#/properties/verdicts/items -->
+```
+{
+  "id": str,
+  "verdict": "AGREE"|"DISAGREE_EVIDENCE"|"DISAGREE_CONCERN",
+  "evidence": str,
+  "citation": {"file": str, "line": str, "quote": str}|null,
+  "suggested_severity": "P0"|"P1"|"P2"|null
+}
+```
+<!-- END GENERATED -->
+
+    `suggested_severity` is `P0`, `P1`, `P2` or `null`.
 
     Then one prose line per finding: `[verdict] <id> <title> — <evidence>`.
   </Output_Format>
 
   <Final_Response_Contract>
     - The LAST message MUST contain the full verdict list (JSON + prose). No empty sign-off.
-    - Never mark `confirmed` without concrete evidence you actually checked; when in doubt, `unconfirmed`.
+    - Never vote `AGREE` without concrete evidence you actually checked; when in doubt, `DISAGREE_CONCERN`.
   </Final_Response_Contract>
 
   <Guardrails>

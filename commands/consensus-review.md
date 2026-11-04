@@ -33,9 +33,9 @@ Resolution rules, in full:
 - `arch` → alias for `dims=+architecture`.
 - **Sceptic is ON and STRICT by default.** Canonical knob: `sceptic=off|basic|strict`, default `strict`.
   - `strict` (default) — the independent verifier **plus** the consultants re-run as refuters, with a majority vote per finding (§8).
-  - `basic` — the independent verifier only: no refuter re-runs, no vote.
+  - `basic` — the independent verifier only: no refuter re-runs; `decide` still applies the vote rules to the verifier alone.
   - `off` — no sceptic pass at all. `no-sceptic` / `--no-sceptic` is a kept alias for `sceptic=off`.
-  The pass only fires when there are P0/P1 findings, so trivial/clean reviews pay nothing at any setting. Strict costs one extra run per voting consultant on the reviews that do have P0/P1 — and note the vote arithmetic in §8: with the default two-voter set a tie is not a confirmation, so strict-by-default means findings need both voters to survive as stated; with three voters (codex plus pi on an independent family as extra) 2 of 3 confirm.
+  The pass only fires when there are P0/P1 findings, so trivial/clean reviews pay nothing at any setting. Strict costs one extra run per voting consultant on the reviews that do have P0/P1. Each vote is `AGREE`, `DISAGREE_EVIDENCE` (with a verified verbatim quote) or `DISAGREE_CONCERN`; a concern alone never refutes a finding nor removes one the verifier grounded. The four vote rules and their outcomes table are in §8: the verifier's `AGREE` confirms unless a checked refutation ties or outvotes it, its verified `DISAGREE_EVIDENCE` refutes unless an `AGREE` ties or outvotes it, a lone refuter can neither confirm nor refute, and with three voters (codex plus pi on an independent family as extra) 2 of 3 matching votes decide.
   **One refuter per model family** (intended change): a consultant of the panel's family (claude-cli, or pi on a Claude model), a second lane of a family that already votes (pi on OpenAI next to codex), or an `unknown` family gets no refuter. codex plus pi on OpenAI used to run two refuters; it now runs one.
 - **One consultant, detected.** By default the consultant is the first installed of `codex` → `pi` → `claude-cli` (a nested read-only `claude -p`, model `sonnet`). `consultant=<codex|pi|claude-cli>` forces one (`claude` ≡ `claude-cli`); a forced consultant that is missing is reported `unavailable`, never replaced. Any other value goes to `Ignored args`. §2 resolves all of this in code — do not re-derive it.
 - `extra-advisor` (or `--extra-advisor`) → **EXTRA=on**: also run `pi` as an extra consultant, unless pi already is the consultant (then there is still one pi lane, reported `skipped (pi is the consultant)`). Optional model: `extra-advisor=<model>` (e.g. `extra-advisor=gemini-2.5-pro`, `extra-advisor=sonnet:high`) → passed to `pi --model`, also when pi is the consultant. Without a model, §2 picks pi's model by role from `pi --list-models`: as the consultant an OpenAI model first, then glm → qwen → kimi; as extra glm → qwen → kimi. It never falls back to pi's unpinned default.
@@ -52,18 +52,21 @@ Work dir **outside the repo**: `WD=$(mktemp -d)` (in `/tmp`, not under the repo 
 
 **PR mode:**
 - gh repo resolution: a full URL is self-describing. For `owner/repo#N` and `#N` pass `-R <owner/repo>` (otherwise `gh pr diff` from a non-git dir fails with "not a git repository"). Bare `#N` without owner/repo: try to derive the repo from the cwd git remote, else stop and ask for `owner/repo#N` or a URL.
+- `gh pr view <target> [-R …] --json title,baseRefName,headRefName,headRefOid,url` (metadata only, **no** `body`).
 - `gh pr diff <target> [-R …] > "$WD/diff.patch"`
-- `gh pr view <target> [-R …] --json title,baseRefName,headRefName,url` (metadata only, **no** `body`).
+- `gh pr view <target> [-R …] --json headRefOid` again. `HEAD_SHA` = that `headRefOid` if it equals the first one; if they differ, the PR moved under the diff and `HEAD_SHA` is **empty**.
 - `REPO` = the current clone if it matches the PR; otherwise **diff-only mode** (note it in the report).
 - **If `gh` is unavailable/unauthenticated** (first parse `owner/repo` + `N` from the URL or `owner/repo#N`):
-  1. If a local clone of that repo exists: `git fetch <remote> pull/<N>/head` then `git diff <baseRef>...FETCH_HEAD > "$WD/diff.patch"`.
+  1. If a local clone of that repo exists: `git fetch <remote> pull/<N>/head` then `git diff <baseRef>...FETCH_HEAD > "$WD/diff.patch"` and `HEAD_SHA=$(git rev-parse FETCH_HEAD)`. Never `git checkout` the PR in the user's clone.
   2. Else, for a public repository, fetch the diff over HTTP: `curl -fsSL "https://github.com/<owner>/<repo>/pull/<N>.diff" > "$WD/diff.patch"`. This path is **diff-only** — note it. Never read a token from the environment to reach a private repository: that is what `gh` and a local clone are for.
   3. If none works (a private repository without `gh` or a clone, bare `#N` with no remote, or no network) → stop and report that PR mode needs `gh` or a local clone.
 
 **Uncommitted mode:**
 - `git diff HEAD > "$WD/diff.patch"`; untracked via `git status --porcelain`.
 - Empty and no untracked → print "No changes to review" and **stop**.
-- `REPO` = the root of the current repository.
+- `REPO` = the root of the current repository. `HEAD_SHA=worktree`.
+
+**`HEAD_SHA`** (keep it as a literal) tells the sceptic `decide` (§8) where a quote from a file outside the diff may be read: `--repo "$REPO" --head-sha <HEAD_SHA>`. Diff-only mode has no `REPO` and no `HEAD_SHA`: pass neither, so only the diff is checked. An empty `HEAD_SHA` means pass no `--head-sha`.
 
 ## 2. Pre-flight health-check
 Select the consultants in **one** foreground call:
@@ -312,10 +315,21 @@ node "$H" decide --wd "$WD" --phase review --lanes <name>[,<name>…]   # every 
 
 ## 8. Sceptic pass (STRICT by default; `sceptic=basic` softens it, `sceptic=off` skips it) — INDEPENDENT verification
 To avoid confirmation bias, the sceptic pass is performed by an **independent verifier agent with fresh context** — NOT by you (the arbiter), and NOT by the agent that produced the finding. You only apply its verdicts.
-- Collect the P0/P1 findings (P2 isn't worth verifying), each with its id from `$WD/synthesis.json` — in both modes, never renumbered. Spawn `finding-verifier` via Task (batched — pass the whole list in one call; split into a few calls if large), giving it ONLY: the path to `$WD/diff.patch`, `REPO`, and the findings (id, title, `file:line`, severity, dimension, claimed `failure_scenario`, source, rationale). Do NOT pass your synthesis reasoning. Namespaced fallback: `consensus-review:finding-verifier`.
+- Collect the P0/P1 findings (P2 isn't worth verifying), each with its id from `$WD/synthesis.json` — in both modes, never renumbered — and write those ids as a JSON array to `$WD/ids.json` (both modes: `decide` reads it). Spawn `finding-verifier` via Task (batched — pass the whole list in one call; split into a few calls if large), giving it ONLY: the path to `$WD/diff.patch`, `REPO`, and the findings (id, title, `file:line`, severity, dimension, claimed `failure_scenario`, source, rationale). Do NOT pass your synthesis reasoning. Namespaced fallback: `consensus-review:finding-verifier`.
 - When `finding-verifier` returns, write its JSON verdict array verbatim to `$WD/verifier.verdicts.json` **only if** it returned a usable JSON array; otherwise write nothing. If you split it into several calls, concatenate the verdict arrays from all of them into that one file (still only usable arrays). This holds in `basic` and `strict` alike.
-- **Strict — the default.** Additionally enlist the consultants as refuters and take a **majority vote** per finding. `sceptic=basic` skips this paragraph entirely and applies the verifier verdicts as-is.
-  - Write the P0/P1 ids (the `synthesis.json` ids above) as a JSON array to `$WD/ids.json`, and a refuter brief ("argue why each finding is NOT real", the same findings fields the verifier gets, the output language) to each `$WD/<refuterBrief>` of a lane whose refuter is marked `run`: `$WD/refuter-brief.md` for the schema lanes, `$WD/refuter-brief-pi.md` for pi — the same text plus "Output the verdicts strictly as a JSON array of `{id, verdict: confirmed|unconfirmed|refuted, evidence}` between the markers `===VERDICTS_START===` and `===VERDICTS_END===`".
+- **Strict — the default.** Additionally enlist the consultants as refuters, who vote alongside the verifier. `sceptic=basic` skips this paragraph (no refuter runs) and goes straight to **Decide**.
+  - Write a refuter brief ("argue why each finding is NOT real", the same findings fields the verifier gets, the output language, and one vote per finding: `AGREE` when it holds, with the harm path at `file:line`; `DISAGREE_EVIDENCE` only with a `citation` whose `quote` is a contiguous excerpt copied verbatim from the reviewed head code, with its `file` and `line`, no `...`; `DISAGREE_CONCERN` for a doubt you cannot ground that way — a doubt without a quote does not count against the finding) to each `$WD/<refuterBrief>` of a lane whose refuter is marked `run`: `$WD/refuter-brief.md` for the schema lanes, `$WD/refuter-brief-pi.md` for pi — the same text plus "Output the verdicts strictly as a JSON array of objects of this shape between the markers `===VERDICTS_START===` and `===VERDICTS_END===`:" followed by this block:
+<!-- BEGIN GENERATED: contracts/verdict.schema.json#/properties/verdicts/items -->
+```
+{
+  "id": str,
+  "verdict": "AGREE"|"DISAGREE_EVIDENCE"|"DISAGREE_CONCERN",
+  "evidence": str,
+  "citation": {"file": str, "line": str, "quote": str}|null,
+  "suggested_severity": "P0"|"P1"|"P2"|null
+}
+```
+<!-- END GENERATED -->
   - Which refuters run is already decided in `review.decision.json` (`refuters`) — do not re-derive it. The helper reads it, runs a refuter marked `run`, and writes the recorded `skipped (…)` status for the rest without starting anything. Run them with the **same backgrounded-call protocol as §5** (one `run_in_background: true` call with literal values; without a completion notice, the bounded literal-path poll — here on each `$WD/<name>-refuter.status.json` — up to 2×T + 60 s, each poll call with `timeout: 600000`, then `decide` regardless), launching `finding-verifier` while it runs:
     ```bash
     WD=/tmp/tmp.XXXX REPO=/abs/repo T=900   # literals
@@ -326,17 +340,39 @@ To avoid confirmation bias, the sceptic pass is performed by an **independent ve
       --require-key verdicts --ids-file "$WD/ids.json" [--model <model>] &
     wait
     ```
-  - Once `$WD/verifier.verdicts.json` is written (or `finding-verifier` returned nothing usable) and the refuter statuses exist (or the bounded poll above has run out), always run in a foreground call `node "${CLAUDE_PLUGIN_ROOT}/scripts/run-lane.mjs" decide --wd <literal WD> --phase sceptic --lanes <name>-refuter[,<name>-refuter…]` (every lane), then read `$WD/sceptic.decision.json`: `perFinding.<id>.decision` is the verdict to apply, `perFinding.<id>.voters` reads `n of m`, `perFinding.<id>.noVote` names the voters that cast no vote on it, `verifier` is `ok | missing | invalid`, `excluded` maps a refuter left out of the ballot to its reason, and `voteMode` is `strict`, `strict → basic`, or `strict → basic (no independent refuter)`. Every id from `$WD/ids.json` has a decision; a finding with no vote at all is `unconfirmed`. Without a verifier vote a finding is `unconfirmed` — a refuter never decides alone. Report `verifier=missing|invalid` in section 9. If the decision carries `error` (e.g. `failed: helper error (no ids)`), apply none of it: fall back to the verifier's verdicts as in `sceptic=basic` and say so in section 9 — and if the verifier output is also missing or invalid, every P0/P1 is `unconfirmed` (a P0 goes to **Unverified — needs confirmation**).
-  - **The vote is lenient by design.** Only voters that returned a valid verdict for a finding count: a strict majority decides, a **tie is `unconfirmed`** (so with the default two voters a finding needs both to survive as stated; with three, 2 of 3 confirm), and a lone vote applies as-is only when it is the verifier's. A refuter that failed or timed out casts no vote rather than a negative one — an infrastructure failure must not remove a real P0. When no refuter voted at all, `voteMode` is `strict → basic` and the verifier's verdicts apply; when every refuter was skipped or excluded for family reasons, it is `strict → basic (no independent refuter)`. Say which in section 9.
-- Apply the verdicts:
-  - `refuted` → drop (P1/P2, logged) or, for P0, move to **Unverified — needs confirmation** with the refutation reason.
-  - `unconfirmed` → downgrade; single-source-unconfirmed → **Unconfirmed (single-source)**; a P0 → **Unverified — needs confirmation** (not counted in Totals P0).
-  - `confirmed` → keep; mark `survived skeptic` and cite the verifier's evidence.
+- **Decide — both modes.** Once `$WD/verifier.verdicts.json` is written (or `finding-verifier` returned nothing usable) and, in strict, the refuter statuses exist (or the bounded poll above has run out), always run in a foreground call:
+  ```bash
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/run-lane.mjs" decide --wd <literal WD> --phase sceptic --lanes <name>-refuter[,<name>-refuter…] [--repo "<literal REPO>"] [--head-sha <literal HEAD_SHA>]
+  ```
+  Strict lists every lane's refuter; basic passes `--lanes ""`. Add `--repo` only when there is a clone, and `--head-sha` only when §1 recorded a non-empty `HEAD_SHA`; diff-only mode passes neither. Then read `$WD/sceptic.decision.json` (both modes): `perFinding.<id>.decision` is the verdict to apply, `voters` reads `n of m`, `noVote` names the voters that cast no vote on it, `votes` maps each voter to its vote, `downgraded` maps a voter whose `DISAGREE_EVIDENCE` did not verify to the reason, and `render` holds the report tokens (`label`, `concerns`, `refutation`); top level, `verifier` is `ok | missing | invalid`, `excluded` maps a refuter left out of the ballot to its reason, and `voteMode` is `basic`, `strict`, `strict → basic`, or `strict → basic (no independent refuter)`. Every id from `$WD/ids.json` has a decision. Report `verifier=missing|invalid` in section 9.
+- **Fallback — the one rule.** If `sceptic.decision.json` is missing, has no `perFinding`, or carries `error` (e.g. `failed: helper error (no ids)`), apply none of it. For each P0/P1 id of `$WD/synthesis.json`: exactly one verifier vote on it, and that vote `AGREE` (or the legacy `confirmed`) → `confirmed`; anything else — another verdict, no vote, a duplicated vote, missing or invalid verifier output → `unconfirmed`. Nothing is `refuted` without `decide`: its quote was never checked. Votes on a P2 or an unknown id are ignored. Say `sceptic: fallback (<why>)` in section 9.
+- **The vote rules** (`decide` applies them; do not re-derive). Voters are the verifier plus the refuters kept after family exclusion; a refuter that failed or timed out casts no vote rather than a negative one — an infrastructure failure must not remove a real P0. Per finding, `cast` = voters with a valid vote, `A` = `AGREE` votes, `E` = `DISAGREE_EVIDENCE` votes whose quote verified; a concern counts in `cast` only. In order:
+  1. no verifier vote → `unconfirmed` — a refuter never decides alone;
+  2. `E > A` and (the verifier's vote is a verified `DISAGREE_EVIDENCE`, or `2·E > cast`) → `refuted`;
+  3. `A > E` and (the verifier voted `AGREE`, or `2·A > cast`) → `confirmed`, concerns attached;
+  4. anything else → `unconfirmed`.
+
+  | Votes (V = verifier, R = refuter) | Decision |
+  |---|---|
+  | V AGREE, every other vote a concern | `confirmed` |
+  | V EVIDENCE, every other vote a concern | `refuted` |
+  | AGREE and EVIDENCE tied (V AGREE + R EVIDENCE, V EVIDENCE + R AGREE) | `unconfirmed` |
+  | V CONCERN + one R AGREE or one R EVIDENCE | `unconfirmed` — a lone refuter neither confirms nor refutes |
+  | V CONCERN + two R AGREE / two R EVIDENCE (three voters) | `confirmed` / `refuted` |
+  | V AGREE + two R EVIDENCE / V AGREE + R EVIDENCE + R AGREE | `refuted` / `confirmed` |
+  | no verifier vote, or only concerns | `unconfirmed` |
+
+  A `DISAGREE_EVIDENCE` whose quote does not verify counts as a concern, named in `downgraded` (`cannot verify outside diff`, `elided quote`, …). The check proves only that the quote exists within a few lines of the cited line, not that it is relevant. It reads the diff's new side, and outside the diff only the clone at `HEAD_SHA`; in PR mode a head commit missing from the local clone makes every quote outside the diff a concern. When no refuter voted at all, `voteMode` is `strict → basic` and the verifier's votes apply; when every refuter was skipped or excluded for family reasons, it is `strict → basic (no independent refuter)`. Say which in section 9.
+- Apply the verdicts. Copy every concern text, location and quote from `perFinding.<id>.render` (or `notes`), never from the raw verifier or refuter payloads; write the surrounding prose in `lang` and copy the tokens (`label`, voter names, texts, quotes) as they are:
+  - `refuted` → drop (P1/P2, logged) or, for P0, move to **Unverified — needs confirmation**; either way cite `render.refutation.loc` and its quote, shown as `fence` + newline + `quote` + newline + `fence` (the `fence` given, so the quote cannot break the layout).
+  - `unconfirmed` → downgrade; single-source-unconfirmed → **Unconfirmed (single-source)**; a P0 → **Unverified — needs confirmation** (not counted in Totals P0), with any concern texts as the reason and, when a verified quote tied an AGREE, that quote from `notes.<voter>.citation`, fenced with backticks one longer than its longest backtick run and at least three.
+  - `confirmed` → keep; mark it "survived sceptic (`<render.label>`)" — those words in `lang`, the label as-is — and add each `render.concerns` entry as `<voter>: <text>`. In the fallback there is no `render`: the label is `verifier: AGREE` and there are no concerns.
+  - Every `downgraded` entry is logged under **Dropped / Downgraded (sceptic)**: `<id> <voter>: EVIDENCE → CONCERN (<reason>)`.
 - **P0 is never silently dropped** — it is either `confirmed` (stays P0, with evidence) or moved to the Unverified bucket with a reason.
-- **No silent drops:** log every drop/downgrade/move together with the verifier verdict.
+- **No silent drops:** log every drop/downgrade/move together with its votes.
 
 ## 9. Report
-Write the report in the selected output language (`lang`, default English). Sort P0→P1→P2 (within a tier — by agreement desc, then dimension/file). Print to the terminal **and** save the file, unless `no-file` was given (terminal only, zero writes). Destination: `out=<path>` when set (directory value → default filename inside it; otherwise the exact path), else `<INVOKE>/.reviews/review-<slug>-<YYYY-MM-DD>.md` (create the dir; for the remote-PR diff-only case write to the invoking repo's `.reviews/`). State the destination — or "not written (`no-file`)" — in the last line of the terminal output.
+Write the report in the selected output language (`lang`, default English); tokens copied from `sceptic.decision.json` (labels, voter names, vote kinds, concern texts, quotes) stay as they are. Sort P0→P1→P2 (within a tier — by agreement desc, then dimension/file). Print to the terminal **and** save the file, unless `no-file` was given (terminal only, zero writes). Destination: `out=<path>` when set (directory value → default filename inside it; otherwise the exact path), else `<INVOKE>/.reviews/review-<slug>-<YYYY-MM-DD>.md` (create the dir; for the remote-PR diff-only case write to the invoking repo's `.reviews/`). State the destination — or "not written (`no-file`)" — in the last line of the terminal output.
 
 **Archive — on the file branch only, never with `no-file`.** Before writing the report, run in a foreground call, with the literals from §1 and the final report path:
 ```bash
@@ -363,7 +399,7 @@ Archive: <.reviews/<run-id> | not written (<reason>)>   <omitted with no-file>
 Totals: P0=<n> P1=<n> P2=<n>
 
 ## P0
-### <title>  `file:line`  [claude|codex|pi|claude-cli]  (dimension/category)<, survived skeptic>
+### <title>  `file:line`  [claude|codex|pi|claude-cli]  (dimension/category)<, survived sceptic (<render.label>)>
 <rationale>
 **Fix:** <suggested_fix>
 ...
@@ -391,14 +427,14 @@ Totals: P0=<n> P1=<n> P2=<n>
 <P0s whose failure scenario was not concretely grounded (sceptic) — NOT counted as confirmed P0 in Totals>
 
 ## Dropped / Downgraded (sceptic)
-<dropped P1/P2 + downgrades, each with the reason — only when sceptic is on (basic or strict)>
+<dropped P1/P2 + downgrades, each with the reason, and every `downgraded` vote (`F2 codex: EVIDENCE → CONCERN (cannot verify outside diff)`) — only when sceptic is on (basic or strict)>
 
 ## Source availability
 <one line per external lane (refuters included) with its attempts from `attempts[]`, e.g.
  `codex: degraded — attempt 1: timeout (900s); attempt 2: failed: stream disconnected (412s)`,
  `codex-refuter: ok (retried: failed) — attempt 1: failed: rate limit (35s); attempt 2: ok (610s)`;
  skipped/unavailable lanes with their reason; diff-only mode, etc.
- strict sceptic: `voteMode: strict | strict → basic | strict → basic (no independent refuter)`, `verifier` when it is not `ok`, each `excluded` refuter with its reason, and the voters per finding — `F1: 2 of 2 voters`, `F3: 1 of 2 voters (no vote: codex-refuter)`.
+ sceptic (basic or strict): `voteMode: basic | strict | strict → basic | strict → basic (no independent refuter)`, or `fallback (<why>)`; `verifier` when it is not `ok`; each `excluded` refuter with its reason; and per finding the voters and the votes — `F1: 2 of 2 voters — verifier: AGREE, codex: CONCERN`, `F3: 1 of 2 voters (no vote: codex-refuter) — verifier: AGREE`.
  with a pi lane: pi's resolved provider/model; with `extraSameEngine: true`, a note that the extra lane is the same family as the consultant and adds little independence — suggest extra-advisor=<other-model>>
 ```
 

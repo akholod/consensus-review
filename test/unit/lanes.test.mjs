@@ -6,7 +6,7 @@ import { join } from "node:path"
 import {
   CLAUDE_CLI_MODEL, allExternalDown, classifyClaudeResult, classifyCodexResult, classifyPiResult, decideRetry,
   decideReview, decideSceptic, family, helperError, killGrace, laneCommand, laneStatus, parsePiModels, parsePiOutput,
-  parseVerdicts, pickPiModel, selectConsultants, selectRefuters, tallyVotes, validIds, validRefuterEntry, validStatus,
+  parseVotes, pickPiModel, renderSceptic, selectConsultants, selectRefuters, tallyVotes, validIds, validRefuterEntry, validStatus,
 } from "../../scripts/lib/lanes.mjs"
 
 // Every row of the plan's arithmetic table: elapsed is attempt 1 fully settled, incl. TERM→KILL.
@@ -214,22 +214,65 @@ test("laneCommand keeps the read-only flags exactly", () => {
   assert.throws(() => laneCommand("bash", opts))
 })
 
-test("parseVerdicts: unknown id ignored, duplicate invalidated, partial ok, empty unparseable", () => {
+const CITE = { file: "a.js", line: "12", quote: "if (GUARD) return" }
+const vote = (verdict, extra = {}) => ({ verdict, evidence: "", citation: null, reason: null, ...extra })
+
+test("parseVotes: unknown id ignored, duplicate invalidated, partial ok, empty unparseable", () => {
   const ids = ["F1", "F2", "F3"]
-  const got = parseVerdicts({ verdicts: [
-    { id: "F1", verdict: "confirmed", evidence: "" },
-    { id: "F9", verdict: "refuted", evidence: "" },
-    { id: "F2", verdict: "refuted", evidence: "" },
-    { id: "F2", verdict: "confirmed", evidence: "" },
+  const got = parseVotes({ verdicts: [
+    { id: "F1", verdict: "AGREE", evidence: "a.js:3" },
+    { id: "F9", verdict: "DISAGREE_CONCERN", evidence: "" },
+    { id: "F2", verdict: "DISAGREE_CONCERN", evidence: "" },
+    { id: "F2", verdict: "AGREE", evidence: "" },
     { id: "F3", verdict: "reduced", evidence: "" },
   ] }, ids)
-  assert.deepEqual(got, { status: "ok", votes: { F1: "confirmed" }, ignored: ["F9"], duplicates: ["F2"] })
-  assert.equal(parseVerdicts({ verdicts: [] }, ids).status, "unparseable")
-  assert.equal(parseVerdicts(null, ids).status, "unparseable")
-  assert.deepEqual(parseVerdicts([{ id: "F3", verdict: "refuted" }], ids).votes, { F3: "refuted" })
+  assert.deepEqual(got, { status: "ok", votes: { F1: vote("AGREE", { evidence: "a.js:3" }) }, ignored: ["F9"], duplicates: ["F2"] })
+  assert.equal(parseVotes({ verdicts: [] }, ids).status, "unparseable")
+  assert.equal(parseVotes(null, ids).status, "unparseable")
+  assert.deepEqual(parseVotes([{ id: "F3", verdict: "toString" }, { id: "F1", verdict: "hasOwnProperty" }], ids).votes, {})
+})
+
+test("parseVotes: the schema's kinds and the legacy words, refuted kept as evidence only with a citation", () => {
+  const ids = ["F1", "F2", "F3", "F4", "F5", "F6"]
+  const got = parseVotes([
+    { id: "F1", verdict: "AGREE", evidence: "harm at a.js:1", citation: CITE },
+    { id: "F2", verdict: "DISAGREE_EVIDENCE", evidence: "guarded", citation: CITE },
+    { id: "F3", verdict: "DISAGREE_CONCERN", evidence: { why: 1 } },
+    { id: "F4", verdict: "confirmed" },
+    { id: "F5", verdict: "unconfirmed", evidence: "unsure" },
+    { id: "F6", verdict: "refuted", evidence: "x", citation: { ...CITE, line: 12 } },
+  ], ids).votes
+  assert.deepEqual(got, {
+    F1: vote("AGREE", { evidence: "harm at a.js:1" }),
+    F2: vote("DISAGREE_EVIDENCE", { evidence: "guarded", citation: CITE }),
+    F3: vote("DISAGREE_CONCERN", { evidence: '{"why":1}' }),
+    F4: vote("AGREE"),
+    F5: vote("DISAGREE_CONCERN", { evidence: "unsure" }),
+    F6: vote("DISAGREE_EVIDENCE", { evidence: "x", citation: CITE }),
+  })
+  assert.deepEqual(parseVotes([{ id: "F1", verdict: "refuted", evidence: "no" }], ids).votes.F1,
+    vote("DISAGREE_CONCERN", { evidence: "no", reason: "legacy refuted without citation" }))
+})
+
+test("parseVotes: a malformed citation turns evidence into a concern; a numeric line is accepted", () => {
+  for (const citation of [{ ...CITE, line: { n: 1 } }, { line: "1", quote: "x" }, { ...CITE, file: "" }, "a.js:1",
+    { ...CITE, quote: 7 }, { ...CITE, line: Number.NaN }, [CITE], null, undefined]) {
+    const got = parseVotes([{ id: "F1", verdict: "DISAGREE_EVIDENCE", evidence: "e", citation }], ["F1"]).votes.F1
+    assert.deepEqual(got, vote("DISAGREE_CONCERN", { evidence: "e", reason: "malformed citation" }), JSON.stringify(citation))
+  }
+  const numeric = parseVotes([{ id: "F1", verdict: "DISAGREE_EVIDENCE", citation: { ...CITE, line: 12, extra: true } }], ["F1"])
+  assert.deepEqual(numeric.votes.F1.citation, CITE)
 })
 
 const lane = (status, display = status, attempts = [{}]) => ({ status, display, attempts })
+
+/** Test quote check: a quote verifies iff it contains GUARD. */
+const GUARDED = { verifyCitation: (c) => (c.quote.includes("GUARD") ? { verified: true, reason: null, source: "diff" }
+  : { verified: false, reason: "quote not found", source: null }) }
+const ballot = (id, verdict, extra = {}) =>
+  ({ id, verdict, evidence: "", citation: verdict === "DISAGREE_EVIDENCE" ? CITE : null, suggested_severity: null, ...extra })
+const core = ({ decision, voters, noVote }) => ({ decision, voters, noVote })
+const coreOf = (perFinding) => Object.fromEntries(Object.entries(perFinding).map(([id, e]) => [id, core(e)]))
 
 test("selectRefuters: config → skip, degraded → run, unavailable → skip, no extra → no pi", () => {
   assert.deepEqual(selectRefuters({ codex: lane("failed", "failed: invalid_json_schema") }, false),
@@ -246,23 +289,23 @@ test("selectRefuters: config → skip, degraded → run, unavailable → skip, n
     { "codex-refuter": "run", "pi-refuter": "skipped (pi failed: config)" })
 })
 
-test("tallyVotes: verifier missing + one refuter refuted → unconfirmed", () => {
-  assert.deepEqual(tallyVotes(["F1"], { verifier: {}, "codex-refuter": { F1: "refuted" } }),
-    { F1: { decision: "unconfirmed", voters: "1 of 2", noVote: ["verifier"] } })
-  assert.equal(tallyVotes(["F1"], { verifier: {}, codex: { F1: "refuted" }, pi: { F1: "refuted" } }).F1.decision, "unconfirmed")
+test("tallyVotes: verifier missing + one refuter evidence → unconfirmed", () => {
+  assert.deepEqual(tallyVotes(["F1"], { verifier: {}, "codex-refuter": { F1: "DISAGREE_EVIDENCE" } }),
+    { F1: { decision: "unconfirmed", voters: "1 of 2", noVote: ["verifier"], votes: { "codex-refuter": "DISAGREE_EVIDENCE" } } })
+  assert.equal(tallyVotes(["F1"], { verifier: {}, codex: { F1: "DISAGREE_EVIDENCE" }, pi: { F1: "DISAGREE_EVIDENCE" } }).F1.decision, "unconfirmed")
 })
 
 test("tallyVotes: tie at 2 voters, 1 voter, 3 → 2, nobody", () => {
-  assert.deepEqual(tallyVotes(["F1"], { verifier: { F1: "confirmed" }, codex: { F1: "refuted" } }),
-    { F1: { decision: "unconfirmed", voters: "2 of 2", noVote: [] } })
-  assert.deepEqual(tallyVotes(["F1"], { verifier: { F1: "refuted" }, codex: {} }),
-    { F1: { decision: "refuted", voters: "1 of 2", noVote: ["codex"] } })
-  assert.deepEqual(tallyVotes(["F1"], { verifier: { F1: "confirmed" }, codex: { F1: "confirmed" }, pi: {} }),
-    { F1: { decision: "confirmed", voters: "2 of 3", noVote: ["pi"] } })
-  assert.equal(tallyVotes(["F1"], { verifier: { F1: "confirmed" }, codex: { F1: "refuted" }, pi: { F1: "refuted" } }).F1.decision, "refuted")
-  assert.equal(tallyVotes(["F1"], { verifier: { F1: "confirmed" }, codex: { F1: "refuted" }, pi: { F1: "unconfirmed" } }).F1.decision, "unconfirmed")
+  assert.deepEqual(tallyVotes(["F1"], { verifier: { F1: "AGREE" }, codex: { F1: "DISAGREE_EVIDENCE" } }),
+    { F1: { decision: "unconfirmed", voters: "2 of 2", noVote: [], votes: { verifier: "AGREE", codex: "DISAGREE_EVIDENCE" } } })
+  assert.deepEqual(tallyVotes(["F1"], { verifier: { F1: "DISAGREE_EVIDENCE" }, codex: {} }),
+    { F1: { decision: "refuted", voters: "1 of 2", noVote: ["codex"], votes: { verifier: "DISAGREE_EVIDENCE" } } })
+  assert.deepEqual(tallyVotes(["F1"], { verifier: { F1: "AGREE" }, codex: { F1: "AGREE" }, pi: {} }),
+    { F1: { decision: "confirmed", voters: "2 of 3", noVote: ["pi"], votes: { verifier: "AGREE", codex: "AGREE" } } })
+  assert.equal(tallyVotes(["F1"], { verifier: { F1: "AGREE" }, codex: { F1: "DISAGREE_EVIDENCE" }, pi: { F1: "DISAGREE_EVIDENCE" } }).F1.decision, "refuted")
+  assert.equal(tallyVotes(["F1"], { verifier: { F1: "AGREE" }, codex: { F1: "DISAGREE_EVIDENCE" }, pi: { F1: "DISAGREE_CONCERN" } }).F1.decision, "unconfirmed")
   assert.deepEqual(tallyVotes(["F1"], { verifier: {}, codex: {} }),
-    { F1: { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex"] } })
+    { F1: { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex"], votes: {} } })
 })
 
 test("validStatus, validRefuterEntry and validIds fail closed", () => {
@@ -296,33 +339,33 @@ test("allExternalDown: extra both down, default degraded + skipped pi, one ok (r
 })
 
 test("decideSceptic: failed refuters vote nothing and drop the mode to basic", () => {
-  const verifier = [{ id: "F1", verdict: "confirmed" }, { id: "F2", verdict: "refuted" }]
+  const verifier = [ballot("F1", "AGREE"), ballot("F2", "DISAGREE_EVIDENCE")]
   const lanes = { "codex-refuter": lane("degraded", "degraded (failed: x; failed: x)"), "pi-refuter": lane("skipped", "skipped (unavailable)", []) }
-  const got = decideSceptic(lanes, ["F1", "F2"], verifier, { "codex-refuter": null, "pi-refuter": null })
+  const got = decideSceptic(lanes, ["F1", "F2"], verifier, { "codex-refuter": null, "pi-refuter": null }, GUARDED)
   assert.equal(got.voteMode, "strict → basic")
   assert.equal(got.verifier, "ok")
-  assert.deepEqual(got.perFinding, {
+  assert.deepEqual(coreOf(got.perFinding), {
     F1: { decision: "confirmed", voters: "1 of 2", noVote: ["codex-refuter"] },
     F2: { decision: "refuted", voters: "1 of 2", noVote: ["codex-refuter"] },
   })
   const voted = decideSceptic({ "codex-refuter": lane("ok") }, ["F1"], verifier,
-    { "codex-refuter": { verdicts: [{ id: "F1", verdict: "refuted", evidence: "" }] } })
+    { "codex-refuter": { verdicts: [ballot("F1", "DISAGREE_EVIDENCE")] } }, GUARDED)
   assert.equal(voted.voteMode, "strict")
-  assert.deepEqual(voted.perFinding.F1, { decision: "unconfirmed", voters: "2 of 2", noVote: [] })
+  assert.deepEqual(core(voted.perFinding.F1), { decision: "unconfirmed", voters: "2 of 2", noVote: [] })
 })
 
 test("decideSceptic: every sent id gets a decision, whatever the verifier returned", () => {
   const lanes = { "codex-refuter": lane("ok") }
-  const refuter = { "codex-refuter": { verdicts: [{ id: "F2", verdict: "refuted", evidence: "" }] } }
-  const partial = decideSceptic(lanes, ["F1", "F2", "F3"], [{ id: "F1", verdict: "confirmed" }], refuter)
+  const refuter = { "codex-refuter": { verdicts: [ballot("F2", "DISAGREE_EVIDENCE")] } }
+  const partial = decideSceptic(lanes, ["F1", "F2", "F3"], [ballot("F1", "AGREE")], refuter, GUARDED)
   assert.equal(partial.verifier, "ok")
   assert.deepEqual(Object.keys(partial.perFinding), ["F1", "F2", "F3"])
   // a lone refuter vote never decides: without the verifier the finding stays unconfirmed
-  assert.deepEqual(partial.perFinding.F2, { decision: "unconfirmed", voters: "1 of 2", noVote: ["verifier"] })
-  assert.deepEqual(partial.perFinding.F3, { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex-refuter"] })
-  const missing = decideSceptic(lanes, ["F1"], undefined, refuter)
+  assert.deepEqual(core(partial.perFinding.F2), { decision: "unconfirmed", voters: "1 of 2", noVote: ["verifier"] })
+  assert.deepEqual(core(partial.perFinding.F3), { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex-refuter"] })
+  const missing = decideSceptic(lanes, ["F1"], undefined, refuter, GUARDED)
   assert.equal(missing.verifier, "missing")
-  assert.deepEqual(missing.perFinding.F1, { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex-refuter"] })
+  assert.deepEqual(core(missing.perFinding.F1), { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex-refuter"] })
   assert.equal(decideSceptic(lanes, ["F1"], null, refuter).verifier, "invalid")
   assert.equal(decideSceptic(lanes, ["F1"], { nope: 1 }, refuter).verifier, "invalid")
   const noIds = decideSceptic(lanes, null, [], refuter)
@@ -608,16 +651,16 @@ test("decideReview: independence per lane and extraSameEngine", () => {
   assert.equal(decideReview({ pi: piLane(null, null), "claude-cli": lane("ok") }).extraSameEngine, false)
 })
 
-const votes = (pairs) => ({ verdicts: Object.entries(pairs).map(([id, verdict]) => ({ id, verdict, evidence: "" })) })
+const votes = (pairs) => ({ verdicts: Object.entries(pairs).map(([id, verdict]) => ballot(id, verdict)) })
 
 test("vote: codex + pi on OpenAI, verifier refuted, both would-be refuters confirmed → unconfirmed", () => {
   const review = decideReview({ codex: lane("ok"), pi: piLane("openai-codex", "gpt-6.1-terra") })
   assert.equal(review.refuters["pi-refuter"], "skipped (same-family as codex)")
   const lanes = { "codex-refuter": lane("ok"), "pi-refuter": lane("skipped", review.refuters["pi-refuter"], []) }
-  const got = decideSceptic(lanes, ["F1"], [{ id: "F1", verdict: "refuted" }],
-    { "codex-refuter": votes({ F1: "confirmed" }), "pi-refuter": null })
+  const got = decideSceptic(lanes, ["F1"], [ballot("F1", "DISAGREE_EVIDENCE")],
+    { "codex-refuter": votes({ F1: "AGREE" }), "pi-refuter": null }, GUARDED)
   assert.equal(got.voteMode, "strict")
-  assert.deepEqual(got.perFinding.F1, { decision: "unconfirmed", voters: "2 of 2", noVote: [] })
+  assert.deepEqual(core(got.perFinding.F1), { decision: "unconfirmed", voters: "2 of 2", noVote: [] })
   assert.deepEqual(got.excluded, {})
 })
 
@@ -625,40 +668,193 @@ test("vote: 3 voters, codex + pi on glm: verifier and codex confirmed, pi refute
   const review = decideReview({ codex: lane("ok"), pi: piLane("opencode-go", "glm-5.3") })
   assert.deepEqual(review.refuters, { "codex-refuter": "run", "pi-refuter": "run" })
   const lanes = { "codex-refuter": lane("ok"), "pi-refuter": piLane("opencode-go", "glm-5.3") }
-  const got = decideSceptic(lanes, ["F1"], [{ id: "F1", verdict: "confirmed" }],
-    { "codex-refuter": votes({ F1: "confirmed" }), "pi-refuter": votes({ F1: "refuted" }) })
+  const got = decideSceptic(lanes, ["F1"], [ballot("F1", "AGREE")],
+    { "codex-refuter": votes({ F1: "AGREE" }), "pi-refuter": votes({ F1: "DISAGREE_EVIDENCE" }) }, GUARDED)
   assert.equal(got.voteMode, "strict")
-  assert.deepEqual(got.perFinding.F1, { decision: "confirmed", voters: "3 of 3", noVote: [] })
+  assert.deepEqual(core(got.perFinding.F1), { decision: "confirmed", voters: "3 of 3", noVote: [] })
 })
 
 test("vote: a refuter whose own run is not independent is excluded; verifier confirmed stays confirmed", () => {
   for (const [provider, model, reason] of [["claude-bridge", "claude-opus-5", "family anthropic (panel)"],
     [null, null, "family unknown"], ["openai-codex", "gpt-6.1-terra", "family openai (as codex-refuter)"]]) {
     const lanes = { "codex-refuter": lane("ok"), "pi-refuter": piLane(provider, model) }
-    const got = decideSceptic(lanes, ["F1"], [{ id: "F1", verdict: "confirmed" }],
-      { "codex-refuter": votes({}), "pi-refuter": votes({ F1: "refuted" }) })
+    const got = decideSceptic(lanes, ["F1"], [ballot("F1", "AGREE")],
+      { "codex-refuter": votes({}), "pi-refuter": votes({ F1: "DISAGREE_EVIDENCE" }) })
     assert.deepEqual(got.excluded, { "pi-refuter": reason })
-    assert.deepEqual(got.perFinding.F1, { decision: "confirmed", voters: "1 of 2", noVote: ["codex-refuter"] }, reason)
+    assert.deepEqual(core(got.perFinding.F1), { decision: "confirmed", voters: "1 of 2", noVote: ["codex-refuter"] }, reason)
   }
   // alone: voters read 1 of 1, and the mode names why
   const alone = decideSceptic({ "pi-refuter": piLane("claude-bridge", "claude-opus-5") }, ["F1"],
-    [{ id: "F1", verdict: "confirmed" }], { "pi-refuter": votes({ F1: "refuted" }) })
-  assert.deepEqual(alone.perFinding.F1, { decision: "confirmed", voters: "1 of 1", noVote: [] })
+    [ballot("F1", "AGREE")], { "pi-refuter": votes({ F1: "DISAGREE_EVIDENCE" }) })
+  assert.deepEqual(core(alone.perFinding.F1), { decision: "confirmed", voters: "1 of 1", noVote: [] })
   assert.equal(alone.voteMode, "strict → basic (no independent refuter)")
   // `kind` wins over the name
-  const kinded = decideSceptic({ x: { ...lane("ok"), kind: "claude-cli" } }, ["F1"], [], { x: votes({ F1: "refuted" }) })
+  const kinded = decideSceptic({ x: { ...lane("ok"), kind: "claude-cli" } }, ["F1"], [], { x: votes({ F1: "DISAGREE_EVIDENCE" }) })
   assert.deepEqual(kinded.excluded, { x: "family anthropic (panel)" })
 })
 
 test("decideSceptic: a same-family skip gives the independent-refuter wording, a failed refuter the plain one", () => {
   const skipped = decideSceptic({ "claude-cli-refuter": lane("skipped", "skipped (same-family)", []) }, ["F1"],
-    [{ id: "F1", verdict: "confirmed" }], { "claude-cli-refuter": null })
+    [ballot("F1", "AGREE")], { "claude-cli-refuter": null })
   assert.equal(skipped.voteMode, "strict → basic (no independent refuter)")
-  assert.deepEqual(skipped.perFinding.F1, { decision: "confirmed", voters: "1 of 1", noVote: [] })
+  assert.deepEqual(core(skipped.perFinding.F1), { decision: "confirmed", voters: "1 of 1", noVote: [] })
   const unknown = decideSceptic({ "pi-refuter": lane("skipped", "skipped (independence unknown)", []) }, ["F1"], [], {})
   assert.equal(unknown.voteMode, "strict → basic (no independent refuter)")
   const failed = decideSceptic({ "codex-refuter": lane("degraded"), "pi-refuter": lane("skipped", "skipped (same-family as codex)", []) },
     ["F1"], [], { "codex-refuter": null })
   assert.equal(failed.voteMode, "strict → basic")
   assert.equal(decideSceptic({ "codex-refuter": lane("skipped", "skipped (unavailable)", []) }, ["F1"], [], {}).voteMode, "strict → basic")
+})
+
+test("decideSceptic: no refuter lanes at all is basic", () => {
+  const basic = decideSceptic({}, ["F1"], [ballot("F1", "AGREE")], {}, GUARDED)
+  assert.equal(basic.voteMode, "basic")
+  assert.deepEqual(core(basic.perFinding.F1), { decision: "confirmed", voters: "1 of 1", noVote: [] })
+})
+
+// The voter sets of the outcomes table: 1 = basic, 2 = verifier + codex, 3 = verifier + codex + pi (glm).
+const VOTER_LANES = [{}, { "codex-refuter": lane("ok") }, { "codex-refuter": lane("ok"), "pi-refuter": piLane("opencode-go", "glm-5.3") }]
+const BAD_QUOTE = { ...CITE, quote: "if (other) return x" }
+// A = AGREE, E = DISAGREE_EVIDENCE with a verifying quote, X = DISAGREE_EVIDENCE whose quote fails, C = concern.
+const kindBallot = (id, k) => (k === "A" ? ballot(id, "AGREE") : k === "E" ? ballot(id, "DISAGREE_EVIDENCE")
+  : k === "X" ? ballot(id, "DISAGREE_EVIDENCE", { citation: BAD_QUOTE }) : ballot(id, "DISAGREE_CONCERN"))
+/** `kinds` = [verifier, codex?, pi?]; null = no vote. → the decision entry for F1. */
+function sceptic(kinds, options = GUARDED) {
+  const [own, ...refuters] = kinds
+  const lanes = VOTER_LANES[refuters.length]
+  const names = Object.keys(lanes)
+  const payloads = Object.fromEntries(names.map((name, i) =>
+    [name, refuters[i] ? { verdicts: [kindBallot("F1", refuters[i])] } : null]))
+  return decideSceptic(lanes, ["F1"], own ? [kindBallot("F1", own)] : [], payloads, options).perFinding.F1
+}
+
+test("vote rules: every row of the outcomes table (the ballot corpus)", () => {
+  const TABLE = [
+    ["real", ["A"], "confirmed"],
+    ["false", ["E"], "refuted"],
+    ["real", ["C"], "unconfirmed"],
+    ["real", ["X"], "unconfirmed"],
+    ["real", ["A", "C"], "confirmed"],
+    ["false", ["A", "E"], "unconfirmed"],
+    ["real", ["C", "A"], "unconfirmed"],
+    ["false", ["C", "E"], "unconfirmed"],
+    ["false", ["E", "C"], "refuted"],
+    ["real", ["E", "A"], "unconfirmed"],
+    ["real", ["C", "C"], "unconfirmed"],
+    ["real", ["C", "A", "A"], "confirmed"],
+    ["false", ["C", "E", "E"], "refuted"],
+    ["false", ["A", "E", "E"], "refuted"],
+    ["false", ["A", "E", "C"], "unconfirmed"],
+    ["real", ["A", "E", "A"], "confirmed"],
+  ]
+  for (const [label, kinds, decision] of TABLE) {
+    const got = sceptic(kinds)
+    assert.equal(got.decision, decision, `${label}: ${kinds.join(" + ")}`)
+    assert.equal(got.voters, `${kinds.length} of ${kinds.length}`)
+  }
+})
+
+const KINDS = ["A", "E", "X", "C", null]
+const combos = (n) => (n === 0 ? [[]] : combos(n - 1).flatMap((rest) => KINDS.map((k) => [k, ...rest])))
+const BALLOTS = [1, 2, 3].flatMap((n) => combos(n))
+
+test("vote rules: doubt never removes a finding the verifier grounded", () => {
+  for (const kinds of BALLOTS.filter(([own, ...rest]) => own === "A" && rest.every((k) => k === "C" || k === null))) {
+    assert.equal(sceptic(kinds).decision, "confirmed", kinds.join(" + "))
+  }
+})
+
+test("vote rules: a lone refuter AGREE never promotes a finding", () => {
+  for (const kinds of BALLOTS.filter(([own, ...rest]) => own === "C" && rest.filter((k) => k === "A").length === 1)) {
+    assert.notEqual(sceptic(kinds).decision, "confirmed", kinds.join(" + "))
+  }
+})
+
+test("vote rules: no valid verifier vote is unconfirmed, whatever the refuters say", () => {
+  for (const kinds of BALLOTS.filter(([own]) => own === null)) assert.equal(sceptic(kinds).decision, "unconfirmed", kinds.join(" + "))
+  const lanes = VOTER_LANES[2]
+  const all = { "codex-refuter": votes({ F1: "AGREE" }), "pi-refuter": votes({ F1: "AGREE" }) }
+  for (const payload of [undefined, null, { nope: 1 }, [{ id: "F1", verdict: "maybe" }], [ballot("F1", "AGREE"), ballot("F1", "AGREE")]]) {
+    assert.equal(decideSceptic(lanes, ["F1"], payload, all, GUARDED).perFinding.F1.decision, "unconfirmed", JSON.stringify(payload))
+  }
+})
+
+test("vote rules: a failed refuter and an excluded same-family refuter cast no vote", () => {
+  const failed = decideSceptic({ "codex-refuter": lane("degraded"), "pi-refuter": piLane("opencode-go", "glm-5.3") }, ["F1"],
+    [ballot("F1", "AGREE")], { "codex-refuter": null, "pi-refuter": votes({ F1: "DISAGREE_CONCERN" }) }, GUARDED).perFinding.F1
+  assert.deepEqual({ ...core(failed), votes: failed.votes },
+    { decision: "confirmed", voters: "2 of 3", noVote: ["codex-refuter"], votes: { verifier: "AGREE", "pi-refuter": "DISAGREE_CONCERN" } })
+  const excluded = decideSceptic({ "codex-refuter": lane("ok"), "pi-refuter": piLane("openai-codex", "gpt-6.1-terra") }, ["F1"],
+    [ballot("F1", "DISAGREE_CONCERN")], { "codex-refuter": votes({ F1: "AGREE" }), "pi-refuter": votes({ F1: "AGREE" }) }, GUARDED)
+  assert.deepEqual(excluded.excluded, { "pi-refuter": "family openai (as codex-refuter)" })
+  assert.deepEqual(excluded.perFinding.F1.votes, { verifier: "DISAGREE_CONCERN", "codex-refuter": "AGREE" })
+  assert.equal(excluded.perFinding.F1.decision, "unconfirmed") // with pi counted it would be 2 of 3 → confirmed
+})
+
+test("vote rules: a failed quote turns V A + R E into confirmed; no injected check downgrades every refutation", () => {
+  assert.equal(sceptic(["A", "E"]).decision, "unconfirmed")
+  const failed = sceptic(["A", "X"])
+  assert.equal(failed.decision, "confirmed")
+  assert.deepEqual(failed.votes, { verifier: "AGREE", "codex-refuter": "DISAGREE_CONCERN" })
+  assert.deepEqual(failed.downgraded, { "codex-refuter": "quote not found" })
+  const unchecked = sceptic(["E", "E"], {})
+  assert.equal(unchecked.decision, "unconfirmed")
+  assert.deepEqual(unchecked.downgraded, { verifier: "no citation check", "codex-refuter": "no citation check" })
+  const thrown = sceptic(["A", "E"], { verifyCitation: () => { throw new Error("boom") } })
+  assert.equal(thrown.decision, "confirmed")
+  assert.deepEqual(thrown.downgraded, { "codex-refuter": "check failed" })
+})
+
+test("decideSceptic notes: capped free text, uncut verified quote, citation only on a verified refutation", () => {
+  const quote = `GUARD ${"x".repeat(1494)}`
+  const lanes = VOTER_LANES[2]
+  const got = decideSceptic(lanes, ["F1"], [ballot("F1", "DISAGREE_EVIDENCE", { evidence: "e".repeat(2048), citation: { ...CITE, quote } })], {
+    "codex-refuter": votes({ F1: "AGREE" }),
+    "pi-refuter": { verdicts: [ballot("F1", "DISAGREE_EVIDENCE", { evidence: "bad\u0000 quote\u001b[31m\nnext", citation: BAD_QUOTE })] },
+  }, GUARDED).perFinding.F1
+  assert.equal(got.notes.verifier.kind, "DISAGREE_EVIDENCE")
+  assert.equal(got.notes.verifier.text.length, 500)
+  assert.ok(got.notes.verifier.text.endsWith("…"))
+  assert.equal(got.notes.verifier.citation.quote.length, 1500)
+  assert.deepEqual(got.notes.verifier.citation, { ...CITE, quote })
+  assert.deepEqual(got.notes["codex-refuter"], { kind: "AGREE", text: "" })
+  assert.deepEqual(got.notes["pi-refuter"], { kind: "DISAGREE_CONCERN", text: "bad quote [31m next" })
+  assert.deepEqual(got.downgraded, { "pi-refuter": "quote not found" })
+  const legacy = decideSceptic({}, ["F1"], [{ id: "F1", verdict: "refuted", evidence: "guarded" }], {}, GUARDED).perFinding.F1
+  assert.deepEqual(legacy.notes, { verifier: { kind: "DISAGREE_CONCERN", text: "guarded" } })
+  assert.deepEqual(legacy.downgraded, { verifier: "legacy refuted without citation" })
+})
+
+test("renderSceptic: language-neutral tokens; one-line concerns, quotes fenced so they cannot break out", () => {
+  const LABEL = /^(\w[\w-]*: (AGREE|EVIDENCE|CONCERN)(, )?)+$/
+  const fenced = "GUARD\n```\n# x\n````"
+  const got = decideSceptic(VOTER_LANES[2], ["F1", "F2"], [ballot("F1", "DISAGREE_EVIDENCE", { citation: { file: "a`b.js", line: 12, quote: fenced } }),
+    ballot("F2", "AGREE")], {
+    "codex-refuter": votes({ F1: "DISAGREE_CONCERN" }),
+    "pi-refuter": { verdicts: [ballot("F1", "DISAGREE_EVIDENCE", { citation: { ...CITE, quote: "GUARD\n# x" } }),
+      ballot("F2", "DISAGREE_CONCERN", { evidence: "may leak\n\non retry" })] },
+  }, GUARDED).perFinding
+  assert.equal(got.F1.decision, "refuted")
+  assert.equal(got.F1.label, "verifier: EVIDENCE, codex: CONCERN, pi: EVIDENCE")
+  assert.equal(got.F2.label, "verifier: AGREE, pi: CONCERN")
+  for (const entry of Object.values(got)) assert.match(entry.render.label, LABEL)
+  assert.deepEqual(got.F2.render, { label: "verifier: AGREE, pi: CONCERN", concerns: [{ voter: "pi", text: "may leak on retry" }], refutation: null })
+  const { refutation } = got.F1.render
+  assert.deepEqual(refutation, { voter: "verifier", loc: "ab.js:12", quote: fenced, fence: "`````" })
+  const block = `${refutation.fence}\n${refutation.quote}\n${refutation.fence}`
+  assert.equal(block.split("\n").filter((line) => line.startsWith(refutation.fence)).length, 2, "the quote never closes its fence")
+  const plain = renderSceptic({ decision: "refuted", label: "pi: EVIDENCE",
+    notes: { "pi-refuter": { kind: "DISAGREE_EVIDENCE", text: "", citation: { ...CITE, quote: "GUARD\n# x" } } } })
+  assert.deepEqual(plain.refutation, { voter: "pi", loc: "a.js:12", quote: "GUARD\n# x", fence: "```" })
+  // Nothing in `render` is prose: every string is the label, a voter name, a voter's own text, a loc, a quote or a fence.
+  const prose = []
+  const walk = (value, key) => {
+    if (typeof value === "string") {
+      if (!["label", "voter", "text", "loc", "quote", "fence"].includes(key)) prose.push(`${key}: ${value}`)
+      if (key === "voter") assert.match(value, /^(verifier|codex|pi|claude-cli)$/)
+      if (key === "fence") assert.match(value, /^`{3,}$/)
+    } else if (value && typeof value === "object") for (const [k, v] of Object.entries(value)) walk(v, Array.isArray(value) ? key : k)
+  }
+  for (const entry of Object.values(got)) walk(entry.render, "render")
+  assert.deepEqual(prose, [])
 })

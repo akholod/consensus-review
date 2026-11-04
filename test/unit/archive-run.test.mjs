@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os"
 import { basename, join, relative } from "node:path"
 import { SCHEMA } from "../../scripts/lib/archive.mjs"
+import { fallbackVerdicts } from "../../scripts/lib/lanes.mjs"
 
 const ROOT = new URL("../..", import.meta.url).pathname
 const CLI = join(ROOT, "scripts/archive-run.mjs")
@@ -155,36 +156,102 @@ test("a strict run is archived per the mapping, under the cwd repo even when the
   assert.equal(execFileSync("git", ["-C", w.top, "status", "--porcelain"], { encoding: "utf8" }), "?? .gitignore\n")
 })
 
-test("basic: verification.json joins verifier.verdicts.json to F2; dimension agents fall back to claude-findings", (t) => {
+test("basic: decide ran with no lanes, so the decision and ids.json are archived and verification.json is basic", (t) => {
   const w = workspace()
   t.after(w.cleanup)
   fullRun(w.wd, { strict: false })
-  put(w.wd, { "triage.json": { tier: "T2", basis: "no dims" } })
+  put(w.wd, {
+    "triage.json": { tier: "T2", basis: "no dims" },
+    "ids.json": ["F2"],
+    "sceptic.decision.json": { lanes: {}, voteMode: "basic", verifier: "ok", excluded: {}, perFinding: { F2: { decision: "confirmed", voters: "1 of 1", noVote: [] } } },
+  })
   const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", '{"sceptic":"basic"}'])
   assert.equal(r.code, 0, r.stderr)
+  const files = tree(r.out.dir)
+  for (const f of ["decisions/sceptic.decision.json", "decisions/ids.json"]) assert.ok(files.includes(f), f)
   const verification = readJson(r.out.dir, "findings/verification.json")
   assert.equal(verification.mode, "basic")
   const f2 = verification.findings.find((f) => f.id === "F2")
-  assert.deepEqual([f2.verdict, f2.evidence, f2.title], ["confirmed", "x.js:1", "b"])
+  assert.deepEqual([f2.verdict, f2.voters, f2.title], ["confirmed", "1 of 1", "b"])
   const meta = readJson(r.out.dir, "meta.json")
-  assert.deepEqual(meta.missing, [], "basic does not expect ids.json")
+  assert.deepEqual(meta.missing, [])
   assert.deepEqual(meta.unavailable.map((u) => u.source), ["quality-reviewer", "finding-verifier"])
 })
 
-test("misaligned ids: verification.json is not written and meta.notWritten says why", (t) => {
-  for (const [label, files] of [
-    ["basic, verdict for an unknown id", { "verifier.verdicts.json": [{ id: "F9", verdict: "confirmed", evidence: "" }] }],
-    ["strict, ids.json not in synthesis", { "ids.json": ["F2", "F7"], "sceptic.decision.json": { perFinding: { F2: { decision: "confirmed" }, F7: { decision: "refuted" } } } }],
-  ]) {
+test("the mode comes from voteMode: any strict variant is strict", (t) => {
+  for (const voteMode of ["strict", "strict → basic", "strict → basic (no independent refuter)"]) {
     const w = workspace()
     t.after(w.cleanup)
-    fullRun(w.wd, { strict: false })
-    put(w.wd, files)
+    fullRun(w.wd)
+    put(w.wd, { "sceptic.decision.json": { voteMode, verifier: "ok", perFinding: { F2: { decision: "unconfirmed", voters: "1 of 2" } } } })
     const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
-    assert.equal(r.code, 0, r.stderr)
-    assert.equal(existsSync(join(r.out.dir, "findings/verification.json")), false, label)
-    assert.match(readJson(r.out.dir, "meta.json").notWritten["findings/verification.json"], /ids not in synthesis\.json: F[79]/, label)
+    assert.equal(readJson(r.out.dir, "findings/verification.json").mode, "strict", voteMode)
   }
+})
+
+// The single safe fallback, one table for lanes.fallbackVerdicts and archive-run: the two must agree.
+const P1 = { id: "F3", title: "c", severity: "P1", dimension: "impact", source: "pi" }
+const FALLBACK = [
+  ["verifier DISAGREE_EVIDENCE", [{ id: "F2", verdict: "DISAGREE_EVIDENCE", evidence: "", citation: { file: "x.js", line: "1", quote: "guard() here" } }], { F2: "unconfirmed" }],
+  ["verifier AGREE", [{ id: "F2", verdict: "AGREE", evidence: "x.js:1" }], { F2: "confirmed" }],
+  ["legacy confirmed", [{ id: "F2", verdict: "confirmed", evidence: "x.js:1" }], { F2: "confirmed" }],
+  ["legacy refuted", [{ id: "F2", verdict: "refuted", evidence: "" }], { F2: "unconfirmed" }],
+  ["duplicate vote", [{ id: "F2", verdict: "AGREE", evidence: "" }, { id: "F2", verdict: "AGREE", evidence: "" }], { F2: "unconfirmed" }],
+  ["P2 and unknown ids ignored", [{ id: "F1", verdict: "AGREE", evidence: "" }, { id: "F9", verdict: "AGREE", evidence: "" }, { id: "F3", verdict: "AGREE", evidence: "" }], { F2: "unconfirmed", F3: "confirmed" }],
+  ["no verifier output", undefined, { F2: "unconfirmed", F3: "unconfirmed" }],
+]
+
+test("fallbackVerdicts: the same cases through lanes and through archive-run give the same verdicts", (t) => {
+  const findings = [...synthesis.findings, P1]
+  for (const [label, payload, expected] of FALLBACK) {
+    const want = { F2: "unconfirmed", F3: "unconfirmed", ...expected }
+    assert.deepEqual(fallbackVerdicts(findings, payload), want, `lanes: ${label}`)
+    assert.deepEqual(fallbackVerdicts(findings, payload && { verdicts: payload }), want, `lanes, wrapped: ${label}`)
+    for (const idsJson of [undefined, "not json", ["F7"]]) {
+      const w = workspace()
+      t.after(w.cleanup)
+      fullRun(w.wd, { strict: false })
+      put(w.wd, { "synthesis.json": { findings } })
+      if (payload) put(w.wd, { "verifier.verdicts.json": payload })
+      else rmSync(join(w.wd, "verifier.verdicts.json"))
+      if (idsJson !== undefined) put(w.wd, { "ids.json": idsJson })
+      const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", '{"sceptic":"strict"}'])
+      assert.equal(r.code, 0, r.stderr)
+      const meta = readJson(r.out.dir, "meta.json")
+      assert.equal(meta.schema, SCHEMA)
+      const v = readJson(r.out.dir, "findings/verification.json")
+      assert.equal(v.mode, "fallback", label)
+      const got = Object.fromEntries(v.findings.filter((f) => f.verdict !== null).map((f) => [f.id, f.verdict]))
+      assert.deepEqual(got, want, `archive-run: ${label}, ids.json ${JSON.stringify(idsJson)}`)
+      assert.equal(v.findings.find((f) => f.id === "F1").verdict, null, "a P2 gets no verdict")
+      const missing = [...(idsJson === undefined ? ["ids.json"] : []), ...(payload ? [] : ["verifier.verdicts.json"])]
+      assert.deepEqual(meta.missing, missing, label)
+    }
+  }
+})
+
+test("a decision that carries error, or has no perFinding, falls back as if missing", (t) => {
+  for (const decision of [{ error: "failed: helper error (no ids)", perFinding: {} }, { voteMode: "strict" }]) {
+    const w = workspace()
+    t.after(w.cleanup)
+    fullRun(w.wd)
+    put(w.wd, { "sceptic.decision.json": decision, "verifier.verdicts.json": [{ id: "F2", verdict: "AGREE", evidence: "x.js:1" }] })
+    const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
+    const v = readJson(r.out.dir, "findings/verification.json")
+    assert.equal(v.mode, "fallback", JSON.stringify(decision))
+    assert.equal(v.findings.find((f) => f.id === "F2").verdict, "confirmed")
+  }
+})
+
+test("misaligned ids: verification.json is not written and meta.notWritten says why", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  fullRun(w.wd, { strict: false })
+  put(w.wd, { "ids.json": ["F2", "F7"], "sceptic.decision.json": { perFinding: { F2: { decision: "confirmed" }, F7: { decision: "refuted" } } } })
+  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(existsSync(join(r.out.dir, "findings/verification.json")), false)
+  assert.match(readJson(r.out.dir, "meta.json").notWritten["findings/verification.json"], /ids not in synthesis\.json: F7/)
 })
 
 test("duplicate or invalid ids in synthesis.json: verification.json is not written and meta.notWritten says why", (t) => {
@@ -201,17 +268,6 @@ test("duplicate or invalid ids in synthesis.json: verification.json is not writt
     assert.equal(existsSync(join(r.out.dir, "findings/verification.json")), false, label)
     assert.equal(readJson(r.out.dir, "meta.json").notWritten["findings/verification.json"], reason, label)
   }
-})
-
-test("duplicate ids in verifier.verdicts.json: verification.json is not written", (t) => {
-  const w = workspace()
-  t.after(w.cleanup)
-  fullRun(w.wd, { strict: false })
-  put(w.wd, { "verifier.verdicts.json": [{ id: "F2", verdict: "refuted", evidence: "" }, { id: "F2", verdict: "confirmed", evidence: "" }] })
-  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
-  assert.equal(r.code, 0, r.stderr)
-  assert.equal(existsSync(join(r.out.dir, "findings/verification.json")), false)
-  assert.equal(readJson(r.out.dir, "meta.json").notWritten["findings/verification.json"], "duplicate ids in verifier.verdicts.json: F2")
 })
 
 test("a claude-cli run: its prompt, attempts and findings in the panel, consultants.json in decisions", (t) => {
@@ -299,7 +355,17 @@ test("a sceptic run that wrote no verdicts lists ids.json and verifier.verdicts.
   const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
   const meta = readJson(r.out.dir, "meta.json")
   assert.ok(meta.missing.includes("ids.json") && meta.missing.includes("verifier.verdicts.json"))
-  assert.equal(meta.notWritten["findings/verification.json"], "the sceptic did not run")
+  const v = readJson(r.out.dir, "findings/verification.json")
+  assert.equal(v.mode, "fallback")
+  for (const f of v.findings) assert.equal(f.verdict, f.severity === "P2" ? null : "unconfirmed", f.id)
+})
+
+test("sceptic=off with no decision and no verdicts: verification.json is not written", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  put(w.wd, { "synthesis.json": synthesis })
+  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", '{"sceptic":"off"}'])
+  assert.equal(readJson(r.out.dir, "meta.json").notWritten["findings/verification.json"], "the sceptic did not run")
 })
 
 test("--off, cwd not a repo, and a destination that is not ignored: skipped, nothing created", (t) => {
