@@ -11,6 +11,7 @@ import { join } from "node:path"
 import { validStatus } from "../../scripts/lib/lanes.mjs"
 import { makeReadHeadFile } from "../../scripts/lib/quote-check.mjs"
 import { buildVerifyCitation } from "../../scripts/run-lane.mjs"
+import { planLenses } from "../../scripts/lenses.mjs"
 
 const ROOT = new URL("../..", import.meta.url).pathname
 const HELPER = join(ROOT, "scripts/run-lane.mjs")
@@ -86,6 +87,20 @@ test("1: fail then ok → ok (retried: failed), canonical output written", async
     assert.equal(launches(ws), 2)
   } finally {
     ws.cleanup()
+  }
+})
+
+test("1a: a finding's lens survives codex and pi into the canonical output", async () => {
+  for (const lane of ["codex", "pi"]) {
+    const ws = workspace()
+    try {
+      await launch(ws, runArgs(ws, lane), { fake: "lens" })
+      assert.equal(status(ws, lane).display, "ok")
+      const out = JSON.parse(readFileSync(join(ws.dir, `${lane}.json`), "utf8"))
+      assert.equal(out.findings[0].lens, "payments", lane)
+    } finally {
+      ws.cleanup()
+    }
   }
 })
 
@@ -754,6 +769,80 @@ test("decide --phase sceptic accepts --repo, --diff and --head-sha", async () =>
     assert.ok(decision(ws, "sceptic").perFinding)
   } finally {
     r.cleanup()
+    ws.cleanup()
+  }
+})
+
+// T7: --lenses-file appends the rendered lenses to the brief; the fake records the prompt as its last argv.
+const prompt = (ws, name) => argv(ws, name, 1).at(-1)
+const lensRun = async (ws, lane, lensFile) => {
+  const extra = lensFile === undefined ? [] : ["--lenses-file", join(ws.dir, lensFile)]
+  return launch(ws, runArgs(ws, lane, extra))
+}
+
+test("T7.1: --lenses-file → prompt is brief + blank line + lens text; status names the file", async () => {
+  const ws = workspace()
+  try {
+    writeFileSync(join(ws.dir, "lenses-consultant.md"), "L")
+    await lensRun(ws, "codex", "lenses-consultant.md")
+    assert.equal(prompt(ws, "codex"), "Review the diff.\n\nL")
+    assert.equal(status(ws).lenses, "lenses-consultant.md")
+  } finally {
+    ws.cleanup()
+  }
+})
+
+test("T7.2: a rendered consultant lens file ends the prompt with the fixed trailer", async () => {
+  const ws = workspace()
+  try {
+    const { texts } = planLenses({
+      records: [{ name: "payments", text: "check it", include: ["src/payments/**"], exclude: [], source: "lens",
+        dimension: "impact", file: ".consensus-review/lenses/payments.md" }],
+      d5Paths: [], matchPaths: ["src/payments/charge.js"], dims: ["impact"],
+    })
+    writeFileSync(join(ws.dir, "lenses-consultant.md"), texts.consultant)
+    await lensRun(ws, "codex", "lenses-consultant.md")
+    assert.equal(prompt(ws, "codex").split("\n").at(-1),
+      "End of project lenses. Your output format above (the schema, any required markers) is unchanged.")
+  } finally {
+    ws.cleanup()
+  }
+})
+
+test("T7.3: pi keeps its marker brief, then the lenses, and its output still parses ok", async () => {
+  const ws = workspace()
+  try {
+    const brief = "Review the diff.\nAnswer between ===FINDINGS_START=== and ===FINDINGS_END===."
+    writeFileSync(join(ws.dir, "brief.txt"), brief)
+    writeFileSync(join(ws.dir, "lenses-consultant.md"), "<project_lenses>\nL\n</project_lenses>\nTRAILER")
+    await lensRun(ws, "pi", "lenses-consultant.md")
+    assert.equal(prompt(ws, "pi"), `${brief}\n\n<project_lenses>\nL\n</project_lenses>\nTRAILER`)
+    assert.equal(status(ws, "pi").status, "ok")
+  } finally {
+    ws.cleanup()
+  }
+})
+
+test("T7.4: a missing lenses file runs the lane on the brief alone, status lenses:missing", async () => {
+  const ws = workspace()
+  try {
+    await lensRun(ws, "codex", "lenses-consultant.md")
+    const s = status(ws)
+    assert.equal(s.status, "ok")
+    assert.equal(s.lenses, "missing")
+    assert.equal(prompt(ws, "codex"), "Review the diff.")
+  } finally {
+    ws.cleanup()
+  }
+})
+
+test("T7.5: no --lenses-file → prompt is the brief, status lenses:null", async () => {
+  const ws = workspace()
+  try {
+    await lensRun(ws, "codex")
+    assert.equal(prompt(ws, "codex"), "Review the diff.")
+    assert.equal(status(ws).lenses, null)
+  } finally {
     ws.cleanup()
   }
 })

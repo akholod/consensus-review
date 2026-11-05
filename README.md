@@ -33,6 +33,9 @@ scenario, or it is not a P0 or P1. Then a verifier with a fresh context,
 which found nothing itself, tries to refute the serious findings before
 you see them.
 
+Project rules live in the repository as review lenses in
+`.consensus-review/lenses/`; see [Project lenses](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md#project-lenses).
+
 It never changes your code. It writes only the report and its private run archive in the ignored
 `.reviews/`. `archive=off` / `--no-archive` drop the archive; `no-file` writes nothing at all.
 

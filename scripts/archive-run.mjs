@@ -7,6 +7,9 @@
 //
 // Prints one JSON line, `{"dir":…}` or `{"skipped":…}`, and exits 0 either way: a missing archive
 // never fails the review. A usage error exits 2.
+//
+// `sources/<lane>/prompt.md` is the lane's brief only. When the lane's status.json names a lens file
+// (`lenses`), the prompt the lane actually got is that brief + "\n\n" + `sources/lenses/<status.lenses>`.
 
 import { createHash } from "node:crypto"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
@@ -115,16 +118,18 @@ function finish(v) {
 
   const json = (value) => `${JSON.stringify(value, null, 2)}\n`
   const events = deriveEvents({ statuses, decisions, triage: triage && { ...triage, ts: mtime("triage.json") } })
-  // Order is the cap priority: events, statuses/decisions, findings, prompts, the command, outputs, logs.
+  // Order is the cap priority: events, statuses/decisions, findings, lens files (small; a prompt is
+  // incomplete without its lens), prompts, the command, outputs, logs.
   const entries = [{ to: "events.jsonl", content: events.map((e) => JSON.stringify(e)).join("\n") + (events.length ? "\n" : "") }]
   const copy = (from, to) => has(from) && entries.push({ to, from: at(from) })
   for (const name of names) copy(`${name}.status.json`, `sources/${name}/status.json`)
-  for (const name of ["consultants.json", "ids.json", "review.decision.json", "sceptic.decision.json"]) copy(name, `decisions/${name}`)
+  for (const name of ["consultants.json", "lenses.json", "ids.json", "review.decision.json", "sceptic.decision.json"]) copy(name, `decisions/${name}`)
   entries.push({ to: "findings/panel.json", content: json({ findings: panel }) })
   if (joined.value) entries.push({ to: "findings/verification.json", content: json(joined.value) })
   copy("synthesis.json", "findings/synthesis.json")
   copy("claude-findings.json", "findings/claude.json")
   copy("verifier.verdicts.json", "sources/finding-verifier/output.json")
+  for (const file of files.filter((f) => /^lenses-.+\.md$/.test(f)).sort()) copy(file, `sources/lenses/${file}`)
   for (const name of names) if (prompt(name)) copy(prompt(name), `sources/${name}/prompt.md`)
   entries.push({ to: "sources/arbiter/command.md", from: join(ROOT, "commands/consensus-review.md") })
   const attempts = (name, ext) => files

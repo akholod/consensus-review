@@ -3,7 +3,7 @@
 // Nothing here reasons about code — it only decides what the model is allowed to see.
 
 import { execFileSync } from "node:child_process"
-import { readFileSync, existsSync } from "node:fs"
+import { readFileSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { join } from "node:path"
 import { SURFACE, RISK, HIGH_RISK, makeCell } from "./schema.mjs"
@@ -214,28 +214,65 @@ export function isHighRisk(cells) {
   return cells.some((c) => c.mandatory)
 }
 
-/** Python fnmatch semantics: whole-string match, `*` crosses directory separators. */
-export function fnmatch(name, pattern) {
-  let re = ""
+/**
+ * One token per pattern element: "*", or a test for one character. A class `[...]` (`[!...]`
+ * negates, a `]` right after `[` or `[!` is literal, `a-z` is a range); an unclosed `[` is a literal.
+ */
+const globTokens = (pattern) => {
+  const tokens = []
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i]
-    if (c === "*") re += ".*"
-    else if (c === "?") re += "."
-    else if (c === "[") {
-      let j = i + 1
-      if (pattern[j] === "!") j++
-      if (pattern[j] === "]") j++
-      while (j < pattern.length && pattern[j] !== "]") j++
-      if (j >= pattern.length) re += "\\["
-      else {
-        let body = pattern.slice(i + 1, j)
-        if (body[0] === "!") body = "^" + body.slice(1)
-        re += `[${body}]`
-        i = j
+    if (c === "*") { if (tokens.at(-1) !== "*") tokens.push("*"); continue }
+    if (c === "?") { tokens.push(() => true); continue }
+    let j = i + 1
+    const negate = pattern[j] === "!"
+    if (negate) j++
+    const start = j
+    if (pattern[j] === "]") j++
+    while (j < pattern.length && pattern[j] !== "]") j++
+    if (c !== "[" || j >= pattern.length) { tokens.push((x) => x === c); continue }
+    const body = pattern.slice(start, j)
+    tokens.push((x) => {
+      let hit = false
+      for (let k = 0; k < body.length; k++) {
+        if (body[k + 1] === "-" && k + 2 < body.length) {
+          if (x >= body[k] && x <= body[k + 2]) hit = true
+          k += 2
+        } else if (body[k] === x) hit = true
       }
-    } else re += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      return hit !== negate
+    })
+    i = j
   }
-  try { return new RegExp(`^(?:${re})$`).test(name) } catch { return false }
+  return tokens
+}
+
+/**
+ * Python fnmatch semantics: whole-string match, `*` crosses directory separators. Iterative
+ * two-pointer matching with one star backtrack point: O(name × pattern), no regex.
+ */
+export function fnmatch(name, pattern) {
+  const tokens = globTokens(pattern)
+  let n = 0
+  let t = 0
+  let starT = -1
+  let starN = 0
+  while (n < name.length) {
+    if (tokens[t] === "*") {
+      starT = ++t
+      starN = n
+    } else if (t < tokens.length && tokens[t](name[n])) {
+      t++
+      n++
+    } else if (starT >= 0) {
+      t = starT
+      n = ++starN
+    } else {
+      return false
+    }
+  }
+  while (tokens[t] === "*") t++
+  return t === tokens.length
 }
 
 /**
@@ -384,42 +421,185 @@ const unquote = (value) => {
  * carry no authority: nothing here can relax read-only, budgets, admission, stopping or
  * escalation rules, because none of those are expressed as instruction fields.
  */
+export function loadInstructionFile(file, kind) {
+  const out = []
+  if (!existsSync(file)) return out
+  let raw
+  try { raw = readFileSync(file, "utf8") } catch { return out }
+  let parsed = []
+  if (kind === "json") {
+    try {
+      const data = JSON.parse(raw)
+      parsed = Array.isArray(data?.instructions) ? data.instructions : []
+    } catch { parsed = [] }
+  } else {
+    parsed = parseInstructionsYaml(raw)
+  }
+  for (const item of parsed) {
+    // Untrusted advisory input: accept only primitive strings, never coerce arbitrary values.
+    if (typeof item?.name !== "string" || typeof item?.instructions !== "string") continue
+    const filters = Array.isArray(item.fileFilters)
+      ? item.fileFilters.filter((f) => typeof f === "string" && f.trim())
+      : []
+    if (!item.name.trim() || !item.instructions.trim() || !filters.length) continue
+    out.push({
+      name: item.name,
+      text: item.instructions,
+      include: filters.filter((f) => !f.startsWith("!")),
+      exclude: filters.filter((f) => f.startsWith("!")).map((f) => f.slice(1)),
+      source: kind,
+    })
+  }
+  return out
+}
+
 export function loadInstructions(repo) {
   const sources = [
     { file: join(repo, ".claude/review-instructions.json"), kind: "json" },
     { file: join(repo, ".gitlab/duo/mr-review-instructions.yaml"), kind: "yaml" },
   ]
-  const out = []
-  for (const { file, kind } of sources) {
-    if (!existsSync(file)) continue
-    let raw
-    try { raw = readFileSync(file, "utf8") } catch { continue }
-    let parsed = []
-    if (kind === "json") {
-      try {
-        const data = JSON.parse(raw)
-        parsed = Array.isArray(data?.instructions) ? data.instructions : []
-      } catch { parsed = [] }
-    } else {
-      parsed = parseInstructionsYaml(raw)
+  return sources.flatMap(({ file, kind }) => loadInstructionFile(file, kind))
+}
+
+/**
+ * Check before read: lstat every component of `rel` under `repo`. Returns null when it is safe
+ * to read, "absent" when a component does not exist, or the rejection reason. Never throws, and
+ * never opens anything, so a FIFO or a symlinked ancestor cannot be read through.
+ */
+export function checkSourcePath(repo, rel, last = "file") {
+  const parts = rel.split("/")
+  for (let i = 0; i < parts.length; i++) {
+    let stat
+    try {
+      stat = lstatSync(join(repo, ...parts.slice(0, i + 1)))
+    } catch (error) {
+      if (error.code === "ENOENT") return "absent"
+      return error.code === "ENOTDIR" ? "not a directory" : String(error.code ?? error.message)
     }
-    for (const item of parsed) {
-      // Untrusted advisory input: accept only primitive strings, never coerce arbitrary values.
-      if (typeof item?.name !== "string" || typeof item?.instructions !== "string") continue
-      const filters = Array.isArray(item.fileFilters)
-        ? item.fileFilters.filter((f) => typeof f === "string" && f.trim())
-        : []
-      if (!item.name.trim() || !item.instructions.trim() || !filters.length) continue
-      out.push({
-        name: item.name,
-        text: item.instructions,
-        include: filters.filter((f) => !f.startsWith("!")),
-        exclude: filters.filter((f) => f.startsWith("!")).map((f) => f.slice(1)),
-        source: kind,
-      })
+    if (stat.isSymbolicLink()) return "symlink"
+    const isLast = i === parts.length - 1
+    if (isLast && last === "file" && !stat.isFile()) return "not a regular file"
+    if ((!isLast || last === "dir") && !stat.isDirectory()) return "not a directory"
+  }
+  return null
+}
+
+const LENS_DIMENSIONS = { architecture: "architecture", arch: "architecture", quality: "quality", impact: "impact", tests: "tests" }
+const MAX_FRONT_MATTER_LINES = 50
+
+/** Parse a lens file: `---` front matter (`paths`, `dimension`) and a markdown body. */
+export function parseLensFile(text) {
+  const lines = String(text).replace(/\r\n?/g, "\n").split("\n")
+  const close = lines.indexOf("---", 1)
+  if (lines[0] !== "---" || close < 0 || close >= MAX_FRONT_MATTER_LINES) return { error: "no front matter" }
+  const globs = []
+  const ignoredKeys = []
+  let dimension = null
+  let inPaths = false
+  for (const line of lines.slice(1, close)) {
+    if (!line.trim() || /^\s*#/.test(line)) continue
+    const listItem = line.match(/^\s+-\s*(.*)$/)
+    if (listItem) {
+      if (!inPaths) continue
+      const entry = unquote(listItem[1])
+      if (entry == null) return { error: "malformed paths" }
+      globs.push(entry)
+      continue
+    }
+    inPaths = false
+    const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/)
+    if (!kv) continue
+    const key = kv[1]
+    const value = kv[2].trim()
+    if (key === "paths") {
+      if (!value) { inPaths = true; continue }
+      if (!/^\[.*\]$/.test(value)) return { error: "malformed paths" }
+      const inner = value.slice(1, -1).trim()
+      const entries = inner ? inner.split(",").map((x) => unquote(x)) : []
+      if (entries.some((x) => x == null)) return { error: "malformed paths" }
+      globs.push(...entries)
+    } else if (key === "dimension") {
+      const raw = unquote(value)
+      dimension = Object.hasOwn(LENS_DIMENSIONS, raw) ? LENS_DIMENSIONS[raw] : null
+      if (!dimension) return { error: `unknown dimension: ${value}` }
+    } else {
+      ignoredKeys.push(key)
     }
   }
-  return out
+  if (!globs.length) return { error: "no paths" }
+  const body = lines.slice(close + 1).join("\n").trim()
+  if (!body) return { error: "empty body" }
+  return {
+    include: globs.filter((g) => !g.startsWith("!")),
+    exclude: globs.filter((g) => g.startsWith("!")).map((g) => g.slice(1)),
+    dimension,
+    body,
+    ignoredKeys,
+  }
+}
+
+const LENS_DIR = ".consensus-review/lenses"
+const LENS_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const MAX_LENS_BYTES = 8192
+
+/** Repository lenses, `.consensus-review/lenses/*.md`, each checked before it is read. */
+export function loadLenses(repo) {
+  const lenses = []
+  const rejected = []
+  const dirProblem = checkSourcePath(repo, LENS_DIR, "dir")
+  if (dirProblem === "absent") return { lenses, rejected }
+  if (dirProblem) return { lenses, rejected: [{ file: LENS_DIR, reason: dirProblem }] }
+  let entries
+  try {
+    entries = readdirSync(join(repo, LENS_DIR)).filter((entry) => entry.endsWith(".md")).sort()
+  } catch (error) {
+    return { lenses, rejected: [{ file: LENS_DIR, reason: String(error.code ?? error.message) }] }
+  }
+  for (const entry of entries) {
+    const file = `${LENS_DIR}/${entry}`
+    const name = entry.slice(0, -3)
+    if (!LENS_NAME.test(name)) { rejected.push({ file, reason: "invalid name" }); continue }
+    const problem = checkSourcePath(repo, file)
+    if (problem) { rejected.push({ file, reason: problem }); continue }
+    let raw
+    try {
+      if (statSync(join(repo, file)).size > MAX_LENS_BYTES) { rejected.push({ file, reason: "too large" }); continue }
+      raw = readFileSync(join(repo, file))
+    } catch (error) {
+      rejected.push({ file, reason: String(error.code ?? error.message) })
+      continue
+    }
+    if (raw.length > MAX_LENS_BYTES) { rejected.push({ file, reason: "too large" }); continue }
+    const lens = parseLensFile(raw.toString("utf8"))
+    if (lens.error) { rejected.push({ file, reason: lens.error }); continue }
+    lenses.push({
+      name,
+      text: lens.body,
+      include: lens.include,
+      exclude: lens.exclude,
+      source: "lens",
+      dimension: lens.dimension,
+      file,
+      ignoredKeys: lens.ignoredKeys,
+    })
+  }
+  return { lenses, rejected }
+}
+
+const escapeAttr = (value) => String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")
+const escapeBody = (text) => String(text).replace(/<\//g, "<\\/")
+
+/** `<instruction>` elements only, escaped so no body or attribute can close or forge a fence. */
+export function renderInstructions(items) {
+  const lines = []
+  for (const ins of [...items].sort((a, b) => a.name.localeCompare(b.name))) {
+    const dimension = ins.dimension ? ` dimension="${escapeAttr(ins.dimension)}"` : ""
+    const files = escapeAttr([...ins.files].sort().join(", "))
+    lines.push(`<instruction name="${escapeAttr(ins.name)}"${dimension} files="${files}">`)
+    lines.push(escapeBody(ins.text.trim()))
+    lines.push("</instruction>")
+  }
+  return lines.join("\n")
 }
 
 export function instructionMatches(path, instruction) {

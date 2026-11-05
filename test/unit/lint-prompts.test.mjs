@@ -150,6 +150,27 @@ red("L6: an agent no command references any more",
   /L6: no command dispatches `orphan-reviewer`/)
 
 // -------------------------------------------------------------------------------------------
+// L7 — lenses reach the consultant only via --lenses-file, never a refuter
+// -------------------------------------------------------------------------------------------
+
+red("L7: the refuter run line passes --lenses-file",
+  ({ edit }) => edit("commands/consensus-review.md", (t) =>
+    t.replace('--require-key verdicts --ids-file "$WD/ids.json"', '--require-key verdicts --ids-file "$WD/ids.json" --lenses-file "$WD/lenses-consultant.md"')),
+  /commands\/consensus-review\.md:\d+: L7: the refuter run line passes `--lenses-file`/)
+
+red("L7: the consultant run line lost its --lenses-file",
+  ({ edit }) => edit("commands/consensus-review.md", (t) => t.replace(' [--lenses-file "$WD/<outputs.consultant>"]', "")),
+  /commands\/consensus-review\.md:\d+: L7: the consultant run line must pass lenses via/)
+
+red("L7: the §5 consultant run line is gone",
+  ({ edit }) => edit("commands/consensus-review.md", (t) => t.replace(/^node "\$H" run <name> --wd "\$WD" --name <name> --repo.*\n/m, "")),
+  /commands\/consensus-review\.md:1: L7: the §5 consultant run line/)
+
+red("L7: the §8 refuter run line is gone",
+  ({ edit }) => edit("commands/consensus-review.md", (t) => t.replace(/^ *node "\$H" run <name> --wd "\$WD" --name <name>-refuter[^&]*&\n/m, "")),
+  /commands\/consensus-review\.md:1: L7: the §8 refuter run line/)
+
+// -------------------------------------------------------------------------------------------
 // Unit-level behaviour of the helpers
 // -------------------------------------------------------------------------------------------
 

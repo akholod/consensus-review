@@ -8,7 +8,7 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, join, relative } from "node:path"
-import { SCHEMA } from "../../scripts/lib/archive.mjs"
+import { PER_FILE_CAP, SCHEMA, TOTAL_CAP } from "../../scripts/lib/archive.mjs"
 import { fallbackVerdicts } from "../../scripts/lib/lanes.mjs"
 
 const ROOT = new URL("../..", import.meta.url).pathname
@@ -154,6 +154,60 @@ test("a strict run is archived per the mapping, under the cwd repo even when the
   assert.deepEqual(events.filter((e) => e.type === "decide").map((e) => e.source).sort(), ["review", "sceptic"])
   // the archive is the only thing in the repo besides .gitignore
   assert.equal(execFileSync("git", ["-C", w.top, "status", "--porcelain"], { encoding: "utf8" }), "?? .gitignore\n")
+})
+
+test("T8.1: lenses.json and each rendered lens file are archived byte-equal; prompt.md stays the brief", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  fullRun(w.wd)
+  const lensesJson = '{"repo":"/r","selected":[{"name":"payments"}]}'
+  const consultant = "<project_lenses>\nL\n</project_lenses>\nTRAILER"
+  put(w.wd, {
+    "lenses.json": lensesJson,
+    "lenses-consultant.md": consultant,
+    "lenses-impact.md": "<project_lenses>\nI\n</project_lenses>",
+  })
+  const s = JSON.parse(readFileSync(join(w.wd, "codex.status.json"), "utf8"))
+  put(w.wd, { "codex.status.json": { ...s, lenses: "lenses-consultant.md" } })
+  const r = finish(w.top, ["--wd", w.wd, "--report", join(w.base, "pr-7.md")])
+  assert.equal(r.code, 0, r.stderr)
+  const dir = r.out.dir
+  assert.equal(readFileSync(join(dir, "decisions/lenses.json"), "utf8"), lensesJson)
+  assert.equal(readFileSync(join(dir, "sources/lenses/lenses-consultant.md"), "utf8"), consultant)
+  assert.equal(readFileSync(join(dir, "sources/lenses/lenses-impact.md"), "utf8"), "<project_lenses>\nI\n</project_lenses>")
+  assert.equal(readFileSync(join(dir, "sources/codex/prompt.md"), "utf8"), "codex brief")
+})
+
+test("T8.3: near the 20 MiB cap a lens file outranks a prompt", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  fullRun(w.wd)
+  // Room after the diff: one full-size prompt plus 10 000 bytes, more than the small early entries
+  // need, less than they need with the prompt and the 20 000-byte lens file together.
+  put(w.wd, {
+    "diff.patch": "x".repeat(TOTAL_CAP - PER_FILE_CAP - 10000),
+    "brief.md": "b".repeat(PER_FILE_CAP),
+    "lenses-consultant.md": "l".repeat(20000),
+  })
+  const r = finish(w.top, ["--wd", w.wd, "--report", join(w.base, "pr-7.md")])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(readFileSync(join(r.out.dir, "sources/lenses/lenses-consultant.md"), "utf8"), "l".repeat(20000))
+  assert.equal(existsSync(join(r.out.dir, "sources/codex/prompt.md")), false)
+})
+
+test("T8.2: a finding's lens survives into panel.json and verification.json", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  fullRun(w.wd)
+  put(w.wd, {
+    "codex.json": { findings: [{ title: "b", severity: "P0", dimension: "impact", lens: "payments" }] },
+    "synthesis.json": { findings: [synthesis.findings[0], { ...synthesis.findings[1], lens: "payments" }] },
+  })
+  const r = finish(w.top, ["--wd", w.wd, "--report", join(w.base, "pr-7.md")])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(readJson(r.out.dir, "findings/panel.json").findings[0].lens, "payments")
+  assert.deepEqual(readJson(r.out.dir, "findings/verification.json").findings.map((f) => [f.id, f.lens ?? null]),
+    [["F1", null], ["F2", "payments"]])
 })
 
 test("basic: decide ran with no lanes, so the decision and ids.json are archived and verification.json is basic", (t) => {

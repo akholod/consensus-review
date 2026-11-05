@@ -17,9 +17,9 @@ const embedded = () => {
   return JSON.parse(m[1])
 }
 
-test("/consensus-review's embedded schema is semantically identical to the released version", () => {
-  // Guards the one change made to a released command: the schema is now generated rather than
-  // hand-maintained, and generating it must not alter what codex is actually sent.
+test("/consensus-review's embedded schema preserves the released version", () => {
+  // Guards what codex is actually sent: every released finding property is unchanged, and the
+  // only addition since 1f1189b is the advisory `lens` (issue #7), required as strict mode demands.
   let released
   try {
     const md = execFileSync("git", ["show", "1f1189b:commands/consensus-review.md"], {
@@ -29,7 +29,22 @@ test("/consensus-review's embedded schema is semantically identical to the relea
   } catch {
     return // released revision unavailable (shallow clone); the parity check below still runs
   }
-  assert.deepEqual(sortDeep(embedded()), sortDeep(released))
+  const now = embedded().properties.findings.items
+  const then = released.properties.findings.items
+  for (const [key, schema] of Object.entries(then.properties)) {
+    assert.deepEqual(sortDeep(now.properties[key]), sortDeep(schema), key)
+  }
+  assert.deepEqual(Object.keys(now.properties).filter((k) => !(k in then.properties)), ["lens"])
+  assert.deepEqual(now.required.filter((k) => !then.required.includes(k)), ["lens"])
+  assert.deepEqual(then.required.filter((k) => !now.required.includes(k)), [])
+  const outer = (schema) => ({ ...schema, properties: { ...schema.properties, findings: { ...schema.properties.findings, items: null } } })
+  assert.deepEqual(sortDeep(outer(embedded())), sortDeep(outer(released)))
+})
+
+test("the canonical finding schema requires lens as a nullable string", () => {
+  const items = contract("finding.schema.json").properties.findings.items
+  assert.deepEqual(items.properties.lens, { type: ["string", "null"] })
+  assert.ok(items.required.includes("lens"))
 })
 
 test("the embedded schema stays OpenAI strict-mode compliant", () => {
@@ -169,7 +184,7 @@ test("§5 and §8 run lanes and refuters from consultants.json values, not fixed
     assert.doesNotMatch(s, /run (codex|pi) --wd/, "no hard-coded codex/pi lane line")
     assert.match(s, /one line per consultants\.json lane/)
   }
-  assert.match(s5, /run <name> --wd "\$WD" --name <name> .*--brief-file "\$WD\/<brief>" .*\[--model <model>\] \[--skip <skip> --skip-reason "<skipReason>"\] &/)
+  assert.match(s5, /run <name> --wd "\$WD" --name <name> .*--brief-file "\$WD\/<brief>" .*\[--model <model>\] \[--lenses-file "\$WD\/<outputs\.consultant>"\] \[--skip <skip> --skip-reason "<skipReason>"\] &/)
   assert.match(s5, /--phase review --lanes <name>/)
   assert.match(s8, /run <name> --wd "\$WD" --name <name>-refuter .*--brief-file "\$WD\/<refuterBrief>"/)
   assert.match(s8, /--from-decision "\$WD\/review\.decision\.json"/)

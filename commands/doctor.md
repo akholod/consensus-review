@@ -43,6 +43,7 @@ them, and the summary says so.
 | code graph | `codegraph` CLI, a graph in the repo, and whether that graph is **older than the last commit** — agents are told "absent/stale → grep" but cannot detect staleness from inside a review |
 | contracts | the five agents resolve and keep their read-only guarantee; generated prompt blocks match the canonical schema; which model each dimension runs on |
 | workspace | a git work tree with commits; `.reviews/` writable and ignored — an unignored report becomes an untracked change the *next* review picks up |
+| lenses | project review lenses (`.consensus-review/lenses/*.md`) and the legacy instruction files: rejected files, globs matching no tracked file, ignored front matter keys |
 | live | the `claude -p` envelope, codex accepting our schema, and — when `claude-cli` is the consultant — its read-only probe (tools, MCP, repo hook, unchanged repo) |
 
 Exit code is `1` when anything is `FAIL`, `0` otherwise; `WARN` never fails the command.

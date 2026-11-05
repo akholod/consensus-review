@@ -75,6 +75,20 @@ test("declaring an omission that does not exist upstream fails", () => {
   )
 })
 
+test("lens in the finding schema is clean while it is a declared omission", () => {
+  assert.ok("lens" in consensusItems.properties)
+  assert.deepEqual(LOOP["x-projection"].omissions, ["dimension", "owner", "lens"])
+  assert.deepEqual(projectionProblems(consensusItems, loopFinding, LOOP["x-projection"]), [])
+})
+
+test("lens in the finding schema without the omission is undeclared drift", () => {
+  const projection = { ...LOOP["x-projection"], omissions: ["dimension", "owner"] }
+  assert.deepEqual(projectionProblems(consensusItems, loopFinding, projection), [
+    'loopFinding drops "lens" without declaring it in x-projection.omissions',
+    "loopFinding.required omits lens",
+  ])
+})
+
 test("a required flag dropped on a kept field fails", () => {
   const loop = clone(loopFinding)
   loop.required = loop.required.filter((k) => k !== "line")

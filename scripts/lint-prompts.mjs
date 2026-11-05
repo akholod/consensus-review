@@ -156,6 +156,27 @@ export function lint(root) {
     if (!dispatched.has(name)) fail(`agents/${name}.md`, 1, `L6: no command dispatches \`${name}\``)
   }
 
+  // L7 — lenses reach a consultant only through the helper's --lenses-file, and never a refuter (D9):
+  // the §5 run line carries the flag, the §8 refuter run line (with its continuations) does not.
+  const consensus = join(commandsDir, "consensus-review.md")
+  if (existsSync(consensus)) {
+    const lines = readFileSync(consensus, "utf8").split("\n")
+    const runs = { consultant: 0, refuter: 0 }
+    lines.forEach((line, i) => {
+      if (!line.trim().startsWith('node "$H" run ')) return
+      let run = line
+      for (let j = i; lines[j]?.trimEnd().endsWith("\\"); j++) run += lines[j + 1]
+      const refuter = run.includes("-refuter")
+      runs[refuter ? "refuter" : "consultant"]++
+      if (refuter && run.includes("--lenses-file")) fail("commands/consensus-review.md", i + 1, "L7: the refuter run line passes `--lenses-file`; refuters must never get lenses")
+      if (!refuter && !run.includes('[--lenses-file "$WD/<outputs.consultant>"]')) {
+        fail("commands/consensus-review.md", i + 1, 'L7: the consultant run line must pass lenses via `[--lenses-file "$WD/<outputs.consultant>"]`')
+      }
+    })
+    if (!runs.consultant) fail("commands/consensus-review.md", 1, 'L7: the §5 consultant run line (`node "$H" run `) is missing')
+    if (!runs.refuter) fail("commands/consensus-review.md", 1, 'L7: the §8 refuter run line (`node "$H" run ` … `-refuter`) is missing')
+  }
+
   return problems
 }
 

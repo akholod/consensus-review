@@ -6,7 +6,7 @@
 //   select [--wd <dir>] [--consultant <codex|pi|claude-cli|claude>] [--extra [--extra-model <m>]]
 //   run <codex|pi|claude-cli> --wd <dir> --name <name> --repo <dir> --brief-file <file> --timeout <sec>
 //       [--schema <file>] [--model <m>] [--require-key findings|verdicts] [--ids-file <file>]
-//       [--skip <why> [--skip-reason <r>]] [--from-decision <file>] [--kill-grace <sec>]
+//       [--skip <why> [--skip-reason <r>]] [--from-decision <file>] [--kill-grace <sec>] [--lenses-file <file>]
 //   decide --wd <dir> --phase review|sceptic --lanes <name,name> [--ids-file <file>, default <wd>/ids.json]
 //       [--repo <dir>] [--diff <file>, default <wd>/diff.patch] [--head-sha <worktree|40-hex>]   (sceptic only)
 //
@@ -31,7 +31,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const OPTIONS = {
   ...Object.fromEntries(
     ["wd", "name", "repo", "brief-file", "timeout", "schema", "model", "require-key", "ids-file", "skip", "skip-reason",
-      "from-decision", "kill-grace", "phase", "lanes", "consultant", "extra-model", "diff", "head-sha"].map((k) => [k, { type: "string" }]),
+      "from-decision", "kill-grace", "lenses-file", "phase", "lanes", "consultant", "extra-model", "diff", "head-sha"].map((k) => [k, { type: "string" }]),
   ),
   extra: { type: "boolean" },
 }
@@ -116,7 +116,7 @@ async function runLane(lane, v, { onSpawned }) {
   const wd = v.wd
   const name = v.name ?? lane
   // Every status records its own facts, so the decision files and the archive need no per-lane code.
-  const facts = { lane: name, kind: lane, brief: v["brief-file"] ? basename(v["brief-file"]) : null, requestedModel: v.model ?? null }
+  const facts = { lane: name, kind: lane, brief: v["brief-file"] ? basename(v["brief-file"]) : null, requestedModel: v.model ?? null, lenses: null }
   const finish = (s) => (writeAtomic(join(wd, `${name}.status.json`), { ...s, ...facts }), 0)
 
   if (v.skip) {
@@ -139,7 +139,16 @@ async function runLane(lane, v, { onSpawned }) {
   if (!(T > 0)) throw new Error(`--timeout must be a positive number of seconds (got ${JSON.stringify(v.timeout)})`)
   const grace = killGrace(T, v["kill-grace"] == null ? null : Number(v["kill-grace"]))
   const schema = v.schema ?? join(ROOT, "contracts", requireKey === "verdicts" ? "verdict.schema.json" : "finding.schema.json")
-  const brief = readFileSync(v["brief-file"], "utf8")
+  let brief = readFileSync(v["brief-file"], "utf8")
+  // Project lenses are advisory: an unreadable file runs the lane without them (status says "missing").
+  if (v["lenses-file"]) {
+    try {
+      brief = `${brief}\n\n${readFileSync(v["lenses-file"], "utf8")}`
+      facts.lenses = basename(v["lenses-file"])
+    } catch {
+      facts.lenses = "missing"
+    }
+  }
   const start = performance.now()
   const attempts = []
   let result

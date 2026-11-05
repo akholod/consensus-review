@@ -98,7 +98,7 @@
     "note": "loopFinding is a projection of the consensus finding. Every difference must be listed here; the check in scripts/gen-contracts.mjs fails on any other.",
     "source": "contracts/finding.schema.json#/properties/findings/items",
     "target": "#/$defs/loopFinding",
-    "omissions": ["dimension", "owner"]
+    "omissions": ["dimension", "owner", "lens"]
   },
   "x-runtime": {
     "note": "This schema states the contract the prompts ask for. The runtime validators deliberately disagree with it in the ways listed below, and test/unit/conformance.test.mjs asserts that this is EXACTLY the set that disagrees. Not encoded as JSON Schema keywords on purpose: doing so would need minLength/pattern/if-then and would grow the local validator for rules a direct assertion covers better.",

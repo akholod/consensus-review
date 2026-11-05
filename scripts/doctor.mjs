@@ -25,6 +25,8 @@ import { dirname, join } from "node:path"
 import { lint } from "./lint-prompts.mjs"
 import { listPiModels, probeClaude, probeClaudeCli, probeCodex, toolVersion } from "./lib/probe.mjs"
 import { selectConsultants } from "./lib/lanes.mjs"
+import { instructionMatches } from "../src/loop-review/context.mjs"
+import { loadRecords } from "./lenses.mjs"
 
 const SELF = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -200,6 +202,31 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
         add("workspace", "report output", "warn", "directory is not writable",
           "the report cannot be written; use `no-file` or `out=<path>`")
       }
+    }
+  }
+
+  // ── Lenses (offline: same D15-checked loading as scripts/lenses.mjs) ─────────────────────────
+  {
+    const { records: items, rejected } = loadRecords(REPO)
+    if (!items.length && !rejected.length) {
+      add("lenses", "project lenses", "skip", "none found", "reviews apply only the generic dimensions")
+    }
+    const tracked = (sh("git", ["ls-files", "-z"], { cwd: REPO }) ?? "").split("\0").filter(Boolean)
+    for (const item of items) {
+      const label = `${item.source} ${item.name}`
+      add("lenses", label, "ok", `${item.source} ${item.dimension ?? "all"}, ${item.include.length} globs`)
+      for (const glob of item.include) {
+        if (!tracked.some((path) => instructionMatches(path, { include: [glob], exclude: [] }))) {
+          add("lenses", label, "warn", `glob matches no tracked file: ${glob}`,
+            "this glob matches no tracked file; the lens fires only for new files it matches")
+        }
+      }
+      for (const key of item.ignoredKeys) {
+        add("lenses", label, "warn", `ignored key: ${key}`, "this key has no effect in this version")
+      }
+    }
+    for (const { file, reason } of rejected) {
+      add("lenses", file, "warn", reason, "this lens is never applied")
     }
   }
 

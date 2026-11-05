@@ -4,6 +4,25 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
 
 ## Unreleased
 
+- **Project review lenses kept in the repository**
+  ([#7](https://github.com/akholod/consensus-review/issues/7), `Refs #7`).
+  `.consensus-review/lenses/<name>.md` holds a `paths` glob list, an
+  optional `dimension` and a body. For each run, `/consensus-review`
+  selects the lenses whose globs match the changed files and delivers
+  them to the lanes of that dimension (all lanes when `dimension` is
+  absent). The standalone `/arch-review`, `/quality-review`,
+  `/impact-review` and `/test-review` apply the lenses of their own
+  dimension. A lens file is capped at 8 KiB and all lenses at 24576
+  bytes. A lens or instruction file changed by the diff is not applied;
+  symlinks and non-regular files are rejected. Lenses are untrusted
+  advisory input and cannot relax the bars, the sceptic or read-only.
+  The legacy `.claude/review-instructions.json` and
+  `.gitlab/duo/mr-review-instructions.yaml` are still read as inputs.
+  **Changed:** the finding schema gains a required nullable `lens`
+  field (the lens name behind a finding; a lane that omits it is still
+  accepted); the report shows `Lenses:` and `lens: <name>`. The doctor
+  lists lenses. `/loop-review` does not read lens files.
+
 - **Sceptic votes are typed**
   ([#8](https://github.com/akholod/consensus-review/issues/8)). The
   verifier and the refuters vote `AGREE`, `DISAGREE_EVIDENCE` (a verbatim

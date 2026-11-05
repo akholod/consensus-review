@@ -149,7 +149,34 @@ const block = (items) => `===FINDINGS_START===${JSON.stringify(items)}===FINDING
 test("parsePiOutput: takes the last marker block of the final message", () => {
   const raw = `noise on stderr\n${piEvents(block([finding("one")]),
     `draft ${block([finding("two")])} final ${block([finding("three")])}`)}`
-  assert.deepEqual(parsePiOutput(raw), { status: "ok", payload: { findings: [finding("three")] }, model: "m", provider: "p" })
+  // A lane that omits `lens` gets it filled with null (D7).
+  assert.deepEqual(parsePiOutput(raw), { status: "ok", payload: { findings: [{ ...finding("three"), lens: null }] }, model: "m", provider: "p" })
+})
+
+test("payloadProblem: a finding without lens is valid and gets lens null (codex)", () => {
+  withTmp((dir) => {
+    const out = join(dir, "codex.json")
+    writeFileSync(out, JSON.stringify({ findings: [finding("x")] }))
+    const got = classifyCodexResult({ rc: 0, timedOut: false, outPath: out })
+    assert.equal(got.status, "ok")
+    assert.equal(got.payload.findings[0].lens, null)
+  })
+})
+
+test("payloadProblem: a lens name is kept, a non-string lens breaks the contract", () => {
+  withTmp((dir) => {
+    const out = join(dir, "codex.json")
+    writeFileSync(out, JSON.stringify({ findings: [{ ...finding("x"), lens: "payments" }] }))
+    assert.equal(classifyCodexResult({ rc: 0, timedOut: false, outPath: out }).payload.findings[0].lens, "payments")
+    writeFileSync(out, JSON.stringify({ findings: [{ ...finding("x"), lens: 42 }] }))
+    const got = classifyCodexResult({ rc: 0, timedOut: false, outPath: out })
+    assert.equal(got.status, "unparseable")
+    assert.match(got.reason, /^output does not match contracts\/finding\.schema\.json/)
+  })
+})
+
+test("parsePiOutput: a pi block without lens is ok", () => {
+  assert.equal(parsePiOutput(piEvents(block([finding("x")]))).status, "ok")
 })
 
 test("parsePiOutput: a finding that breaks contracts/finding.schema.json is unparseable", () => {

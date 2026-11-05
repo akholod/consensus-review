@@ -293,3 +293,74 @@ test("with only claude installed, doctor selects claude-cli and --offline skips 
     assert.equal(results.find((r) => r.label === "claude-cli read-only").status, "skip")
   })
 })
+
+// ── T9 lenses ────────────────────────────────────────────────────────────────────────────────
+const LENS_CONSEQUENCE = {
+  glob: "this glob matches no tracked file; the lens fires only for new files it matches",
+  rejected: "this lens is never applied",
+  key: "this key has no effect in this version",
+  none: "reviews apply only the generic dimensions",
+}
+
+const lensRows = (report) => report.results.filter((r) => r.section === "lenses")
+
+/** A lens file with the given name and front matter lines. */
+function addLens(dir, name, frontMatter) {
+  mkdirSync(join(dir, ".consensus-review/lenses"), { recursive: true })
+  writeFileSync(join(dir, ".consensus-review/lenses", `${name}.md`), `---\n${frontMatter}\n---\nCheck it.\n`)
+}
+
+test("T9.1 no lenses: lenses is skipped with the generic-dimensions consequence", () => {
+  withRepo((dir) => {
+    const rows = lensRows(doctor(dir))
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].status, "skip")
+    assert.equal(rows[0].consequence, LENS_CONSEQUENCE.none)
+  })
+})
+
+test("T9.2 a lens whose glob matches a tracked file is ok", () => {
+  withRepo((dir) => {
+    mkdirSync(join(dir, "src/payments"), { recursive: true })
+    writeFileSync(join(dir, "src/payments/a.js"), "x\n")
+    addLens(dir, "payments", "paths: [src/payments/**]")
+    execFileSync("git", ["add", "-A"], { cwd: dir })
+    const rows = lensRows(doctor(dir))
+    assert.deepEqual(rows.map((r) => [r.status, r.detail]), [["ok", "lens all, 1 globs"]])
+  })
+})
+
+test("T9.3 a glob matching no tracked file warns", () => {
+  withRepo((dir) => {
+    addLens(dir, "billing", "paths: [src/billing/**]")
+    const warn = lensRows(doctor(dir)).find((r) => r.status === "warn")
+    assert.equal(warn.detail, "glob matches no tracked file: src/billing/**")
+    assert.equal(warn.consequence, LENS_CONSEQUENCE.glob)
+  })
+})
+
+test("T9.4 a rejected file warns with its reason", () => {
+  withRepo((dir) => {
+    addLens(dir, "Bad Name", "paths: [a.txt]")
+    const rows = lensRows(doctor(dir))
+    assert.deepEqual(rows.map((r) => [r.status, r.label, r.detail, r.consequence]),
+      [["warn", ".consensus-review/lenses/Bad Name.md", "invalid name", LENS_CONSEQUENCE.rejected]])
+  })
+})
+
+test("T9.5 an ignored front matter key warns", () => {
+  withRepo((dir) => {
+    addLens(dir, "sev", "paths: [a.txt]\nseverity: P1")
+    const warn = lensRows(doctor(dir)).find((r) => r.status === "warn")
+    assert.equal(warn.detail, "ignored key: severity")
+    assert.equal(warn.consequence, LENS_CONSEQUENCE.key)
+  })
+})
+
+test("T9.7 only lens warnings: the command still exits 0", () => {
+  withRepo((dir) => {
+    addLens(dir, "Bad Name", "paths: [a.txt]")
+    const out = execFileSync("node", [join(ROOT, "scripts/doctor.mjs"), "--offline", "--json", "--repo", dir], { encoding: "utf8" })
+    assert.equal(JSON.parse(out).ok, true)
+  })
+})

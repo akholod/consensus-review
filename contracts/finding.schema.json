@@ -83,6 +83,12 @@
               "tests",
               null
             ]
+          },
+          "lens": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -96,7 +102,8 @@
           "failure_scenario",
           "confidence",
           "suggested_fix",
-          "owner"
+          "owner",
+          "lens"
         ]
       }
     }

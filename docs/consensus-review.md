@@ -288,6 +288,83 @@ such as `main..HEAD`, or a path) and `lang=`.
 `/architecture-audit` is different: it reviews the whole project's
 architecture, not a diff, and is heavier.
 
+## Project lenses
+
+A lens is a project rule the reviewers apply to the files it names. Lenses
+live in the repository, one Markdown file each:
+
+```text
+.consensus-review/lenses/payments.md
+```
+
+```markdown
+---
+paths:
+  - "src/payments/**"
+  - "!src/payments/fixtures/**"
+dimension: impact
+---
+- Every charge path is idempotent: a retried request with the same key must not charge twice.
+- Amounts are integer minor units; a float anywhere on the money path is a finding.
+```
+
+**Front matter.** Line 1 is `---`; the closing `---` is within the first
+50 lines.
+
+| Key | Meaning |
+|---|---|
+| `paths` | Required. `  - "<glob>"` lines or an inline `["a", "!b"]`. A `!` entry excludes. |
+| `dimension` | Optional: `architecture` (or `arch`), `quality`, `impact` or `tests`. Absent means every lane in the run. |
+
+Any other key is ignored (the doctor reports it). The body is the text
+after the closing `---`. The name is the file stem, `[a-z0-9][a-z0-9_-]*`
+up to 64 characters.
+
+**Globs** use fnmatch semantics on the whole path: `*` crosses `/`, so
+`src/payments/**` matches the subtree, and `**/x.js` does not match a
+root-level `x.js`. A lens fires when a changed file matches (the new
+path; the old path only for a deleted file), generated files included.
+
+**Caps.** A lens file over 8 KiB is rejected. All selected lenses share
+one 24576-byte budget, admitted in name order; the rest are skipped.
+
+**Which files are used.** Lenses are read from the working tree of the
+checkout the review runs in, whatever revision it is at. A lens or
+instruction file that the diff changes (in uncommitted mode, including
+untracked files) is not applied, so a change cannot add its own lens.
+A symlink anywhere on the path, or a file that is not a regular file, is
+rejected. A diff-only review has no checkout and applies none.
+
+**Authority.** Lenses are untrusted advisory input. They add checks; they
+cannot relax the severity bars, the sceptic or read-only, and the
+verifier and refuters never see them.
+
+**In the report.** The header has a `Lenses:` line (selected, skipped
+and rejected lenses with reasons, and any lane they were not delivered
+to). A finding that exists because of a lens shows `lens: <name>`; the
+finding schema carries it as `lens`.
+
+**Legacy files.** `.claude/review-instructions.json` and
+`.gitlab/duo/mr-review-instructions.yaml` keep working as inputs; they
+apply to every lane, under the same rules.
+
+**Archive.** `sources/<lane>/prompt.md` is the brief only. The prompt the
+lane actually got is that brief + `"\n\n"` + `sources/lenses/<status.lenses>`,
+when the lane's `status.json` names a lens file. If the archive's size cap
+dropped that lens file, `meta.json` lists it as omitted and the prompt cannot be rebuilt.
+
+The standalone dimension commands apply the lenses of their own dimension
+for uncommitted changes or a PR (a URL, `#N`, `N` or `owner/repo#N`) of
+the current repository, same host included. Any other scope (a range, a
+path, a glob) runs without lenses.
+
+`/consensus-review:doctor` lists the lenses it finds and warns about
+rejected files, ignored keys and globs that match no tracked file.
+
+Not supported yet: profiles, lenses in `~/.config`, built-in lenses, an
+`init-lenses` command, a severity hint. `/loop-review` does not read lens
+files.
+
 ## Code graphs
 
 Agents use a code graph when the repository has one

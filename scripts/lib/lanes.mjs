@@ -70,6 +70,10 @@ function payloadProblem(payload, requireKey) {
   if (!Array.isArray(payload?.[requireKey])) return `output has no ${requireKey} array — the schema was not honoured`
   if (requireKey !== "findings") return null
   findingSchema ??= JSON.parse(readFileSync(new URL("../../contracts/finding.schema.json", import.meta.url), "utf8"))
+  // `lens` is new and advisory: a lane that omits it is not unparseable, it just names no lens.
+  for (const finding of payload.findings) {
+    if (finding && typeof finding === "object" && !("lens" in finding)) finding.lens = null
+  }
   const problems = validate(findingSchema, payload)
   return problems.length ? `output does not match contracts/finding.schema.json: ${problems[0]}` : null
 }
