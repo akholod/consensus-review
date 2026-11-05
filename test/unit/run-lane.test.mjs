@@ -295,9 +295,9 @@ test("--skip: unavailable and other reasons, no launch", async () => {
   const ws = workspace()
   try {
     await launch(ws, runArgs(ws, "codex", ["--skip", "unavailable"]))
-    await launch(ws, runArgs(ws, "pi", ["--skip", "no extra-advisor"]))
+    await launch(ws, runArgs(ws, "pi", ["--skip", "extra=off"]))
     assert.equal(status(ws).display, "unavailable")
-    assert.equal(status(ws, "pi").display, "skipped (no extra-advisor)")
+    assert.equal(status(ws, "pi").display, "skipped (extra=off)")
     assert.equal(launches(ws) + launches(ws, "pi"), 0)
     await decide(ws, "review", "codex,pi")
     assert.equal(decision(ws, "review").allExternalDown, true)
@@ -583,9 +583,9 @@ test("select: the cascade over installed subsets, a forced consultant, extra and
     [["claude"], [], {}, [["claude-cli", "sonnet", null, null]], false],
     [["pi", "claude"], [], { FAKE_PI_LIST: "fail" }, [["claude-cli", "sonnet", null, null]], true],
     [["codex", "claude"], ["--consultant", "pi"], {}, [["pi", null, "unavailable", "forced, not installed"]], false],
-    [["codex", "pi"], ["--consultant", "claude"], {}, [["claude-cli", null, "unavailable", "forced, not installed"]], false],
+    [["codex", "pi"], ["--consultant", "claude-cli"], {}, [["claude-cli", null, "unavailable", "forced, not installed"]], false],
     [["codex", "pi"], ["--extra"], {}, [["codex", null, null, null], ["pi", "opencode-go/glm-5.3", null, null]], true],
-    [["codex", "pi"], ["--extra", "--extra-model", "x/y"], {}, [["codex", null, null, null], ["pi", "x/y", null, null]], false],
+    [["codex", "pi"], ["--extra", "--pi-model", "x/y"], {}, [["codex", null, null, null], ["pi", "x/y", null, null]], false],
     [["pi"], ["--consultant", "pi"], { FAKE_PI_LIST: "fail" }, [["pi", null, "unavailable", "pi --list-models failed"]], true],
   ]) {
     const ws = workspace(bins)
@@ -651,7 +651,7 @@ test("primary pi plus extra: one pi lane through run and decide, its status kept
 })
 
 test("--model handoff: select → run pi → run pi --name pi-refuter, the selected model both times", async () => {
-  for (const [args, model] of [[[], "openai-codex/gpt-6.1-terra"], [["--extra-model", "opencode-go/qwen3.8-max"], "opencode-go/qwen3.8-max"]]) {
+  for (const [args, model] of [[[], "openai-codex/gpt-6.1-terra"], [["--pi-model", "opencode-go/qwen3.8-max"], "opencode-go/qwen3.8-max"]]) {
     const ws = workspace(["pi"])
     try {
       assert.equal(select(ws, ["--wd", ws.dir, "--consultant", "pi", ...args]).code, 0)

@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { assertStrictSchema } from "../../scripts/lib/json-schema.mjs"
 import { VERDICTS } from "../../scripts/lib/lanes.mjs"
+import { SETTINGS } from "../../scripts/settings.mjs"
 
 const sortDeep = (o) =>
   Array.isArray(o) ? o.map(sortDeep)
@@ -96,20 +97,22 @@ const command = () => readFileSync(new URL("../../commands/consensus-review.md",
 const section = (md, n) => md.split(`\n## ${n}. `)[1]?.split("\n## ")[0]
 
 test("§9 calls archive-run.mjs finish only on the file branch, before the report, from INVOKE", () => {
-  // no-file promises zero writes; an archive call outside the file branch would break that promise.
+  // out=none promises zero writes; an archive call outside the file branch would break that promise.
   const md = command()
   const calls = md.split("\n").filter((l) => /archive-run\.mjs"? finish/.test(l) && !/salvage/.test(l))
-  const s1 = section(md, 1)
+  const s0 = section(md, 0)
   const s9 = section(md, 9)
-  assert.ok(s1 && s9, "commands/consensus-review.md must keep sections 1 and 9")
-  // the only invocation outside §9 is the salvage hint printed with the work dir in §1
-  assert.equal(md.split("archive-run.mjs").length - 1, 2, "archive-run.mjs: one salvage hint in §1, one call in §9")
-  assert.match(s1, /archive-run\.mjs finish --wd <WD>/)
+  assert.ok(s0 && s9, "commands/consensus-review.md must keep sections 0 and 9")
+  // the only invocation outside §9 is the salvage hint printed with the work dir in §0
+  assert.equal(md.split("archive-run.mjs").length - 1, 2, "archive-run.mjs: one salvage hint in §0, one call in §9")
+  assert.match(s0, /archive-run\.mjs finish --wd '<WD>'/)
   assert.equal(calls.length, 1)
   assert.ok(s9.includes(calls[0]), "the finish call lives in §9")
-  assert.match(calls[0], /^cd <literal INVOKE> && node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/archive-run\.mjs" finish --wd <literal WD> --report /)
-  assert.match(calls[0], /--args-json '/)
-  assert.match(s9, /on the file branch only, never with `no-file`/)
+  assert.match(calls[0], /^cd '<literal INVOKE>' && node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/archive-run\.mjs" finish --wd '<literal WD>' --report /)
+  // archive-run reads settings.json itself; the call carries only --off, and only for archive=off
+  assert.doesNotMatch(calls[0], /--args-json/)
+  assert.match(calls[0], /--report '<final report path>'\s+# add --off with archive=off$/)
+  assert.match(s9, /on the file branch only, never with `out=none`/)
   assert.match(s9, /Before writing the report/)
   assert.match(s9, /--off with archive=off/)
   assert.match(s9, /\nArchive: </, "the header block carries the Archive line")
@@ -118,10 +121,14 @@ test("§9 calls archive-run.mjs finish only on the file branch, before the repor
 
 test("the arbiter writes the files the archive expects, with one id space", () => {
   const md = command()
-  assert.match(section(md, 0), /`archive=off`/)
-  assert.match(section(md, 0), /no run archive either/)
-  assert.match(section(md, 1), /print `work dir: <WD>`/)
-  assert.match(section(md, 1), /INVOKE=/)
+  const archiveLine = section(md, 0).split("\n").find((l) => l.startsWith("- `archive`"))
+  assert.ok(archiveLine, "§0 keeps the archive setting")
+  assert.match(archiveLine, /`archive=off`/)
+  assert.match(section(md, 0).split("\n").find((l) => l.startsWith("- `out`")) ?? "", /no run archive either/)
+  assert.match(section(md, 0), /print `work dir: <WD>`/)
+  assert.match(section(md, 0), /INVOKE=/)
+  assert.doesNotMatch(section(md, 1), /mktemp/, "§1 no longer creates the work dir")
+  assert.match(section(md, 3), /"mode": "PR\|uncommitted\|diff-only"/, "triage.json carries the mode for the archive meta")
   assert.match(section(md, 3), /\$WD\/triage\.json/)
   assert.match(section(md, 6), /\$WD\/claude-findings\.json/)
   assert.match(section(md, 7), /\$WD\/synthesis\.json/)
@@ -134,20 +141,68 @@ test("the arbiter writes the files the archive expects, with one id space", () =
   assert.doesNotMatch(s8, /Give every P0\/P1 a string id/, "§8 must not renumber")
 })
 
-test("no-file still means zero writes", () => {
+test("out=none still means zero writes", () => {
   const md = command()
-  assert.match(md, /none at all with `no-file`/)
-  assert.match(section(md, 0), /performs \*\*zero\*\* writes anywhere on disk/)
-  assert.match(md.split("## Hard rules")[1], /with `no-file` there is no write at all/)
+  assert.match(md, /none at all with `out=none`/)
+  assert.match(section(md, 0), /`none` \(`no-file`\) → terminal output only: the review performs \*\*zero\*\* writes anywhere on disk/)
+  assert.match(md.split("## Hard rules")[1], /with `out=none` \(`no-file`\) there is no write at all/)
+  assert.match(section(md, 9), /unless `out` is `none` \(terminal only, zero writes, no archive call\)/)
+})
+
+test("§0 resolves the arguments in settings.mjs and stops on a bad value", () => {
+  const s0 = section(command(), 0)
+  assert.match(s0, /Write `\$ARGUMENTS` \*\*verbatim\*\*.* to `\$WD\/args\.txt`/)
+  assert.match(s0, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/settings\.mjs" resolve --wd '<literal WD>' --args-file '<literal WD>\/args\.txt'/)
+  assert.match(s0, /Exit 2 → print its stderr message and \*\*stop\*\*/)
+  assert.match(s0, /read `\$WD\/settings\.json` and use \*\*only\*\* its values/)
+  // the parsing rules live in code; their prose must not come back
+  assert.doesNotMatch(s0, /\*\*`deep` wins\*\*|case-insensitive|alias/)
+})
+
+test("§9 copies the Settings and Ignored args lines verbatim and always groups P2", () => {
+  const md = command()
+  const s9 = md.split("\n## 9. ")[1]?.split("\n## Hard rules")[0]
+  assert.match(s9, /consultant: <name> \(<reason>\)\n<lines\.settings>\n<lines\.ignored>\n/)
+  assert.match(s9, /copied \*\*verbatim\*\* from `\$WD\/settings\.json`/)
+  assert.doesNotMatch(s9, /extra-advisor:|timeout: <sec>|p2: </, "the header no longer repeats what Settings shows")
+  assert.match(s9, /Up to 7 entries individually/)
+  assert.doesNotMatch(md, /p2=/)
+})
+
+test("the command no longer mentions a retired argument", () => {
+  // Plan step 2 acceptance grep; arch-reviewer and /arch-review must stay (lint L6).
+  assert.doesNotMatch(command(), /no-sceptic|extra-advisor|p2=|--args-json|--extra-model|`full`|`arch`|\|arch\]|minimal arch|deep arch|`claude` ≡/)
+})
+
+test("SETTINGS, the argument-hint and the docs tables name the same keys", () => {
+  assert.deepEqual(Object.keys(SETTINGS), ["depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout"])
+  const hint = command().match(/^argument-hint: "(.*)"$/m)?.[1]
+  assert.equal(hint, "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [<key>=<value>…]")
+  const docs = readFileSync(new URL("../../docs/consensus-review.md", import.meta.url), "utf8")
+  const tables = docs.split(/^### Everyday$/m)[1].split(/^P2 findings/m)[0]
+  const keys = new Set([...tables.matchAll(/^\| `([^`=]+)[=`]/gm)].map((m) => m[1]).filter((key) => key !== "Argument"))
+  assert.deepEqual([...keys].sort(), [...Object.keys(SETTINGS), "<PR>", "no-file"].sort())
+})
+
+test("§0 states the single-quote rule and the PR commands quote every pasted value", () => {
+  const md = command()
+  assert.match(section(md, 0), /\*\*Quoting rule:\*\* every value .* goes in \*\*single quotes\*\*/)
+  const s1 = section(md, 1)
+  assert.match(s1, /`gh pr view '<target>' \[-R '<owner\/repo>'\] --json title,/)
+  assert.match(s1, /`gh pr diff '<target>' \[-R '<owner\/repo>'\] > "\$WD\/diff\.patch"`/)
+  assert.match(s1, /`gh pr view '<target>' \[-R '<owner\/repo>'\] --json headRefOid`/)
+  assert.match(s1, /`curl -fsSL 'https:\/\/github\.com\/<owner>\/<repo>\/pull\/<N>\.diff' > "\$WD\/diff\.patch"`/)
+  assert.match(section(md, 0), /written with the `'\\''` escape/)
+  assert.doesNotMatch(md, /gh pr (view|diff) <target>|--report <final|--pi-model <m>|--consultant <x>|--model <model>|--wd <literal|--wd <WD>|--repo <literal|--repo "<literal|cd <literal|--head-sha <literal|--args-file <literal|--skip-reason "|WD=\/tmp/)
 })
 
 test("§0 documents the consultant cascade, the extra advisor and the family vote rules", () => {
   // Selection lives in run-lane select; the prompt must expose the flag and never re-derive it.
   const md = command()
   const s0 = section(md, 0)
-  assert.match(md.split("\n---\n")[0], /consultant=<codex\|pi\|claude-cli\|claude>/, "argument-hint lists consultant=")
-  assert.match(s0, /`consultant=<codex\|pi\|claude-cli>`/)
-  assert.match(s0, /`claude` ≡ `claude-cli`/)
+  assert.match(md.split("\n---\n")[0], /\[<key>=<value>…\]/, "argument-hint points at the advanced keys")
+  assert.match(s0, /`codex\|pi\|claude-cli` forces one/)
+  assert.doesNotMatch(s0, /`claude` ≡ `claude-cli`/)
   assert.match(s0, /`codex` → `pi` → `claude-cli`/)
   assert.match(s0, /reported `unavailable`, never replaced/)
   assert.match(s0, /skipped \(pi is the consultant\)/)
@@ -162,7 +217,7 @@ test("§0 documents the consultant cascade, the extra advisor and the family vot
 
 test("§2 selects the consultants with one run-lane select call", () => {
   const s2 = section(command(), 2)
-  assert.match(s2, /run-lane\.mjs" select --wd <literal WD> \[--consultant <x>\] \[--extra \[--extra-model <m>\]\]/)
+  assert.match(s2, /run-lane\.mjs" select --wd '<literal WD>' \[--consultant '<x>'\] \[--extra\] \[--pi-model '<m>'\]/)
   assert.equal(s2.split(" select --wd").length - 1, 1)
   assert.match(s2, /\$WD\/consultants\.json/)
   assert.doesNotMatch(s2, /codex --version|pi --version/)
@@ -184,7 +239,7 @@ test("§5 and §8 run lanes and refuters from consultants.json values, not fixed
     assert.doesNotMatch(s, /run (codex|pi) --wd/, "no hard-coded codex/pi lane line")
     assert.match(s, /one line per consultants\.json lane/)
   }
-  assert.match(s5, /run <name> --wd "\$WD" --name <name> .*--brief-file "\$WD\/<brief>" .*\[--model <model>\] \[--lenses-file "\$WD\/<outputs\.consultant>"\] \[--skip <skip> --skip-reason "<skipReason>"\] &/)
+  assert.match(s5, /run <name> --wd "\$WD" --name <name> .*--brief-file "\$WD\/<brief>" .*\[--model '<model>'\] \[--lenses-file "\$WD\/<outputs\.consultant>"\] \[--skip <skip> --skip-reason '<skipReason>'\] &/)
   assert.match(s5, /--phase review --lanes <name>/)
   assert.match(s8, /run <name> --wd "\$WD" --name <name>-refuter .*--brief-file "\$WD\/<refuterBrief>"/)
   assert.match(s8, /--from-decision "\$WD\/review\.decision\.json"/)

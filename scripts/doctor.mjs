@@ -94,7 +94,7 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
 
     const pi = toolVersion("pi")
     add("consultants", "pi", pi ? "ok" : "skip", pi ?? "not installed",
-      pi ? "" : "the consultant when codex is missing, and the `extra-advisor` lane; without it neither runs pi")
+      pi ? "" : "the consultant when codex is missing, and the `extra=pi` lane; without it neither runs pi")
 
     const gh = toolVersion("gh")
     if (!gh) {

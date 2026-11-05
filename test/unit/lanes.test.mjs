@@ -310,8 +310,8 @@ test("selectRefuters: config → skip, degraded → run, unavailable → skip, n
     { "codex-refuter": "skipped (unavailable)" })
   assert.deepEqual(selectRefuters({ codex: helperError("codex", "no status written") }, false),
     { "codex-refuter": "skipped (codex failed: helper error)" })
-  assert.deepEqual(selectRefuters({ codex: lane("ok"), pi: lane("skipped", "skipped (no extra-advisor)", []) }, true),
-    { "codex-refuter": "run", "pi-refuter": "skipped (no extra-advisor)" })
+  assert.deepEqual(selectRefuters({ codex: lane("ok"), pi: lane("skipped", "skipped (extra=off)", []) }, true),
+    { "codex-refuter": "run", "pi-refuter": "skipped (extra=off)" })
   assert.deepEqual(selectRefuters({ codex: lane("ok"), pi: lane("failed", "failed: 401") }, true),
     { "codex-refuter": "run", "pi-refuter": "skipped (pi failed: config)" })
 })
@@ -360,7 +360,7 @@ test("validStatus, validRefuterEntry and validIds fail closed", () => {
 
 test("allExternalDown: extra both down, default degraded + skipped pi, one ok (retried)", () => {
   assert.equal(allExternalDown({ codex: lane("degraded"), pi: lane("failed") }), true)
-  assert.equal(allExternalDown({ codex: lane("degraded"), pi: lane("skipped", "skipped (no extra-advisor)") }), true)
+  assert.equal(allExternalDown({ codex: lane("degraded"), pi: lane("skipped", "skipped (extra=off)") }), true)
   assert.equal(allExternalDown({ codex: lane("ok", "ok (retried: timeout)"), pi: lane("degraded") }), false)
   assert.equal(decideReview({ codex: helperError("codex", "no status written") }).allExternalDown, true)
 })
@@ -434,6 +434,13 @@ test("parsePiModels: the captured table, header dropped", () => {
   assert.deepEqual(parsePiModels("provider  model  context\n"), [])
 })
 
+test("pickPiModel never picks a catalog model outside the pi-model charset", () => {
+  const rows = [{ provider: "openai-codex", model: "gpt-$(id)" }, { provider: "openai-codex", model: "gpt-6" }]
+  assert.deepEqual(pickPiModel("primary", rows), { model: "openai-codex/gpt-6", group: "openai-codex" })
+  assert.deepEqual(pickPiModel("primary", [rows[0]]), { none: "no non-Claude pi model" })
+  assert.deepEqual(pickPiModel("extra", [{ provider: "opencode-go", model: "glm-5;id" }]), { none: "no independent pi model" })
+})
+
 test("pickPiModel on the captured catalog", () => {
   const without = (re) => CATALOG.filter((r) => !re.test(r.model))
   assert.equal(pickPiModel("primary", CATALOG).model, "openai-codex/gpt-6.1-terra")
@@ -500,45 +507,46 @@ test("selectConsultants: an automatic pi without a usable model gives way to cla
   // nothing to give way to: codex unavailable, as today
   assert.deepEqual(names(selectConsultants({ installed: { pi: true }, piModels: [] })), ["codex"])
   // an explicit model pins the automatic pi without the catalog
-  assert.equal(selectConsultants({ installed: { pi: true, claude: true }, piModels: null, extraModel: "x/y" }).lanes[0].model, "x/y")
+  assert.equal(selectConsultants({ installed: { pi: true, claude: true }, piModels: null, piModel: "x/y" }).lanes[0].model, "x/y")
 })
 
 test("selectConsultants: a forced consultant is never substituted", () => {
-  for (const consultant of ["codex", "pi", "claude-cli", "claude"]) {
-    const want = consultant === "claude" ? "claude-cli" : consultant
+  for (const [consultant, key] of [["codex", "codex"], ["pi", "pi"], ["claude-cli", "claude"]]) {
     const here = selectConsultants({ installed: ALL, consultant, piModels: CATALOG }).lanes
-    assert.deepEqual(here.map((l) => [l.name, l.skip]), [[want, null]], consultant)
-    const key = want === "claude-cli" ? "claude" : want
+    assert.deepEqual(here.map((l) => [l.name, l.skip]), [[consultant, null]], consultant)
     const missing = selectConsultants({ installed: { ...ALL, [key]: false }, consultant, piModels: CATALOG })
-    assert.deepEqual(missing.lanes.map((l) => [l.name, l.skip, l.skipReason]), [[want, "unavailable", "forced, not installed"]], consultant)
+    assert.deepEqual(missing.lanes.map((l) => [l.name, l.skip, l.skipReason]), [[consultant, "unavailable", "forced, not installed"]], consultant)
   }
   for (const [piModels, skipReason] of [[null, "pi --list-models failed"], [[], "no non-Claude pi model"],
     [CATALOG.filter((r) => family("pi", r) === "anthropic"), "no non-Claude pi model"]]) {
     const sel = selectConsultants({ installed: ALL, consultant: "pi", piModels })
     assert.deepEqual(sel.lanes.map((l) => [l.name, l.skip, l.skipReason]), [["pi", "unavailable", skipReason]])
     // with an explicit model the forced pi runs on it, catalog or not
-    assert.deepEqual(selectConsultants({ installed: ALL, consultant: "pi", piModels, extraModel: "m/x" }).lanes
+    assert.deepEqual(selectConsultants({ installed: ALL, consultant: "pi", piModels, piModel: "m/x" }).lanes
       .map((l) => [l.name, l.model, l.skip]), [["pi", "m/x", null]])
   }
   assert.throws(() => selectConsultants({ installed: ALL, consultant: "opencode" }), /unknown consultant/)
+  // the old `claude` alias is gone
+  assert.throws(() => selectConsultants({ installed: ALL, consultant: "claude" }),
+    { message: 'unknown consultant "claude" — expected codex, pi or claude-cli' })
 })
 
 test("selectConsultants: extra", () => {
   const sel = selectConsultants({ installed: ALL, extra: true, piModels: CATALOG })
   assert.deepEqual(sel.lanes.map((l) => [l.name, l.model, l.skip]), [["codex", null, null], ["pi", "opencode-go/glm-5.3", null]])
   assert.match(sel.reason, /pi as extra: opencode-go\/glm-5\.3 \(glm preferred for independence\)/)
-  assert.equal(selectConsultants({ installed: ALL, extra: true, extraModel: "openai/gpt-x", piModels: null }).lanes[1].model, "openai/gpt-x")
+  assert.equal(selectConsultants({ installed: ALL, extra: true, piModel: "openai/gpt-x", piModels: null }).lanes[1].model, "openai/gpt-x")
   for (const piModels of [null, [], CATALOG.filter((r) => !/^(glm|qwen|kimi)/.test(r.model))]) {
     assert.deepEqual(selectConsultants({ installed: ALL, extra: true, piModels }).lanes[1],
       { name: "pi", brief: "brief-pi.md", refuterBrief: "refuter-brief-pi.md", model: null, skip: "unavailable", skipReason: "no independent pi model" })
   }
   assert.deepEqual(selectConsultants({ installed: { codex: true }, extra: true }).lanes.map((l) => [l.name, l.skip]),
     [["codex", null], ["pi", "unavailable"]])
-  const cli = selectConsultants({ installed: ALL, consultant: "claude", extra: true, piModels: CATALOG })
+  const cli = selectConsultants({ installed: ALL, consultant: "claude-cli", extra: true, piModels: CATALOG })
   assert.deepEqual(names(cli), ["claude-cli", "pi"])
   // primary pi + extra: exactly one pi lane, and the extra model still pins it
   for (const installed of [{ pi: true, claude: true }, ALL]) {
-    const one = selectConsultants({ installed, consultant: installed.codex ? "pi" : undefined, extra: true, extraModel: "m/x", piModels: CATALOG })
+    const one = selectConsultants({ installed, consultant: installed.codex ? "pi" : undefined, extra: true, piModel: "m/x", piModels: CATALOG })
     assert.deepEqual(one.lanes.map((l) => [l.name, l.model]), [["pi", "m/x"]])
     assert.equal(one.extraNote, "skipped (pi is the consultant)")
   }

@@ -37,7 +37,7 @@ Project rules live in the repository as review lenses in
 `.consensus-review/lenses/`; see [Project lenses](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md#project-lenses).
 
 It never changes your code. It writes only the report and its private run archive in the ignored
-`.reviews/`. `archive=off` / `--no-archive` drop the archive; `no-file` writes nothing at all.
+`.reviews/`. `archive=off` drops the archive (`--no-archive` does the same for `/loop-review`); `no-file` writes nothing at all.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/akholod/consensus-review/main/assets/demo.gif" alt="/consensus-review on a small change: impact, quality and tests agents plus codex run in parallel, a sceptic pass verifies the findings, and the report lists P0, P1 and P2 with failure scenarios" width="100%">
@@ -145,7 +145,7 @@ Everything the plugin runs, and where your code goes:
   codex, the consultant is `pi`, else `claude-cli`: a separate
   `claude -p` with a read-only toolset that sends what it reads to
   Anthropic and uses your Claude quota. With
-  `extra-advisor`, `pi` does the same with a read-only toolset and the
+  `extra=pi`, `pi` does the same with a read-only toolset and the
   provider pi is set up for. pi runs without extensions, skills, context
   files or a saved session, so a provider that only an extension supplies
   (such as `claude-bridge`) is not available to it. `/loop-review` runs `claude -p`, which
@@ -166,8 +166,8 @@ Everything the plugin runs, and where your code goes:
   diff, the prompts and the consultants' transcripts (which can include
   any repo file a model read). It is private (`0700`/`0600`), written
   only when git ignores `.reviews/`, and never leaves your repository.
-  Turn it off with `archive=off` or `--no-archive`; `no-file` writes
-  none. There is no retention: delete old runs yourself.
+  Turn it off with `archive=off` (`--no-archive` for `/loop-review`);
+  `no-file` writes none. There is no retention: delete old runs yourself.
 
 The plugin has no telemetry and makes no other network call of its own.
 The Claude agents run with your session's tools and permissions, minus

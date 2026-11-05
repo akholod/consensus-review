@@ -19,7 +19,7 @@ without one too. `/consensus-review:doctor` prints what each agent runs on.
 | `test-reviewer`          | `sonnet`                  | session    | the same kind of work, for tests                                          |
 | `finding-verifier`       | `opus`                    | `high`     | see below                                                                 |
 | codex consultant         | codex's configured model  | codex's    | the plugin passes no `--model`                                            |
-| pi consultant or extra   | picked by role, or `extra-advisor=<model>` | pi's | see [How pi picks its model](#how-pi-picks-its-model)                  |
+| pi consultant or extra   | picked by role, or `pi-model=<model>` | pi's | see [How pi picks its model](#how-pi-picks-its-model)                  |
 | claude-cli consultant    | `sonnet`                  | CLI default | a separate `claude -p`; same family as the panel                       |
 | `/loop-review` passes    | `sonnet`, or `--model=<m>` | CLI default | every pass and the verification use the same model                     |
 
@@ -48,7 +48,7 @@ ones already on the panel. Three reviews by one model are one opinion.
 - **codex** runs on OpenAI's models, so it is different by default. Its
   model is set in codex's own config, not here.
 - **pi** is pinned to a model of another family, chosen by role (below).
-  Pick your own with `extra-advisor=<model>`. The report prints pi's
+  Pick your own with `pi-model=<model>`. The report prints pi's
   resolved `provider/model` and flags a same-family collision.
 - **claude-cli** is a different process but the same model family as the
   panel: context independence only.
@@ -58,7 +58,7 @@ ones already on the panel. Three reviews by one model are one opinion.
 pi's model comes from `pi --no-extensions --list-models` (a local
 catalog), by role. pi runs without extensions, skills, context files or a
 saved session, so the catalog leaves out providers that only an extension
-supplies (such as `claude-bridge`); an explicit `extra-advisor=<model>`
+supplies (such as `claude-bridge`); an explicit `pi-model=<model>`
 naming one is not available in read-only mode.
 
 - **pi is the consultant**: an OpenAI model first, then glm → qwen → kimi
@@ -70,7 +70,7 @@ naming one is not available in read-only mode.
   (the cascade moves on); a forced or extra pi is `unavailable`.
 - **"Newest"** within a family: drop names matching `flash`, `free` or
   `mini`, then take the highest by numeric-aware name order.
-- `extra-advisor=<model>` overrides all of this.
+- `pi-model=<model>` overrides all of this.
 - A listed model is not necessarily one you are logged in to.
 
 ### Model families
@@ -99,7 +99,7 @@ independent source and never votes.
 
 - **Arbiter**: `/model` in your session.
 - **`/loop-review`**: `--model=<m>`, for example `--model=opus`.
-- **pi**: `extra-advisor=<model>`; see above.
+- **pi**: `pi-model=<model>`; see above.
 - **codex**: codex's own configuration.
 - **The agents**: their model and effort are in the frontmatter of
   `agents/*.md`. A plugin's files are replaced on update, so changing

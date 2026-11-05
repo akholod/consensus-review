@@ -287,6 +287,9 @@ export function parsePiModels(text) {
     .map(([provider, model]) => ({ provider, model }))
 }
 
+/** A pi model id, pinned (`pi-model=`) or picked from the catalog: safe to paste into a command. */
+export const PI_MODEL_ID = /^[A-Za-z0-9._:/@+-]{1,100}$/
+
 const startsWith = (prefix) => (row) => row.model.startsWith(prefix)
 const INDEPENDENT_PI = [["glm", startsWith("glm")], ["qwen", startsWith("qwen")], ["kimi", startsWith("kimi")]]
 const PI_PREFERENCE = {
@@ -299,7 +302,8 @@ const PI_PREFERENCE = {
  * never pi's unpinned default. "Newest" is the numeric-aware maximum; a tie keeps catalog order.
  */
 export function pickPiModel(role, rows) {
-  const usable = (rows ?? []).filter((row) => !/flash|free|mini/.test(row.model) && family("pi", row) !== PANEL_FAMILY)
+  const usable = (rows ?? []).filter((row) => PI_MODEL_ID.test(`${row.provider}/${row.model}`)
+    && !/flash|free|mini/.test(row.model) && family("pi", row) !== PANEL_FAMILY)
   for (const [group, match] of PI_PREFERENCE[role]) {
     const best = usable.filter(match).reduce((a, b) => (!a || b.model.localeCompare(a.model, undefined, { numeric: true }) > 0 ? b : a), null)
     if (best) return { model: `${best.provider}/${best.model}`, group }
@@ -323,14 +327,16 @@ const consultantLane = (name, model, skipReason) => ({
 
 /**
  * Which external lanes run, from the harnesses present: `codex → pi → claude-cli`, or the forced
- * `consultant` (alias `claude`), never substituted. `piModels` is parsePiModels' rows, or null when
+ * `consultant`, never substituted (`auto`/missing = the cascade). `piModel` pins pi's model
+ * (`auto`/missing = picked from `piModels`). `piModels` is parsePiModels' rows, or null when
  * the listing failed. Pure: the caller detects `installed` and lists pi's models.
  */
-export function selectConsultants({ installed, consultant, extra, extraModel, piModels }) {
-  const forced = consultant === "claude" ? "claude-cli" : consultant || null
+export function selectConsultants({ installed, consultant, extra, piModel: pinned, piModels }) {
+  const forced = consultant && consultant !== "auto" ? consultant : null
+  const model = pinned && pinned !== "auto" ? pinned : null
   if (forced && !BRIEFS[forced]) throw new Error(`unknown consultant "${consultant}" — expected codex, pi or claude-cli`)
   const piModel = (role) => {
-    if (extraModel) return { model: extraModel, why: "extra-advisor model" }
+    if (model) return { model, why: "pi-model" }
     if (!piModels) return { none: role === "primary" ? "pi --list-models failed" : "no independent pi model" }
     const pick = pickPiModel(role, piModels)
     return pick.none ? pick : { model: pick.model, why: `${pick.group} preferred${role === "extra" ? " for independence" : ""}` }

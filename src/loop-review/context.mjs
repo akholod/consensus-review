@@ -484,7 +484,7 @@ export function checkSourcePath(repo, rel, last = "file") {
   return null
 }
 
-const LENS_DIMENSIONS = { architecture: "architecture", arch: "architecture", quality: "quality", impact: "impact", tests: "tests" }
+const LENS_DIMENSIONS = { architecture: "architecture", quality: "quality", impact: "impact", tests: "tests" }
 const MAX_FRONT_MATTER_LINES = 50
 
 /** Parse a lens file: `---` front matter (`paths`, `dimension`) and a markdown body. */

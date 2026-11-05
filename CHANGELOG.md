@@ -4,10 +4,29 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
 
 ## Unreleased
 
+- **Breaking: arguments simplified.** Arguments are `key=value` pairs
+  resolved in code by `scripts/settings.mjs` (one `SETTINGS` table); the
+  arbiter reads `settings.json` instead of interpreting flags. There is
+  no backward compatibility: a removed token is listed in `Ignored args`.
+  **Removed:** `full`, `arch` (as a flag and inside `dims=`; use
+  `dims=+architecture`), `no-sceptic` (use `sceptic=off`),
+  `consultant=claude` (use `claude-cli`), `extra-advisor[=<model>]` (use
+  `extra=pi` and `pi-model=<model>`), `p2=` (P2 findings are always
+  grouped) and `archive-run.mjs --args-json`. **Changed:** a key given
+  twice is last-wins (`deep minimal` runs minimal; the earlier one goes to
+  `Ignored args`); a known key with a bad value stops the run and lists
+  the valid values; `timeout` is clamped to `[30, 1800]` in code and must
+  be an integer; values cannot contain whitespace (`lang=pt-BR`); `dims`
+  takes only `architecture,quality,impact,tests` and does not mix
+  absolute and `+`/`-` forms. **Added:** the `Settings:` header line
+  (each value with its source), `depth=auto|minimal|deep`, `out=none`,
+  `archive=on|off`, and a report of a `pi-model` that no pi lane uses.
+
 - **Project review lenses kept in the repository**
   ([#7](https://github.com/akholod/consensus-review/issues/7), `Refs #7`).
   `.consensus-review/lenses/<name>.md` holds a `paths` glob list, an
-  optional `dimension` and a body. For each run, `/consensus-review`
+  optional `dimension` and a body; `dimension` accepts
+  `architecture|quality|impact|tests` only. For each run, `/consensus-review`
   selects the lenses whose globs match the changed files and delivers
   them to the lanes of that dimension (all lanes when `dimension` is
   absent). The standalone `/arch-review`, `/quality-review`,

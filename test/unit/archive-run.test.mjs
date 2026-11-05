@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import { basename, join, relative } from "node:path"
 import { PER_FILE_CAP, SCHEMA, TOTAL_CAP } from "../../scripts/lib/archive.mjs"
 import { fallbackVerdicts } from "../../scripts/lib/lanes.mjs"
+import { resolveSettings } from "../../scripts/settings.mjs"
 
 const ROOT = new URL("../..", import.meta.url).pathname
 const CLI = join(ROOT, "scripts/archive-run.mjs")
@@ -40,9 +41,13 @@ const synthesis = {
   ],
 }
 
+/** The run's settings.json, as scripts/settings.mjs writes it for the PR run `#7 sceptic=strict extra=pi`. */
+const SETTINGS = resolveSettings(["#7", "sceptic=strict", "extra=pi"])
+
 /** The arbiter files plus a consultant panel: codex `unparseable,ok`, pi ok, both refuters. */
 function fullRun(wd, { strict = true } = {}) {
   put(wd, {
+    "settings.json": SETTINGS,
     "diff.patch": DIFF,
     "brief.md": "codex brief",
     "brief-pi.md": "pi brief",
@@ -58,7 +63,7 @@ function fullRun(wd, { strict = true } = {}) {
     "pi.json": { findings: [{ title: "c", severity: "P2", dimension: "tests" }] },
     "pi.status.json": { lane: "pi", kind: "pi", brief: "brief-pi.md", status: "ok", display: "ok", model: "m1", provider: "fake", attempts: [attempt(1, "ok", "2026-01-01T00:00:02.000Z")] },
     "review.decision.json": { lanes: {}, allExternalDown: false, refuters: { "codex-refuter": "run" } },
-    "triage.json": { tier: "T2", dims: ["impact", "quality"], basis: "small change" },
+    "triage.json": { tier: "T2", mode: "PR", dims: ["impact", "quality"], basis: "small change" },
     "claude-findings.json": { findings: [{ title: "a", severity: "P2", dimension: "quality", owner: "impact" }] },
     "synthesis.json": synthesis,
     "verifier.verdicts.json": [{ id: "F2", verdict: "confirmed", evidence: "x.js:1" }],
@@ -93,13 +98,12 @@ test("a strict run is archived per the mapping, under the cwd repo even when the
   t.after(w.cleanup)
   fullRun(w.wd)
   const report = join(w.base, "elsewhere", "pr-7.md")
-  const flags = { sceptic: "strict", "extra-advisor": true, target: "#7", mode: "PR" }
-  const r = finish(w.top, ["--wd", w.wd, "--report", report, "--args-json", JSON.stringify(flags)])
+  const r = finish(w.top, ["--wd", w.wd, "--report", report])
   assert.equal(r.code, 0, r.stderr)
   assert.ok(r.out.dir.startsWith(join(w.top, ".reviews", "pr-7-")), r.out.dir)
   assert.equal(existsSync(join(w.base, "elsewhere")), false)
   assert.deepEqual(tree(r.out.dir), [
-    "decisions/ids.json", "decisions/review.decision.json", "decisions/sceptic.decision.json",
+    "decisions/ids.json", "decisions/review.decision.json", "decisions/sceptic.decision.json", "decisions/settings.json",
     "diff.patch", "events.jsonl",
     "findings/claude.json", "findings/panel.json", "findings/synthesis.json", "findings/verification.json",
     "meta.json",
@@ -135,7 +139,8 @@ test("a strict run is archived per the mapping, under the cwd repo even when the
   assert.equal(meta.mode, "PR")
   assert.equal(meta.pluginVersion, readJson(ROOT, ".claude-plugin/plugin.json").version)
   assert.equal(meta.report, report)
-  assert.deepEqual(meta.flags, flags)
+  assert.deepEqual(meta.settings, SETTINGS)
+  assert.deepEqual(readJson(dir, "decisions/settings.json"), SETTINGS)
   assert.equal(meta.diffHash, createHash("sha256").update(DIFF).digest("hex").slice(0, 16))
   assert.ok(!Number.isNaN(Date.parse(meta.createdAt)))
   assert.deepEqual(meta.missing, [])
@@ -218,8 +223,9 @@ test("basic: decide ran with no lanes, so the decision and ids.json are archived
     "triage.json": { tier: "T2", basis: "no dims" },
     "ids.json": ["F2"],
     "sceptic.decision.json": { lanes: {}, voteMode: "basic", verifier: "ok", excluded: {}, perFinding: { F2: { decision: "confirmed", voters: "1 of 1", noVote: [] } } },
+    "settings.json": resolveSettings(["sceptic=basic"]),
   })
-  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", '{"sceptic":"basic"}'])
+  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
   assert.equal(r.code, 0, r.stderr)
   const files = tree(r.out.dir)
   for (const f of ["decisions/sceptic.decision.json", "decisions/ids.json"]) assert.ok(files.includes(f), f)
@@ -228,6 +234,8 @@ test("basic: decide ran with no lanes, so the decision and ids.json are archived
   const f2 = verification.findings.find((f) => f.id === "F2")
   assert.deepEqual([f2.verdict, f2.voters, f2.title], ["confirmed", "1 of 1", "b"])
   const meta = readJson(r.out.dir, "meta.json")
+  assert.equal(meta.target, "uncommitted", "settings.json with no target")
+  assert.equal(meta.mode, null, "triage.json without mode")
   assert.deepEqual(meta.missing, [])
   assert.deepEqual(meta.unavailable.map((u) => u.source), ["quality-reviewer", "finding-verifier"])
 })
@@ -238,7 +246,7 @@ test("the mode comes from voteMode: any strict variant is strict", (t) => {
     t.after(w.cleanup)
     fullRun(w.wd)
     put(w.wd, { "sceptic.decision.json": { voteMode, verifier: "ok", perFinding: { F2: { decision: "unconfirmed", voters: "1 of 2" } } } })
-    const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
+    const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
     assert.equal(readJson(r.out.dir, "findings/verification.json").mode, "strict", voteMode)
   }
 })
@@ -269,7 +277,8 @@ test("fallbackVerdicts: the same cases through lanes and through archive-run giv
       if (payload) put(w.wd, { "verifier.verdicts.json": payload })
       else rmSync(join(w.wd, "verifier.verdicts.json"))
       if (idsJson !== undefined) put(w.wd, { "ids.json": idsJson })
-      const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", '{"sceptic":"strict"}'])
+      put(w.wd, { "settings.json": resolveSettings(["sceptic=strict"]) })
+      const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
       assert.equal(r.code, 0, r.stderr)
       const meta = readJson(r.out.dir, "meta.json")
       assert.equal(meta.schema, SCHEMA)
@@ -290,7 +299,7 @@ test("a decision that carries error, or has no perFinding, falls back as if miss
     t.after(w.cleanup)
     fullRun(w.wd)
     put(w.wd, { "sceptic.decision.json": decision, "verifier.verdicts.json": [{ id: "F2", verdict: "AGREE", evidence: "x.js:1" }] })
-    const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
+    const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
     const v = readJson(r.out.dir, "findings/verification.json")
     assert.equal(v.mode, "fallback", JSON.stringify(decision))
     assert.equal(v.findings.find((f) => f.id === "F2").verdict, "confirmed")
@@ -302,7 +311,7 @@ test("misaligned ids: verification.json is not written and meta.notWritten says 
   t.after(w.cleanup)
   fullRun(w.wd, { strict: false })
   put(w.wd, { "ids.json": ["F2", "F7"], "sceptic.decision.json": { perFinding: { F2: { decision: "confirmed" }, F7: { decision: "refuted" } } } })
-  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
+  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
   assert.equal(r.code, 0, r.stderr)
   assert.equal(existsSync(join(r.out.dir, "findings/verification.json")), false)
   assert.match(readJson(r.out.dir, "meta.json").notWritten["findings/verification.json"], /ids not in synthesis\.json: F7/)
@@ -317,7 +326,7 @@ test("duplicate or invalid ids in synthesis.json: verification.json is not writt
     t.after(w.cleanup)
     fullRun(w.wd, { strict: false })
     put(w.wd, { "synthesis.json": { findings } })
-    const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
+    const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
     assert.equal(r.code, 0, r.stderr)
     assert.equal(existsSync(join(r.out.dir, "findings/verification.json")), false, label)
     assert.equal(readJson(r.out.dir, "meta.json").notWritten["findings/verification.json"], reason, label)
@@ -344,7 +353,7 @@ test("a claude-cli run: its prompt, attempts and findings in the panel, consulta
     "claude-findings.json": { findings: [{ title: "a", severity: "P2", dimension: "impact" }] },
     "synthesis.json": { findings: [] },
   })
-  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
+  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
   assert.equal(r.code, 0, r.stderr)
   const dir = r.out.dir
   const files = tree(dir)
@@ -358,32 +367,43 @@ test("a claude-cli run: its prompt, attempts and findings in the panel, consulta
   assert.equal(meta.lanes["claude-cli"].model, "claude-sonnet-5-5")
 })
 
+test("only the four dimension names map to a reviewer agent; the retired arch alias maps to none", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  put(w.wd, { "diff.patch": DIFF, "triage.json": { tier: "T2", dims: ["arch", "architecture"] }, "claude-findings.json": { findings: [] }, "synthesis.json": { findings: [] } })
+  const meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r.md"]).out.dir, "meta.json")
+  assert.deepEqual(meta.unavailable.map((u) => u.source), ["arch-reviewer"])
+  put(w.wd, { "triage.json": { tier: "T2", dims: ["arch"] } })
+  const alias = readJson(finish(w.top, ["--wd", w.wd, "--report", "r2.md"]).out.dir, "meta.json")
+  assert.deepEqual(alias.unavailable, [])
+})
+
 test("each lane's prompt file is expected: brief.md, brief-pi.md and the refuter briefs that ran", (t) => {
   const w = workspace()
   t.after(w.cleanup)
   // T0: the arbiter alone, no consultant statuses.
   put(w.wd, { "diff.patch": DIFF, "triage.json": { tier: "T0", dims: [] }, "claude-findings.json": { findings: [] }, "synthesis.json": { findings: [] } })
-  let meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"]).out.dir, "meta.json")
+  let meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r.md"]).out.dir, "meta.json")
   assert.deepEqual(meta.missing, [])
   put(w.wd, { "codex.status.json": { lane: "codex", status: "ok", display: "ok", attempts: [] } })
-  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r2.md", "--args-json", "{}"]).out.dir, "meta.json")
+  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r2.md"]).out.dir, "meta.json")
   assert.deepEqual(meta.missing, ["brief.md"], "a status without brief falls back by kind")
   rmSync(join(w.wd, "codex.status.json"))
   put(w.wd, { "pi.status.json": { lane: "pi", kind: "pi", brief: "brief-pi.md", status: "ok", display: "ok", attempts: [] } })
-  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r3.md", "--args-json", "{}"]).out.dir, "meta.json")
+  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r3.md"]).out.dir, "meta.json")
   assert.deepEqual(meta.missing, ["brief-pi.md"], "pi expects its own prompt, not brief.md")
   put(w.wd, { "brief-pi.md": "pi brief" })
-  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r3b.md", "--args-json", "{}"]).out.dir, "meta.json")
+  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r3b.md"]).out.dir, "meta.json")
   assert.deepEqual(meta.missing, [])
   put(w.wd, { "claude-cli.status.json": { lane: "claude-cli", kind: "claude-cli", brief: "brief.md", status: "unavailable", display: "unavailable", attempts: [] } })
-  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r4.md", "--args-json", "{}"]).out.dir, "meta.json")
+  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r4.md"]).out.dir, "meta.json")
   assert.deepEqual(meta.missing, ["brief.md"])
   // A refuter that ran expects its brief; a skipped one never had one written.
   put(w.wd, {
     "pi-refuter.status.json": { lane: "pi-refuter", kind: "pi", brief: "refuter-brief-pi.md", status: "failed", display: "failed: x", attempts: [] },
     "codex-refuter.status.json": { lane: "codex-refuter", kind: "codex", brief: "refuter-brief.md", status: "skipped", display: "skipped (x)", attempts: [] },
   })
-  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r5.md", "--args-json", "{}"]).out.dir, "meta.json")
+  meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r5.md"]).out.dir, "meta.json")
   assert.deepEqual(meta.missing, ["brief.md", "refuter-brief-pi.md"])
 })
 
@@ -396,7 +416,9 @@ test("salvage without --report: run-id salvage-<WD basename>-<ts>; an empty WD l
   const meta = readJson(r.out.dir, "meta.json")
   assert.deepEqual(meta.missing, ["diff.patch", "triage.json", "claude-findings.json", "synthesis.json"], "no codex lane ran, so no brief.md is expected")
   assert.equal(meta.report, null)
-  assert.deepEqual(meta.flags, {})
+  assert.equal(meta.settings, null)
+  assert.equal(meta.target, null)
+  assert.equal(meta.mode, null)
   assert.equal(meta.diffHash, null)
   assert.deepEqual(meta.unavailable, [])
   assert.equal(meta.notWritten["findings/verification.json"], "no synthesis.json")
@@ -406,7 +428,7 @@ test("a sceptic run that wrote no verdicts lists ids.json and verifier.verdicts.
   const w = workspace()
   t.after(w.cleanup)
   put(w.wd, { "synthesis.json": synthesis })
-  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}"])
+  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
   const meta = readJson(r.out.dir, "meta.json")
   assert.ok(meta.missing.includes("ids.json") && meta.missing.includes("verifier.verdicts.json"))
   const v = readJson(r.out.dir, "findings/verification.json")
@@ -418,7 +440,8 @@ test("sceptic=off with no decision and no verdicts: verification.json is not wri
   const w = workspace()
   t.after(w.cleanup)
   put(w.wd, { "synthesis.json": synthesis })
-  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", '{"sceptic":"off"}'])
+  put(w.wd, { "settings.json": resolveSettings(["sceptic=off"]) })
+  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
   assert.equal(readJson(r.out.dir, "meta.json").notWritten["findings/verification.json"], "the sceptic did not run")
 })
 
@@ -426,7 +449,7 @@ test("--off, cwd not a repo, and a destination that is not ignored: skipped, not
   const w = workspace()
   t.after(w.cleanup)
   fullRun(w.wd)
-  assert.deepEqual(finish(w.top, ["--wd", w.wd, "--report", "r.md", "--args-json", "{}", "--off"]), { code: 0, out: { skipped: "archive=off" }, stderr: "" })
+  assert.deepEqual(finish(w.top, ["--wd", w.wd, "--report", "r.md", "--off"]), { code: 0, out: { skipped: "archive=off" }, stderr: "" })
   assert.equal(existsSync(join(w.top, ".reviews")), false)
 
   const norepo = mkdtempSync(join(tmpdir(), "archive-run-norepo-"))
@@ -446,12 +469,13 @@ test("--off, cwd not a repo, and a destination that is not ignored: skipped, not
 test("usage errors exit 2 and print nothing on stdout", (t) => {
   const w = workspace()
   t.after(w.cleanup)
-  for (const args of [[], ["--report", "r.md"], ["--wd", join(w.base, "nope")], ["--wd", w.wd, "--args-json", "{bad"],
-    ["--wd", w.wd, "--args-json", "[1]"], ["--wd", w.wd, "--bogus"]]) {
+  for (const args of [[], ["--report", "r.md"], ["--wd", join(w.base, "nope")], ["--wd", w.wd, "--args-json", "{}"],
+    ["--wd", w.wd, "--bogus"]]) {
     const r = finish(w.top, args)
     assert.equal(r.code, 2, JSON.stringify(args))
     assert.equal(r.out, null)
   }
+  assert.match(finish(w.top, ["--wd", w.wd, "--args-json", "{}"]).stderr, /Unknown option '--args-json'/)
   const r = spawnSync(process.execPath, [CLI, "start", "--wd", w.wd], { cwd: w.top, encoding: "utf8" })
   assert.equal(r.status, 2)
   assert.equal(existsSync(join(w.top, ".reviews")), false)

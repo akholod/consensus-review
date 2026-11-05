@@ -3,7 +3,10 @@
 // run (or by hand, to salvage a run that died). Every write goes through writeArchive in
 // scripts/lib/archive.mjs; this file only reads $WD and decides what goes where.
 //
-//   finish --wd <dir> [--report <final report path>] [--args-json '<parsed flags>'] [--off]
+//   finish --wd <dir> [--report <final report path>] [--off]
+//
+// Run settings come from $WD/settings.json (scripts/settings.mjs) and the mode from $WD/triage.json;
+// either may be absent (a salvaged run), and the meta fields they feed are then null.
 //
 // Prints one JSON line, `{"dir":…}` or `{"skipped":…}`, and exits 0 either way: a missing archive
 // never fails the review. A usage error exits 2.
@@ -20,10 +23,10 @@ import { canArchive, deriveEvents, runId, writeArchive } from "./lib/archive.mjs
 import { BRIEFS, fallbackVerdicts } from "./lib/lanes.mjs"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
-const OPTIONS = { wd: { type: "string" }, report: { type: "string" }, "args-json": { type: "string" }, off: { type: "boolean" } }
-const USAGE = "usage: archive-run.mjs finish --wd <dir> [--report <path>] [--args-json '<json>'] [--off]"
+const OPTIONS = { wd: { type: "string" }, report: { type: "string" }, off: { type: "boolean" } }
+const USAGE = "usage: archive-run.mjs finish --wd <dir> [--report <path>] [--off]"
 const REFUTER = /-refuter$/
-const AGENTS = { architecture: "arch-reviewer", arch: "arch-reviewer", quality: "quality-reviewer", impact: "impact-reviewer", tests: "test-reviewer" }
+const AGENTS = { architecture: "arch-reviewer", quality: "quality-reviewer", impact: "impact-reviewer", tests: "test-reviewer" }
 const UNAVAILABLE = "host does not expose the Task prompt/transcript"
 
 const readJson = (path) => {
@@ -65,15 +68,6 @@ function finish(v) {
   if (!v.wd) throw new UsageError("--wd is required")
   const wd = resolve(v.wd)
   if (!existsSync(wd) || !statSync(wd).isDirectory()) throw new UsageError(`--wd is not a directory: ${v.wd}`)
-  let flags = {}
-  if (v["args-json"] != null) {
-    try {
-      flags = JSON.parse(v["args-json"])
-    } catch {
-      throw new UsageError("--args-json is not valid JSON")
-    }
-    if (!flags || typeof flags !== "object" || Array.isArray(flags)) throw new UsageError("--args-json must be a JSON object")
-  }
   if (v.off) return { skipped: "archive=off" }
 
   const now = new Date()
@@ -99,6 +93,7 @@ function finish(v) {
     const d = readJson(at(`${phase}.decision.json`))
     if (d && typeof d === "object") decisions[phase] = { ...d, ts: mtime(`${phase}.decision.json`) }
   }
+  const settings = readJson(at("settings.json"))
   const triage = readJson(at("triage.json"))
   const claude = readJson(at("claude-findings.json"))
   const synthesis = readJson(at("synthesis.json"))
@@ -112,7 +107,7 @@ function finish(v) {
     const findings = readJson(at(file))?.findings
     if (Array.isArray(findings)) panel.push(...findings.map((f) => ({ ...f, source })))
   }
-  const sceptic = String(flags.sceptic ?? (flags["no-sceptic"] ? "off" : "strict")).toLowerCase()
+  const sceptic = settings?.settings?.sceptic?.value ?? "strict"
   const joined = verification({ synthesis, sceptic: decisions.sceptic, verdicts, ids, scepticOff: sceptic === "off" })
   if (joined.reason) notWritten["findings/verification.json"] = joined.reason
 
@@ -123,7 +118,7 @@ function finish(v) {
   const entries = [{ to: "events.jsonl", content: events.map((e) => JSON.stringify(e)).join("\n") + (events.length ? "\n" : "") }]
   const copy = (from, to) => has(from) && entries.push({ to, from: at(from) })
   for (const name of names) copy(`${name}.status.json`, `sources/${name}/status.json`)
-  for (const name of ["consultants.json", "lenses.json", "ids.json", "review.decision.json", "sceptic.decision.json"]) copy(name, `decisions/${name}`)
+  for (const name of ["settings.json", "consultants.json", "lenses.json", "ids.json", "review.decision.json", "sceptic.decision.json"]) copy(name, `decisions/${name}`)
   entries.push({ to: "findings/panel.json", content: json({ findings: panel }) })
   if (joined.value) entries.push({ to: "findings/verification.json", content: json(joined.value) })
   copy("synthesis.json", "findings/synthesis.json")
@@ -161,12 +156,12 @@ function finish(v) {
   const meta = {
     createdAt: now.toISOString(),
     command: "consensus-review",
-    target: flags.target ?? null,
-    mode: flags.mode ?? null,
+    target: !settings ? null : settings.target?.kind === "pr" ? settings.target.ref : "uncommitted",
+    mode: triage?.mode ?? null,
     pluginVersion: readJson(join(ROOT, ".claude-plugin/plugin.json"))?.version ?? null,
     report: v.report ? resolve(v.report) : null,
     workDir: wd,
-    flags,
+    settings,
     diffHash: diff ? createHash("sha256").update(diff).digest("hex").slice(0, 16) : null,
     lanes,
     missing: expected.filter((name) => !has(name)),

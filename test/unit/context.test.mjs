@@ -442,8 +442,9 @@ test("parseLensFile reads an inline paths array with an exclusion", () => {
   assert.deepEqual([got.include, got.exclude], [["a/*"], ["a/b"]])
 })
 
-test("parseLensFile normalises arch, leaves dimension null when absent, rejects unknown ones", () => {
-  assert.equal(parseLensFile(lensWith("paths: [a]\ndimension: arch")).dimension, "architecture")
+test("parseLensFile accepts architecture, leaves dimension null when absent, rejects unknown ones and the retired arch alias", () => {
+  assert.equal(parseLensFile(lensWith("paths: [a]\ndimension: architecture")).dimension, "architecture")
+  assert.deepEqual(parseLensFile(lensWith("paths: [a]\ndimension: arch")), { error: "unknown dimension: arch" })
   assert.equal(parseLensFile(lensWith("paths: [a]")).dimension, null)
   assert.deepEqual(parseLensFile(lensWith("paths: [a]\ndimension: security")), { error: "unknown dimension: security" })
 })

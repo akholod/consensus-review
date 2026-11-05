@@ -5,41 +5,67 @@ change, an arbiter merges what they found, and a sceptic tries to refute
 every serious finding. Back to the [README](../README.md).
 
 ```text
-/consensus-review [<PR>] [deep|minimal] [dims=<list>|arch] [sceptic=off|basic|strict]
-                  [consultant=<codex|pi|claude-cli|claude>] [extra-advisor[=<model>]] [timeout=<sec>] [p2=grouped|full|off]
-                  [out=<path>|no-file] [lang=<language>]
+/consensus-review [<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict]
+                  [lang=<language>] [no-file] [<key>=<value>…]
 ```
 
-`<PR>` is a PR URL, `owner/repo#N` or `#N`. Without it, the review covers
-your uncommitted changes (staged, unstaged and untracked).
+`<PR>` is a PR URL (it may end in `/files`, `?diff=split` or `#…`), `owner/repo#N` or
+`#N`. Without it, the review covers your uncommitted changes (staged,
+unstaged and untracked). Two targets: the last one wins. A token that
+looks like a target but is not one (any other URL, a `/pull/` path, or
+`…#N` with other characters) stops the run:
+`<token>: not a valid PR target (letters, digits and ._-/#=? only)`.
 
-## Flags
+## Arguments
 
-Every flag works with or without a leading `--`. An unknown flag is
-ignored but listed in the report header as `Ignored args`, so a typo
-never passes for a default.
+The arguments are `key=value` pairs, plus a target and three shorthands.
+A resolver script (`scripts/settings.mjs`) parses them before the review
+starts and prints them in the report as one `Settings:` line, each value
+with its source (`flag` or `default`).
 
-| Flag                      | Effect                                                                                                                                       |
+**Rules**
+
+- No value can contain whitespace: `lang=pt-BR`, not `lang="pt BR"`.
+- Keys and fixed values are case-insensitive; `lang`, `out` and `pi-model` keep their case.
+- A key given twice: the last one wins, and the earlier one is listed in `Ignored args`.
+- An unknown token is ignored but listed in the report header as
+  `Ignored args`, so a typo never passes for a default.
+- A known key with a bad value stops the run before anything is spent. The
+  message lists the valid values, for example
+  `sceptic=strct: expected off|basic|strict`.
+- A `--` prefix is accepted on every argument (`--deep`, `--lang=uk`).
+- Three shorthands: `deep` is `depth=deep`, `minimal` is `depth=minimal`,
+  `no-file` is `out=none`.
+
+### Everyday
+
+| Argument                  | Effect                                                                                                                                       |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deep` (or `full`)        | skip triage, run the full panel; wins over `minimal`                                                                                         |
-| `minimal`                 | the smallest tier, with a shallow exploration budget                                                                                         |
-| `dims=<list>`             | set the lanes: `dims=impact,quality` replaces the tier's set, `dims=+tests,-quality` adjusts it; `dims=+tests` is the only way to review tests when the diff has no test files |
-| `arch`                    | same as `dims=+architecture`                                                                                                                 |
+| `<PR>`                    | the PR to review; default: your uncommitted changes. A malformed PR URL or `owner/repo#N` stops the run, never falls back                    |
+| `depth=<mode>`            | `auto` (default), `minimal` or `deep`; shorthands `deep` and `minimal`. `deep` skips triage and runs the full panel; `minimal` forces the smallest tier with a shallow exploration budget; the last one wins |
+| `dims=<list>`             | set the lanes from `architecture,quality,impact,tests`: `dims=impact,quality` replaces the tier's set, `dims=+architecture,-quality` adjusts it. Do not mix both forms. `dims=+tests` is the only way to review tests when the diff has no test files |
 | `sceptic=strict`          | the default: an independent verifier plus the consultants re-run as refuters; typed votes per finding (see The sceptic)                      |
 | `sceptic=basic`           | the verifier alone, the same vote rules with one voter                                                                                       |
-| `sceptic=off`             | no sceptic pass (`no-sceptic` is an alias)                                                                                                   |
-| `consultant=<name>`       | force the consultant: `codex`, `pi` or `claude-cli` (`claude` is an alias). A forced consultant that is missing is `unavailable`, never replaced |
-| `extra-advisor[=<model>]` | add `pi` as a second consultant; `=<model>` picks its model and overrides the automatic choice, for example `extra-advisor=sonnet:high`      |
-| `timeout=<sec>`           | wall clock per attempt, default `900`, clamped to `[30, 1800]`; retried once, at most 2×T per phase                                          |
-| `p2=grouped`              | the default: up to 7 P2s listed, the rest rolled up by theme                                                                                 |
-| `p2=full` / `p2=off`      | list every P2 / show only the count                                                                                                          |
-| `out=<path>`              | write the report to a directory or an exact file                                                                                             |
+| `sceptic=off`             | no sceptic pass                                                                                                                              |
+| `lang=<language>`         | report language, default `en`: a code or a name (`uk`, `pt-BR`, `Українська`); code, paths and terms stay as they are                        |
 | `no-file`                 | terminal only; the run writes nothing to disk, the archive included                                                                          |
-| `archive=off`             | no run archive (see [The run archive](#the-run-archive))                                                                                     |
-| `lang=<language>`         | report language: any language, as a code or a name; code, paths and terms stay as they are                                                  |
 
-Depth (`deep`, `minimal`) and lanes (`dims`, `arch`) are independent:
-`minimal arch` is a shallow pass that includes architecture.
+### Advanced
+
+| Argument                  | Effect                                                                                                                                       |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `out=<path>`              | write the report to a directory or an exact file; `out=none` is `no-file`. The path takes only letters, digits and `._/~+@,-`                  |
+| `archive=on\|off`         | default `on`; `off` writes no run archive (see [The run archive](#the-run-archive))                                                          |
+| `consultant=<name>`       | `auto` (the default), `codex`, `pi` or `claude-cli`. A forced consultant that is missing is `unavailable`, never replaced                    |
+| `extra=pi`                | add `pi` as a second consultant; default `off`                                                                                               |
+| `pi-model=<model>`        | pin pi's model (default `auto`), for example `pi-model=sonnet:high`; overrides the automatic choice. When no pi lane can run (`consultant=codex` or `claude-cli` with `extra=off`), it is listed in `Ignored args` |
+| `timeout=<sec>`           | wall clock per attempt, an integer, default `900`, clamped to `[30, 1800]`; retried once, at most 2×T per phase                              |
+
+P2 findings are always grouped: up to 7 are listed and the rest are rolled
+up by theme. The run archive holds every P2.
+
+Depth (`deep`, `minimal`) and lanes (`dims`) are independent:
+`minimal dims=+architecture` is a shallow pass that includes architecture.
 
 **Do not set `timeout` low to save time.** A consultant that times out
 or fails transiently is retried once; if the retry fails too, it is
@@ -64,7 +90,7 @@ codex review of a small repository has been measured still working at
    manifests, migrations, auth, fan-in; fan-in comes from `codegraph`
    when it is installed).
 3. **Review.** The tier's Claude agents run read-only. The consultant
-   (see below) and `pi` with `extra-advisor` review the same change independently from a
+   (see below) and `pi` with `extra=pi` review the same change independently from a
    short brief that does not lead them. The agents and codex may use a
    code graph; pi runs with a read-only toolset and no shell
    (`read,grep,find,ls`, with `--no-mcp` so no MCP server tools are
@@ -99,7 +125,7 @@ does not depend on how many lines changed.
 symbols have no consumers outside it, so a small local edit can reach T1
 instead of piling up at T2.
 
-`extra-advisor` adds `pi` at every tier above T0.
+`extra=pi` adds `pi` at every tier above T0.
 
 ### The consultant
 
@@ -112,7 +138,7 @@ The consultant is the first installed of `codex` → `pi` → `claude-cli`;
   - As the consultant: an OpenAI model first, then glm, qwen, kimi via
     `opencode-go`.
   - As the extra: glm, qwen, kimi.
-  - `extra-advisor=<model>` overrides the choice. See
+  - `pi-model=<model>` overrides the choice. See
     [models.md](models.md#how-pi-picks-its-model). pi runs without
     extensions, so a model whose provider only an extension supplies
     (such as `claude-bridge`) is not available in read-only mode.
@@ -126,7 +152,7 @@ The consultant is the first installed of `codex` → `pi` → `claude-cli`;
   policy settings still apply under `--safe-mode`.
 
 **Cost** follows the tier, so triage does most of the saving. `minimal`
-forces the floor; `deep` and `extra-advisor` raise it. Strict sceptic
+forces the floor; `deep` and `extra=pi` raise it. Strict sceptic
 adds one refuter run per voting consultant family (the consultant's,
 plus the extra's when it is another family; none for claude-cli, which
 is the panel's family), and only on reviews that found a P0 or P1.
@@ -201,7 +227,7 @@ the rules apply in order:
 | no verifier vote, or only concerns | unconfirmed |
 
 So doubt never removes a finding the verifier grounded, and a lone
-refuter can neither confirm nor refute. Add `extra-advisor` for a third
+refuter can neither confirm nor refute. Add `extra=pi` for a third
 voter. If the decision step fails, the verifier's `AGREE` confirms and
 everything else is `unconfirmed`; nothing is refuted without a checked
 quote.
@@ -219,8 +245,8 @@ is logged.
 
 ## The report
 
-- a header with the tier, flags, sources and their status
-  and any ignored flags. Each consultant, refuters included, shows one
+- a header with the tier, the `Settings:` line, sources and their status
+  and any `Ignored args`. Each consultant, refuters included, shows one
   status:
   - `ok`: it answered first time;
   - `ok (retried: <why>)`: the first attempt failed, the retry answered;
@@ -236,7 +262,7 @@ is logged.
 - a summary per dimension;
 - the *Unconfirmed*, *Unverified* and *Dropped* sections.
 
-`Totals` always counts every finding, whatever `p2=` hides.
+`Totals` always counts every finding, whatever the P2 grouping rolls up.
 
 **Read the Sources line.** A consultant that is missing or fails does not
 stop the review; the review carries on with fewer sources. The report
@@ -248,7 +274,7 @@ finds these problems before you rely on a review.
 
 ## The run archive
 
-Unless `no-file` or `archive=off` is given, the run also leaves a
+Unless `no-file` (`out=none`) or `archive=off` is given, the run also leaves a
 private copy of what it saw in `.reviews/<run-id>/`, so a strange result
 can be traced. The run-id is the report's name plus a UTC timestamp. It
 holds:
@@ -314,7 +340,7 @@ dimension: impact
 | Key | Meaning |
 |---|---|
 | `paths` | Required. `  - "<glob>"` lines or an inline `["a", "!b"]`. A `!` entry excludes. |
-| `dimension` | Optional: `architecture` (or `arch`), `quality`, `impact` or `tests`. Absent means every lane in the run. |
+| `dimension` | Optional: `architecture`, `quality`, `impact` or `tests`. Absent means every lane in the run. |
 
 Any other key is ignored (the doctor reports it). The body is the text
 after the closing `---`. The name is the file stem, `[a-z0-9][a-z0-9_-]*`

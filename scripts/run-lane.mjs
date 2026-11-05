@@ -3,7 +3,7 @@
 // policy, and folds the lanes' statuses into a decision. Every decision is in scripts/lib/lanes.mjs; this file owns only the
 // processes and the files, all of which live under --wd (never in the reviewed repository).
 //
-//   select [--wd <dir>] [--consultant <codex|pi|claude-cli|claude>] [--extra [--extra-model <m>]]
+//   select [--wd <dir>] [--consultant <codex|pi|claude-cli>] [--extra] [--pi-model <m>]
 //   run <codex|pi|claude-cli> --wd <dir> --name <name> --repo <dir> --brief-file <file> --timeout <sec>
 //       [--schema <file>] [--model <m>] [--require-key findings|verdicts] [--ids-file <file>]
 //       [--skip <why> [--skip-reason <r>]] [--from-decision <file>] [--kill-grace <sec>] [--lenses-file <file>]
@@ -31,7 +31,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const OPTIONS = {
   ...Object.fromEntries(
     ["wd", "name", "repo", "brief-file", "timeout", "schema", "model", "require-key", "ids-file", "skip", "skip-reason",
-      "from-decision", "kill-grace", "lenses-file", "phase", "lanes", "consultant", "extra-model", "diff", "head-sha"].map((k) => [k, { type: "string" }]),
+      "from-decision", "kill-grace", "lenses-file", "phase", "lanes", "consultant", "pi-model", "diff", "head-sha"].map((k) => [k, { type: "string" }]),
   ),
   extra: { type: "boolean" },
 }
@@ -188,13 +188,14 @@ const installed = (bin) => spawnSync(bin, ["--version"], { stdio: "ignore", time
 
 function select(v) {
   const has = { codex: installed("codex"), pi: installed("pi"), claude: installed("claude") }
-  const forced = v.consultant === "claude" ? "claude-cli" : v.consultant
+  const forced = v.consultant && v.consultant !== "auto" ? v.consultant : null
+  const pinned = v["pi-model"] && v["pi-model"] !== "auto"
   // The catalog is read only when pi may run and no model is pinned.
-  const needed = has.pi && !v["extra-model"] && (forced === "pi" || (!forced && !has.codex) || v.extra)
+  const needed = has.pi && !pinned && (forced === "pi" || (!forced && !has.codex) || v.extra)
   let out
   try {
     out = selectConsultants({
-      installed: has, consultant: v.consultant, extra: Boolean(v.extra), extraModel: v["extra-model"],
+      installed: has, consultant: v.consultant, extra: Boolean(v.extra), piModel: v["pi-model"],
       piModels: needed ? listPiModels() : null,
     })
   } catch (err) {

@@ -35,20 +35,20 @@ is `FAIL`.
   requests come from a local clone, or by URL for a public repository. A
   private PR needs `gh` or a clone. Run `gh auth login`.
 - **`pi — not installed`** (`SKIP`): matters when pi is the fallback
-  consultant or with `extra-advisor`.
+  consultant or with `extra=pi`.
 - **pi does not see a model you use elsewhere**: pi runs without
   extensions, skills, context files or a saved session
   (`--no-extensions --no-session …`), and the catalog is read with
   `pi --no-extensions --list-models`. A provider that only an extension
   supplies (such as `claude-bridge`) is not available, so
-  `extra-advisor=<that model>` fails in read-only mode. Pick a built-in
+  `pi-model=<that model>` fails in read-only mode. Pick a built-in
   provider's model.
 - **Which consultant ran, and why?** Read the report header,
   `consultant: <name> (<reason>)`, and the doctor's consultant lines.
   Selection is by presence only: an installed but unauthenticated `pi`
   beats a working `claude`, and a model listed by `pi --list-models` is
   not necessarily one you are logged in to. To get another consultant,
-  force it with `consultant=codex|pi|claude-cli` (`claude` is an alias).
+  force it with `consultant=codex|pi|claude-cli`.
   A forced consultant that is not installed is reported `unavailable`
   and is not replaced. `node scripts/doctor.mjs --consultant <x>` checks
   the same forced choice (for `claude-cli` it runs the read-only probe).
@@ -120,7 +120,7 @@ for what it holds.
 3. Open that source's `sources/<name>/` output or attempt log: what the
    model was given and what it said. A refusal comes back as prose.
 
-No archive means one of: `no-file`; `archive=off` / `--no-archive`; the
+No archive means one of: `no-file`; `archive=off` (`--no-archive` for `/loop-review`); the
 run was not in a git worktree; `.reviews/` is not ignored by git (the
 doctor warns) or is a symlink; the diff is larger than 20 MiB; or a copy
 or write failed. The report's `Archive:` line gives the reason.
