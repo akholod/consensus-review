@@ -61,9 +61,32 @@ with its source (`flag`, `profile <name>` or `default`).
 | `extra=pi`                | add `pi` as a second consultant; default `off`                                                                                               |
 | `pi-model=<model>`        | pin pi's model (default `auto`), for example `pi-model=sonnet:high`; overrides the automatic choice. When no pi lane can run (`consultant=codex` or `claude-cli` with `extra=off`), it is listed in `Ignored args` |
 | `timeout=<sec>`           | wall clock per attempt, an integer, default `900`, clamped to `[30, 1800]`; retried once, at most 2×T per phase                              |
+| `models=<role:model,…>`   | request a model per role (default `agent`: each agent's frontmatter model). Roles `architecture`, `impact`, `quality`, `tests`, `verifier`; models `opus`, `sonnet`, `haiku`, `fable`; no spaces, e.g. `models=verifier:fable,tests:haiku`. Unlisted roles keep their frontmatter model. See [Models and effort](#models-and-effort) |
+| `effort=<role:effort,…>`  | request an effort per role (default `agent`: each agent's frontmatter effort). The same roles; efforts `low`, `medium`, `high`, `xhigh`, `max`, e.g. `effort=verifier:high,impact:high` |
 
 P2 findings are always grouped: up to 7 are listed and the rest are rolled
 up by theme. The run archive holds every P2.
+
+### Models and effort
+
+`models=` and `effort=` (a flag or a profile key) override the model and
+the effort of the listed roles only; a flag replaces a profile's map
+whole. The `Settings:` line shows the canonical map in role order,
+marked `requested`: `models=impact:fable,verifier:fable (flag, requested)`.
+
+- The arbiter is the session model (`/model`); no setting changes it.
+- The values are requests. Claude Code may reject a model or effort (for
+  example `fable` where it is not available) or substitute another model.
+  A Task rejected for its override is re-run once without its overrides,
+  and Source availability says `models override dropped (<role>)` or
+  `effort override dropped (<role>)`; only when that retry also fails is
+  the lane reported failed or degraded, as for any other failure.
+- Per-invocation `effort` on subagents needs Claude Code 2.1.292 or later;
+  an older CLI may ignore it (`/consensus-review:doctor` warns).
+- A weaker verifier (`models=verifier:haiku`) lets false findings through;
+  that is why its frontmatter keeps it on Opus.
+
+The frontmatter defaults and their rationale are in [models.md](models.md).
 
 Depth (`deep`, `minimal`) and lanes (`dims`) are independent:
 `minimal dims=+architecture` is a shallow pass that includes architecture.
@@ -407,6 +430,8 @@ Markdown file each, chosen with `profile=<name>`:
 depth: deep
 extra: pi
 timeout: 1200
+models: verifier:fable
+effort: verifier:high,impact:high,architecture:high
 ---
 Optional notes for humans; ignored by the plugin.
 ```
@@ -425,7 +450,7 @@ lines. Each line in between is `key: value` (no quotes), a blank line or
 a `#` comment; anything else stops the run (`malformed line <n>`), as do a
 duplicate key and an empty value. The keys are the settings above
 (`depth`, `dims`, `sceptic`, `lang`, `out`, `archive`, `consultant`,
-`extra`, `pi-model`, `timeout`), with the same values and messages;
+`extra`, `pi-model`, `timeout`, `models`, `effort`), with the same values and messages;
 `target` and `profile` are not profile keys. The body after the closing
 `---` is ignored and never passed to a model. The name is the file stem,
 `[a-z0-9][a-z0-9_-]*` up to 64 characters, matched exactly; the file is
@@ -469,8 +494,8 @@ about one that would stop a run.
 writes only `.consensus-review/profiles/<name>.md`. It never commits.
 
 ```text
-/consensus-review:profile quick depth=minimal dims=+quality sceptic=basic
-/consensus-review:profile release depth=deep extra=pi timeout=1200
+/consensus-review:profile quick depth=minimal dims=+quality sceptic=basic effort=verifier:medium,impact:medium
+/consensus-review:profile release depth=deep extra=pi timeout=1200 models=verifier:fable effort=verifier:high,impact:high,architecture:high
 ```
 
 The first creates `.consensus-review/profiles/quick.md`:
@@ -480,10 +505,14 @@ The first creates `.consensus-review/profiles/quick.md`:
 depth: minimal
 dims: +quality
 sceptic: basic
+effort: impact:medium,verifier:medium
 ---
 ```
 
-and ends with the commit to run, limited to that one file:
+`release` requests `fable` for the verifier, which the host may reject or
+substitute (see [Models and effort](#models-and-effort)).
+
+It ends with the commit to run, limited to that one file:
 
 ```text
 Not applied until committed: git add -- .consensus-review/profiles/quick.md && git commit -m 'Add review profile quick' -- .consensus-review/profiles/quick.md

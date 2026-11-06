@@ -14,9 +14,9 @@ without one too. `/consensus-review:doctor` prints what each agent runs on.
 | ------------------------ | ------------------------- | ---------- | ------------------------------------------------------------------------- |
 | arbiter                  | your session's model      | session    | it is the session running `/consensus-review`                             |
 | `impact-reviewer`        | `opus`                    | `high`     | tracing call sites and regressions is deep reasoning                      |
-| `arch-reviewer`          | `opus`                    | `high`     | boundaries and long-term complexity                                       |
-| `quality-reviewer`       | `sonnet`                  | session    | conventions and duplication: matching against the repo's own precedent    |
-| `test-reviewer`          | `sonnet`                  | session    | the same kind of work, for tests                                          |
+| `arch-reviewer`          | `opus`                    | `medium`   | boundaries and long-term complexity                                       |
+| `quality-reviewer`       | `sonnet`                  | `high`     | conventions and duplication: matching against the repo's own precedent    |
+| `test-reviewer`          | `sonnet`                  | `high`     | the same kind of work, for tests                                          |
 | `finding-verifier`       | `opus`                    | `high`     | see below                                                                 |
 | codex consultant         | codex's configured model  | codex's    | the plugin passes no `--model`                                            |
 | pi consultant or extra   | picked by role, or `pi-model=<model>` | pi's | see [How pi picks its model](#how-pi-picks-its-model)                  |
@@ -30,12 +30,26 @@ runs, and it sets the final severity of every finding. `/model` picks it.
 findings; a weaker sceptic lets false ones through. One confirmed false
 P0 costs more trust than one missed bug costs coverage.
 
-**The effort is pinned at `high` on the Opus agents** because Opus 5.5
-defaults to `medium` where Opus 5 ran at `high`. Without the pin, the
-`opus` alias moving to a new release would quietly make reviews
-shallower. The pin also means a session at `xhigh` does not raise these
-agents above `high`. The environment variable `CLAUDE_CODE_EFFORT_LEVEL`
-overrides it.
+**The effort is pinned in the frontmatter.** `impact-reviewer` and the
+verifier run at `high`: Opus 5.5 defaults to `medium` where Opus 5 ran at
+`high`, so without the pin the `opus` alias moving to a new release would
+quietly make reviews shallower. `arch-reviewer` runs at `medium`: it gives
+a verdict on boundaries, not a trace through call sites. The Sonnet
+agents run at `high`, because below `high` is not worth it on Sonnet. The
+pin also means a session at `xhigh` does not raise these agents. The
+environment variable `CLAUDE_CODE_EFFORT_LEVEL` overrides it.
+
+**`models=` and `effort=` override per role for one run** (a flag, or a
+key in a [profile](consensus-review.md#profiles)), for example
+`models=verifier:fable effort=impact:xhigh`; unlisted roles keep the
+table above. The arbiter is the session model (`/model`) and no setting
+changes it. The values are requests: Claude Code may reject a model or
+effort, or substitute another model. A Task rejected for its override is
+re-run once without its overrides, and the report names the override as
+dropped (`models override dropped (<role>)`) and shows the requested
+label, never a model the Task result does not confirm. Per-invocation
+`effort` on subagents needs Claude Code 2.1.292 or later; an older CLI may
+ignore it, and `/consensus-review:doctor` warns.
 
 The Opus/Sonnet split is a judgement, not a measurement: no behavioural
 eval yet shows what it does to recall.
@@ -101,6 +115,8 @@ independent source and never votes.
 - **`/loop-review`**: `--model=<m>`, for example `--model=opus`.
 - **pi**: `pi-model=<model>`; see above.
 - **codex**: codex's own configuration.
-- **The agents**: their model and effort are in the frontmatter of
+- **The agents, for one run**: `models=<role:model,…>` and
+  `effort=<role:effort,…>`, as a flag or in a profile.
+- **The agents, by default**: their model and effort are in the frontmatter of
   `agents/*.md`. A plugin's files are replaced on update, so changing
   them means a fork, not a local edit.

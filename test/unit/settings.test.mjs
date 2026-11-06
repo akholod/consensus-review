@@ -26,8 +26,10 @@ const DEFAULTS = {
   extra: { value: "off", source: "default" },
   "pi-model": { value: "auto", source: "default" },
   timeout: { value: 900, source: "default" },
+  models: { value: "agent", source: "default" },
+  effort: { value: "agent", source: "default" },
 }
-const DEFAULT_LINE = "Settings: depth=auto (default) | dims=tier (default) | sceptic=strict (default) | lang=en (default) | out=default (default) | archive=on (default) | consultant=auto (default) | extra=off (default) | pi-model=auto (default) | timeout=900 (default)"
+const DEFAULT_LINE = "Settings: depth=auto (default) | dims=tier (default) | sceptic=strict (default) | lang=en (default) | out=default (default) | archive=on (default) | consultant=auto (default) | extra=off (default) | pi-model=auto (default) | timeout=900 (default) | models=agent (default) | effort=agent (default)"
 
 // ---------------------------------------------------------------------------------------------
 // resolveSettings (unit)
@@ -95,11 +97,11 @@ for (const [token, error] of ERRORS) {
 test("8: timeout is clamped to [30, 1800] and the clamp is shown", () => {
   const high = resolveSettings(["timeout=5000"])
   assert.deepEqual(high.settings.timeout, { value: 1800, source: "flag" })
-  assert.match(high.lines.settings, / \| timeout=1800 \(flag, clamped\)$/)
+  assert.match(high.lines.settings, / \| timeout=1800 \(flag, clamped\) \| /)
   assert.deepEqual(resolveSettings(["timeout=10"]).settings.timeout, { value: 30, source: "flag" })
   const inRange = resolveSettings(["timeout=600"])
   assert.deepEqual(inRange.settings.timeout, { value: 600, source: "flag" })
-  assert.match(inRange.lines.settings, / \| timeout=600 \(flag\)$/)
+  assert.match(inRange.lines.settings, / \| timeout=600 \(flag\) \| /)
 })
 
 test("9: a non-integer timeout stops", () => {
@@ -247,7 +249,82 @@ test("P6: a flag dims replaces the profile dims whole", () => {
 })
 
 test("drift: SETTINGS keys in order", () => {
-  assert.deepEqual(Object.keys(SETTINGS), ["depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout"])
+  assert.deepEqual(Object.keys(SETTINGS), [
+    "depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort",
+  ])
+})
+
+// models / effort (steps 6-7 of .omc/plans/issue-7-profiles.md; messages from its stop-message table)
+
+test("M1/E1: models and effort default to agent and end the Settings line", () => {
+  const r = resolveSettings([])
+  assert.deepEqual(r.settings.models, { value: "agent", source: "default" })
+  assert.deepEqual(r.settings.effort, { value: "agent", source: "default" })
+  assert.ok(r.lines.settings.endsWith(" | models=agent (default) | effort=agent (default)"), r.lines.settings)
+})
+
+test("M2: a models map is canonical in role order and marked requested", () => {
+  const r = resolveSettings(["models=verifier:fable,impact:fable"])
+  assert.deepEqual(r.settings.models, { value: { impact: "fable", verifier: "fable" }, source: "flag" })
+  assert.ok(r.lines.settings.includes("models=impact:fable,verifier:fable (flag, requested)"), r.lines.settings)
+})
+
+test("M3: models roles and values are case-insensitive", () => {
+  assert.deepEqual(resolveSettings(["models=IMPACT:Sonnet"]).settings.models.value, { impact: "sonnet" })
+})
+
+test("E2: an effort map is canonical in role order and marked requested", () => {
+  const r = resolveSettings(["effort=verifier:high,impact:high,architecture:high"])
+  assert.deepEqual(r.settings.effort.value, { architecture: "high", impact: "high", verifier: "high" })
+  assert.ok(r.lines.settings.includes("effort=architecture:high,impact:high,verifier:high (flag, requested)"), r.lines.settings)
+})
+
+test("E3: effort roles and values are case-insensitive", () => {
+  assert.deepEqual(resolveSettings(["effort=IMPACT:XHigh"]).settings.effort.value, { impact: "xhigh" })
+})
+
+const ROLE_MAP_ERRORS = [
+  ["M4", "models=arch:opus", "models=arch:opus: unknown role arch (expected architecture|impact|quality|tests|verifier)"],
+  ["M4", "models=impact:gpt", "models=impact:gpt: unknown model gpt (expected opus|sonnet|haiku|fable)"],
+  ["M4", "models=impact:opus,impact:sonnet", "models=impact:opus,impact:sonnet: duplicate role impact"],
+  ["M4", "models=impact:opus,", "models=impact:opus,: empty item"],
+  ["M4", "models=impact", "models=impact: item impact is not role:model"],
+  ["M4", "models=", "models=: expected agent or role:model items"],
+  ["E4", "effort=arch:high", "effort=arch:high: unknown role arch (expected architecture|impact|quality|tests|verifier)"],
+  ["E4", "effort=impact:huge", "effort=impact:huge: unknown effort huge (expected low|medium|high|xhigh|max)"],
+  ["E4", "effort=impact:high,impact:low", "effort=impact:high,impact:low: duplicate role impact"],
+  ["E4", "effort=impact:high,", "effort=impact:high,: empty item"],
+  ["E4", "effort=impact", "effort=impact: item impact is not role:effort"],
+  ["E4", "effort=", "effort=: expected agent or role:effort items"],
+]
+for (const [id, token, error] of ROLE_MAP_ERRORS) {
+  test(`${id}: ${token} stops`, () => {
+    assert.deepEqual(resolveSettings([token]), { error })
+  })
+}
+
+test("M5: models=agent as a flag replaces the profile map", () => {
+  assert.deepEqual(resolveSettings(["models=agent"], team({ models: "impact:haiku" })).settings.models, { value: "agent", source: "flag" })
+})
+
+test("M6: a flag models map replaces the profile map whole", () => {
+  assert.deepEqual(resolveSettings(["models=tests:haiku"], team({ models: "impact:sonnet" })).settings.models.value, { tests: "haiku" })
+})
+
+test("M7: a profile models line keeps the value after the first colon", () => {
+  assert.deepEqual(parseProfileFile("---\nmodels: verifier:fable,impact:fable\n---\n"), {
+    values: { models: "verifier:fable,impact:fable" },
+  })
+})
+
+test("E5: effort=agent as a flag replaces the profile map", () => {
+  assert.deepEqual(resolveSettings(["effort=agent"], team({ effort: "impact:low" })).settings.effort, { value: "agent", source: "flag" })
+})
+
+test("E6: models and effort maps are independent", () => {
+  const r = resolveSettings(["models=impact:sonnet", "effort=impact:max"])
+  assert.deepEqual(r.settings.models.value, { impact: "sonnet" })
+  assert.deepEqual(r.settings.effort.value, { impact: "max" })
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -565,7 +642,7 @@ test("CLI: profile with no profile= in args.txt exits 2", () => {
 const PROFILE_DIR = ".consensus-review/profiles"
 const W1_TEXT = "---\ndepth: deep\nextra: pi\ntimeout: 1200\n---\n"
 const ADD_REMINDER = `Not applied until committed: git add -- ${PROFILE_FILE} && git commit -m 'Add review profile release' -- ${PROFILE_FILE}`
-const DEFAULTS_LISTING = "defaults (built-in): depth=auto | dims=tier | sceptic=strict | lang=en | out=default | archive=on | consultant=auto | extra=off | pi-model=auto | timeout=900"
+const DEFAULTS_LISTING = "defaults (built-in): depth=auto | dims=tier | sceptic=strict | lang=en | out=default | archive=on | consultant=auto | extra=off | pi-model=auto | timeout=900 | models=agent | effort=agent"
 const CI_TEXT = "---\ndepth: minimal\nsceptic: basic\ndims: impact,tests\nout: none\n---\n"
 
 /** Runs profile-edit with `args` written to a file outside the repo; `umask` wraps it in `sh -c`. */
@@ -616,6 +693,8 @@ const WRITES = [
   ["W3b: CRLF body bytes are unchanged", { [PROFILE_FILE]: "---\r\ndepth: deep\r\n---\r\nNotes.\r\nMore.\r\n" }, "release sceptic=basic", PROFILE_FILE, "---\ndepth: deep\nsceptic: basic\n---\nNotes.\r\nMore.\r\n"],
   ["W4: key= removes the key", { [PROFILE_FILE]: W1_TEXT }, "release extra=", PROFILE_FILE, "---\ndepth: deep\ntimeout: 1200\n---\n"],
   ["W5: values are stored canonical", {}, "release sceptic=BASIC timeout=5000", PROFILE_FILE, "---\nsceptic: basic\ntimeout: 1800\n---\n"],
+  ["W16: the release preset", {}, "release depth=deep extra=pi timeout=1200 models=verifier:fable effort=verifier:high,impact:high,architecture:high", PROFILE_FILE, "---\ndepth: deep\nextra: pi\ntimeout: 1200\nmodels: verifier:fable\neffort: architecture:high,impact:high,verifier:high\n---\n"],
+  ["W17: the quick preset", {}, "quick depth=minimal dims=+quality sceptic=basic effort=verifier:medium,impact:medium", ".consensus-review/profiles/quick.md", "---\ndepth: minimal\ndims: +quality\nsceptic: basic\neffort: impact:medium,verifier:medium\n---\n"],
 ]
 for (const [title, files, args, path, expected] of WRITES) {
   test(title, () => {

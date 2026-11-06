@@ -175,7 +175,9 @@ test("the command no longer mentions a retired argument", () => {
 })
 
 test("SETTINGS, the argument-hint and the docs tables name the same keys", () => {
-  assert.deepEqual(Object.keys(SETTINGS), ["depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout"])
+  assert.deepEqual(Object.keys(SETTINGS), [
+    "depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort",
+  ])
   const hint = command().match(/^argument-hint: "(.*)"$/m)?.[1]
   assert.equal(hint, "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]")
   const docs = readFileSync(new URL("../../docs/consensus-review.md", import.meta.url), "utf8")
@@ -195,6 +197,23 @@ test("§1.5 applies the profile in code and stops on exit 2; §0 re-reads settin
   assert.doesNotMatch(s0, /its values from here on/)
   assert.ok(md.indexOf("\n## 1. ") < md.indexOf("\n## 1.5. ") && md.indexOf("\n## 1.5. ") < md.indexOf("\n## 2. "), "§1.5 sits between §1 and §2")
   assert.match(md.split("\n## Hard rules")[1], /its body is ignored and never passed to a model/)
+})
+
+test("§5 and §8 pass models/effort only for listed roles and retry at most once without them", () => {
+  const md = command()
+  const s5 = section(md, 5)
+  const s8 = section(md, 8)
+  for (const [label, text] of [["§5", s5], ["§8", s8]]) {
+    assert.ok(text.includes("at most once"), label)
+    assert.ok(text.includes("A second failure is reported as the lane's real failure"), label)
+    assert.ok(text.includes("re-run it once without the override"), label)
+    assert.ok(text.includes("models override dropped (<role>)"), label)
+  }
+  assert.ok(s5.includes("model: '<settings.models.value[<dimension>]>'` only when"), s5)
+  assert.ok(s5.includes("effort: '<settings.effort.value[<dimension>]>'` only when"), s5)
+  assert.ok(s5.includes("session model (`/model`)"), s5)
+  assert.ok(s8.includes("model: '<settings.models.value.verifier>'` only when the `verifier` role is listed"), s8)
+  assert.ok(s8.includes("effort: '<settings.effort.value.verifier>'` only when it is listed"), s8)
 })
 
 test("§0 states the single-quote rule and the PR commands quote every pasted value", () => {

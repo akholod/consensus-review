@@ -75,8 +75,17 @@ is `FAIL`.
 - **`generated blocks — out of sync`** (`FAIL`): a prompt asks for a
   shape the runtime does not parse. Same fix. In a clone, run
   `node scripts/gen-contracts.mjs`.
-- **`dimension models`** (always `PASS`) lists each agent's model and
-  effort; see [models.md](models.md).
+- **`dimension models`** (always `PASS`) lists each agent's frontmatter
+  model and effort; `models=` and `effort=` (a flag or a profile) may
+  override them per run. See [models.md](models.md).
+- **`claude effort — claude <v>: effort= on subagents needs 2.1.292+`**
+  (`WARN`): an older Claude Code may ignore the per-invocation `effort`
+  and the agents' effort pins, so the lanes run at the session's effort.
+  Update Claude Code.
+- **`models override dropped (<role>)`** in a report's Source
+  availability: Claude Code rejected the requested model or effort, and
+  the Task was re-run once without its overrides on the agent's
+  frontmatter defaults. Pick a model your plan offers, or drop the key.
 
 ## workspace
 

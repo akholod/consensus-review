@@ -57,6 +57,45 @@ test("states which model each dimension runs on", () => {
   assert.match(detail, /verifier=\w+/)
 })
 
+test("E7: the dimension models line pins the frontmatter models and efforts", () => {
+  // Expected from step 7 of .omc/plans/issue-7-profiles.md (the new frontmatter defaults).
+  assert.equal(find(doctor(ROOT), "dimension models").detail,
+    "arch=opus/medium impact=opus/high quality=sonnet/high test=sonnet/high verifier=opus/high")
+})
+
+/** doctor --offline --json in a child, with PATH holding node, git and a `claude` printing `version`. */
+function doctorWithClaudeVersion(version) {
+  const bin = mkdtempSync(join(tmpdir(), "doctor-claude-version-"))
+  try {
+    for (const t of ["node", "git"]) {
+      const real = execFileSync("sh", ["-c", `command -v ${t}`], { encoding: "utf8" }).trim()
+      execFileSync("ln", ["-s", real, join(bin, t)])
+    }
+    writeFileSync(join(bin, "claude"), `#!/bin/sh\necho '${version}'\n`)
+    chmodSync(join(bin, "claude"), 0o755)
+    const out = execFileSync("node", [join(ROOT, "scripts/doctor.mjs"), "--offline", "--json"], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: bin },
+    })
+    return JSON.parse(out).results
+  } finally {
+    rmSync(bin, { recursive: true, force: true })
+  }
+}
+
+test("a claude CLI older than 2.1.292 gets one effort warn row", () => {
+  const rows = doctorWithClaudeVersion("2.1.200 (Claude Code)").filter((r) => r.label === "claude effort")
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].status, "warn")
+  assert.equal(rows[0].detail, "claude 2.1.200: effort= on subagents needs 2.1.292+")
+})
+
+for (const version of ["2.1.319 (Claude Code)", "2.1.292 (Claude Code)"]) {
+  test(`a claude CLI at ${version} gets no effort row`, () => {
+    assert.equal(doctorWithClaudeVersion(version).some((r) => r.label === "claude effort"), false)
+  })
+}
+
 test("every non-ok result explains what it does to a review", () => {
   // A status without a consequence is just noise; this is the property that makes the tool useful.
   for (const r of doctor(ROOT).results) {

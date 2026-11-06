@@ -10,7 +10,7 @@ All the work is done by `settings.mjs profile-edit`; you only pass the arguments
 - `<name>`: print `.consensus-review/profiles/<name>.md`.
 - `<name> key=value…`: create or update that profile. `key=` (an empty value) removes the key. Only `key=value` pairs are accepted (no `deep`, `minimal` or `no-file`); the keys and values are those of `/consensus-review`.
 
-Examples: `/consensus-review:profile quick depth=minimal dims=+quality sceptic=basic`, `/consensus-review:profile release depth=deep extra=pi timeout=1200`.
+Examples: `/consensus-review:profile quick depth=minimal dims=+quality sceptic=basic effort=verifier:medium,impact:medium`, `/consensus-review:profile release depth=deep extra=pi timeout=1200 models=verifier:fable effort=verifier:high,impact:high,architecture:high`.
 
 ## Steps
 

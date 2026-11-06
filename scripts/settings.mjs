@@ -49,6 +49,14 @@ export const SETTINGS = {
   extra: { default: "off", ...enumOf("off", "pi") },
   "pi-model": { default: "auto" },
   timeout: { default: 900 },
+  models: { default: "agent" },
+  effort: { default: "agent" },
+}
+
+const ROLES = ["architecture", "impact", "quality", "tests", "verifier"]
+const ROLE_VALUES = {
+  models: { noun: "model", values: ["opus", "sonnet", "haiku", "fable"] },
+  effort: { noun: "effort", values: ["low", "medium", "high", "xhigh", "max"] },
 }
 
 const SHORTHANDS = {
@@ -81,6 +89,27 @@ const parseDims = (raw) => {
   return { value: { add, remove } }
 }
 
+/** `agent`, or `role:value` items joined by `,`, as an object in ROLES order. */
+const parseRoleMap = (raw, { noun, values }) => {
+  if (raw.toLowerCase() === "agent") return { value: "agent" }
+  if (!raw) return { error: `expected agent or role:${noun} items` }
+  const map = {}
+  for (const item of raw.toLowerCase().split(",")) {
+    if (!item) return { error: "empty item" }
+    const parts = item.split(":")
+    if (parts.length !== 2) return { error: `item ${item} is not role:${noun}` }
+    const role = parts[0]
+    const value = parts[1]
+    if (!ROLES.includes(role)) return { error: `unknown role ${role} (expected ${ROLES.join("|")})` }
+    if (!values.includes(value)) return { error: `unknown ${noun} ${value} (expected ${values.join("|")})` }
+    if (map[role]) return { error: `duplicate role ${role}` }
+    map[role] = value
+  }
+  const ordered = {}
+  for (const role of ROLES) if (map[role]) ordered[role] = map[role]
+  return { value: ordered }
+}
+
 const parseRaw = (key, raw) => {
   const setting = SETTINGS[key]
   if (setting.values) {
@@ -88,6 +117,7 @@ const parseRaw = (key, raw) => {
     return setting.values.includes(value) ? { value } : { error: setting.expected }
   }
   if (key === "dims") return parseDims(raw)
+  if (ROLE_VALUES[key]) return parseRoleMap(raw, ROLE_VALUES[key])
   if (key === "lang") {
     if (/^[\p{L}\p{M}0-9_-]{1,40}$/u.test(raw)) return { value: raw }
     return { error: "expected a language code or name (letters, digits, - or _)" }
@@ -115,6 +145,7 @@ export function parseValue(key, raw) {
 }
 
 const renderValue = (key, value) => {
+  if (ROLE_VALUES[key] && value !== "agent") return Object.entries(value).map(([role, v]) => `${role}:${v}`).join(",")
   if (key !== "dims" || value === "tier") return String(value)
   if (value.set) return value.set.join(",")
   return [...value.add.map((d) => `+${d}`), ...value.remove.map((d) => `-${d}`)].join(",")
@@ -123,7 +154,8 @@ const renderValue = (key, value) => {
 const renderLines = (settings, ignored, clamped, profileName) => {
   const parts = Object.entries(settings).map(([key, { value, source }]) => {
     const origin = source === "profile" ? `profile ${profileName}` : source
-    const note = clamped.has(key) ? `${origin}, clamped` : origin
+    let note = clamped.has(key) ? `${origin}, clamped` : origin
+    if (ROLE_VALUES[key] && value !== "agent") note = `${note}, requested`
     return `${key}=${renderValue(key, value)} (${note})`
   })
   const skipped = ignored.map(({ token, reason }) => `${token} (${reason})`)

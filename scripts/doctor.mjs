@@ -176,7 +176,18 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
       return `${model}/${text.match(/^effort:\s*(\S+)/m)?.[1] ?? "session"}`
     }
     const models = ["arch", "impact", "quality", "test"].map((n) => `${n}=${modelOf(`agents/${n}-reviewer.md`)}`)
-    add("contracts", "dimension models", "ok", `${models.join(" ")} verifier=${modelOf("agents/finding-verifier.md")}`)
+    add("contracts", "dimension models", "ok", `${models.join(" ")} verifier=${modelOf("agents/finding-verifier.md")}`,
+      "a profile or `models=` / `effort=` may override")
+
+    // Per-invocation effort on subagents arrived in Claude Code 2.1.292; an older CLI ignores it silently.
+    const claudeVersion = toolVersion("claude")?.match(/^(\d+)\.(\d+)\.(\d+)/)
+    const [major, minor, patch] = claudeVersion ? claudeVersion.slice(1).map(Number) : []
+    const isOldClaude = Boolean(claudeVersion) &&
+      (major < 2 || (major === 2 && (minor < 1 || (minor === 1 && patch < 292))))
+    if (isOldClaude) {
+      add("contracts", "claude effort", "warn", `claude ${claudeVersion[0]}: effort= on subagents needs 2.1.292+`,
+        "effort= and the agents' effort pins may be ignored, so lanes run at the session's effort")
+    }
   }
 
   // ── Workspace ────────────────────────────────────────────────────────────────────────────────

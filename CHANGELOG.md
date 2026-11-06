@@ -23,6 +23,17 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
   settings order, body kept, atomic, never through a symlink, never over
   an invalid file). It never commits; it prints the path-limited commit to
   run. Reviews stay read-only.
+- **Added — `models` and `effort` settings** (`Refs #7`): a per-role map
+  (`architecture`, `impact`, `quality`, `tests`, `verifier`), as a flag or
+  a profile key, e.g. `models=verifier:fable effort=impact:high`. The
+  default `agent` keeps each agent's frontmatter. Values are requests:
+  the `Settings:` line marks them `requested`, and a Task the host rejects
+  for its override is re-run once without it (`… override dropped
+  (<role>)` in Source availability). The doctor warns when Claude Code is
+  older than 2.1.292, which per-invocation effort needs.
+- **Changed — agent effort defaults:** `arch-reviewer` effort `high` →
+  `medium`; `quality-reviewer` and `test-reviewer` are pinned at `high`
+  (they followed the session's effort before).
 
 - **Breaking: arguments simplified.** Arguments are `key=value` pairs
   resolved in code by `scripts/settings.mjs` (one `SETTINGS` table); the
