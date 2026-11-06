@@ -126,6 +126,39 @@ Flags: [docs/consensus-review.md](https://github.com/akholod/consensus-review/bl
   in code, not in a prompt.
 - You want one angle only: the single-dimension commands.
 
+## Profiles
+
+A profile is a named set of settings, kept in the repository and
+applied with `profile=<name>`. Flags still win over it, and the report's
+`Settings:` line names where each value came from. There is no implicit
+default profile: without `profile=`, the built-in defaults apply.
+
+```text
+/consensus-review:profile                       # built-in defaults, then your profiles
+/consensus-review:profile quick depth=minimal dims=+quality sceptic=basic effort=verifier:medium,impact:medium
+/consensus-review:profile release depth=deep extra=pi timeout=1200 models=verifier:fable effort=verifier:high,impact:high,architecture:high
+/consensus-review profile=release <PR-url>
+```
+
+A profile applies only once it is committed and unchanged: a profile the
+reviewed change adds or edits stops the run instead of configuring its
+own review.
+
+Default model and effort per role, which `models=` and `effort=` can
+override per run or per profile:
+
+| Role               | Model   | Effort |
+| ------------------ | ------- | ------ |
+| `finding-verifier` | opus    | high   |
+| `impact-reviewer`  | opus    | high   |
+| `arch-reviewer`    | opus    | medium |
+| `quality-reviewer` | sonnet  | high   |
+| `test-reviewer`    | sonnet  | high   |
+
+The arbiter runs on your session's model (`/model`). See
+[Profiles](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md#profiles)
+and [Models](https://github.com/akholod/consensus-review/blob/main/docs/models.md).
+
 ## Docs
 
 - [Install](https://github.com/akholod/consensus-review/blob/main/docs/install.md): step by step, written for an agent but fine by hand.
