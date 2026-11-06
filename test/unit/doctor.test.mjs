@@ -344,10 +344,13 @@ const LENS_CONSEQUENCE = {
 
 const lensRows = (report) => report.results.filter((r) => r.section === "lenses")
 
-/** A lens file with the given name and front matter lines. */
-function addLens(dir, name, frontMatter) {
+/** A lens file with the given name and front matter lines, committed unless `commit` is false. */
+function addLens(dir, name, frontMatter, { commit = true } = {}) {
   mkdirSync(join(dir, ".consensus-review/lenses"), { recursive: true })
   writeFileSync(join(dir, ".consensus-review/lenses", `${name}.md`), `---\n${frontMatter}\n---\nCheck it.\n`)
+  if (!commit) return
+  execFileSync("git", ["add", "-A"], { cwd: dir })
+  execFileSync("git", ["commit", "-q", "-m", name], { cwd: dir })
 }
 
 test("T9.1 no lenses: lenses is skipped with the generic-dimensions consequence", () => {
@@ -364,7 +367,6 @@ test("T9.2 a lens whose glob matches a tracked file is ok", () => {
     mkdirSync(join(dir, "src/payments"), { recursive: true })
     writeFileSync(join(dir, "src/payments/a.js"), "x\n")
     addLens(dir, "payments", "paths: [src/payments/**]")
-    execFileSync("git", ["add", "-A"], { cwd: dir })
     const rows = lensRows(doctor(dir))
     assert.deepEqual(rows.map((r) => [r.status, r.detail]), [["ok", "lens all, 1 globs"]])
   })
@@ -394,6 +396,18 @@ test("T9.5 an ignored front matter key warns", () => {
     const warn = lensRows(doctor(dir)).find((r) => r.status === "warn")
     assert.equal(warn.detail, "ignored key: severity")
     assert.equal(warn.consequence, LENS_CONSEQUENCE.key)
+  })
+})
+
+test("T9.6 an uncommitted lens warns not committed; an edited one warns modified", () => {
+  withRepo((dir) => {
+    addLens(dir, "edited", "paths: [a.txt]")
+    addLens(dir, "edited", "paths: [b.txt]", { commit: false })
+    addLens(dir, "fresh", "paths: [a.txt]", { commit: false })
+    assert.deepEqual(lensRows(doctor(dir)).map((r) => [r.status, r.label, r.detail]), [
+      ["warn", ".consensus-review/lenses/edited.md", "modified"],
+      ["warn", ".consensus-review/lenses/fresh.md", "not committed"],
+    ])
   })
 })
 

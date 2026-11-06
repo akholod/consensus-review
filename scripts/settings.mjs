@@ -24,7 +24,7 @@ import {
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
-import { LENS_NAME, checkSourcePath, parseDiff } from "../src/loop-review/context.mjs"
+import { LENS_NAME, checkSourcePath, parseDiff, trackedState } from "../src/loop-review/context.mjs"
 import { PI_MODEL_ID } from "./lib/lanes.mjs"
 
 const USAGE = [
@@ -292,25 +292,6 @@ export function parseProfileFile(text) {
   return { values: Object.fromEntries(entries) }
 }
 
-/**
- * Fails closed: a spawn failure or an unexpected exit is an error, never "modified" or "untracked".
- * `raw` (the bytes read from the worktree, when there are any) is compared with the HEAD blob, so
- * index flags such as skip-worktree or assume-unchanged cannot hide an edit.
- */
-const gitState = (repo, file, raw) => {
-  const run = (args, options = {}) =>
-    spawnSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], ...options })
-  const failure = (name, result) =>
-    `git check failed (${result.error ? result.error.code ?? result.error.message : `git ${name} exit ${result.status ?? result.signal}`})`
-  const listed = run(["ls-tree", "-z", "HEAD", "--", file])
-  if (listed.error || listed.status !== 0) return { error: failure("ls-tree", listed) }
-  if (!listed.stdout) return { status: "not committed" }
-  if (!raw) return { status: "ok" }
-  const blob = run(["cat-file", "blob", `HEAD:./${file}`], { encoding: "buffer", maxBuffer: MAX_PROFILE_BYTES })
-  if (blob.error || blob.status !== 0) return { error: failure("cat-file", blob) }
-  return { status: blob.stdout.equals(raw) ? "ok" : "modified" }
-}
-
 const readProfile = (repo, file) => {
   let raw
   try {
@@ -357,12 +338,12 @@ export function loadProfile({ repo, name, changed = [] }) {
   if (problem) return fail(`${problem} (${file})`)
   const changedMessage = fail(`changed in this diff (${file}); commit it first or pass its settings as flags`)
   if (changed.includes(file)) return changedMessage
-  const tracked = gitState(repo, file)
+  const tracked = trackedState(repo, file)
   if (tracked.error) return fail(tracked.error)
   if (tracked.status === "not committed") return fail(`not tracked (${file}); commit it first or pass its settings as flags`)
   const parsed = readProfile(repo, file)
   if (parsed.raw) {
-    const git = gitState(repo, file, parsed.raw)
+    const git = trackedState(repo, file, parsed.raw)
     if (git.error) return fail(git.error)
     if (git.status === "modified") return changedMessage
   }
@@ -388,7 +369,7 @@ export function listProfiles(repo) {
     const problem = checkSourcePath(repo, file)
     if (problem) return result(null, `${problem} (${file})`)
     const parsed = readProfile(repo, file)
-    const git = gitState(repo, file, parsed.raw)
+    const git = trackedState(repo, file, parsed.raw)
     if (git.error) return result(null, git.error)
     if (parsed.error) return result(git.status, parsed.error)
     const checked = parseProfileValues(parsed.values)

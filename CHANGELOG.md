@@ -2,6 +2,19 @@
 
 Full notes for each release: [GitHub releases](https://github.com/akholod/consensus-review/releases).
 
+## Unreleased
+
+- **Fixed — lenses apply only when tracked and unchanged at `HEAD`**
+  ([#12](https://github.com/akholod/consensus-review/issues/12)). A repo
+  lens or legacy instruction file applies only when it is tracked at
+  `HEAD` and its bytes equal the `HEAD` blob, the rule profiles already
+  use; a diff that adds a `.gitignore` entry can no longer hide an
+  untracked lens, and a `--skip-worktree` edit is caught. A git error in
+  that check stops the run (`lenses.mjs select` exits 2).
+  **Changed:** an untracked or ignored lens, `.claude/review-instructions.json`
+  or `.gitlab/duo/mr-review-instructions.yaml` no longer applies
+  (`skipped "not committed"`); commit it. The doctor reports such files.
+
 ## 0.13.0
 
 Project lenses and profiles, simpler arguments, typed sceptic votes, a consultant cascade, run archives and retried consultants. Breaking: arguments changed; see below.

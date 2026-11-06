@@ -219,8 +219,16 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
 
   // ── Lenses (offline: same D15-checked loading as scripts/lenses.mjs) ─────────────────────────
   {
-    const { records: items, rejected } = loadRecords(REPO)
-    if (!items.length && !rejected.length) {
+    let loaded
+    try {
+      loaded = loadRecords(REPO)
+    } catch (error) {
+      loaded = { records: [], rejected: [], skipped: [], failed: true }
+      add("lenses", "project lenses", "warn", String(error.message).split("\n")[0],
+        "every /consensus-review run stops (exit 2) until git can check the lens files")
+    }
+    const { records: items, rejected, skipped } = loaded
+    if (!loaded.failed && !items.length && !rejected.length && !skipped.length) {
       add("lenses", "project lenses", "skip", "none found", "reviews apply only the generic dimensions")
     }
     const tracked = (sh("git", ["ls-files", "-z"], { cwd: REPO }) ?? "").split("\0").filter(Boolean)
@@ -239,6 +247,10 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
     }
     for (const { file, reason } of rejected) {
       add("lenses", file, "warn", reason, "this lens is never applied")
+    }
+    for (const { file, reason } of skipped) {
+      add("lenses", file, "warn", reason === "changed in this diff" ? "modified" : reason,
+        "applied only when tracked and unchanged at HEAD; commit it")
     }
   }
 

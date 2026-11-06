@@ -7,7 +7,8 @@
 //
 // Reads $WD/diff.patch, writes $WD/lenses.json plus one lenses-<target>.md per target that got a
 // lens, and prints `{"outputs":{…},"selected":n,"skipped":n,"rejected":n}`. Every content outcome
-// exits 0; a usage error exits 2.
+// exits 0; a usage error, or a git check that cannot run (fail closed), exits 2. A repository
+// source applies only when it is tracked and unchanged at HEAD.
 //
 // `standalone` serves the four dimension commands: run in the caller's cwd, it writes the diff to a
 // fresh temp WD, runs the same select, and prints `{"wd":…,"lensFile":…|null,"note":…}`. It
@@ -21,7 +22,7 @@ import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import {
   checkSourcePath, instructionMatches, loadInstructionFile, loadLenses, parseDiff, renderInstructions,
-  resolveTarget,
+  resolveTarget, trackedSkip,
 } from "../src/loop-review/context.mjs"
 
 const OPTIONS = {
@@ -57,8 +58,8 @@ const renderLensFile = (items, withTrailer) => {
  * never reach here). Admission is one budget checked against the consultant file, which is the
  * superset of every per-dimension file, so no lens is selected for one lane and skipped for another.
  */
-export function planLenses({ records, rejected = [], d5Paths, matchPaths, dims }) {
-  const skipped = []
+export function planLenses({ records, rejected = [], skipped: loadSkipped = [], d5Paths, matchPaths, dims }) {
+  const skipped = [...loadSkipped]
   const seen = new Set()
   const candidates = []
   // D5 before duplicates, so a changed item cannot take a name from an unchanged lens.
@@ -128,37 +129,55 @@ const untrackedPaths = (repo) => {
   }
 }
 
-/** Legacy items first (D15 before any read), then the lens files: a legacy name wins a duplicate. */
-export function loadRecords(repo) {
+/**
+ * Legacy items first (D15 before any read), then the lens files: a legacy name wins a duplicate.
+ * A source not tracked and unchanged at HEAD is skipped; a git failure throws.
+ */
+export function loadRecords(repo, run) {
   const records = []
   const rejected = []
+  const skipped = []
   for (const { file, kind } of LEGACY) {
     const problem = checkSourcePath(repo, file)
     if (problem === "absent") continue
     if (problem) { rejected.push({ file, reason: problem }); continue }
-    for (const item of loadInstructionFile(join(repo, file), kind)) {
+    let raw
+    try {
+      raw = readFileSync(join(repo, file))
+    } catch (error) {
+      rejected.push({ file, reason: String(error.code ?? error.message) })
+      continue
+    }
+    const skip = trackedSkip(repo, file, raw, run)
+    if (skip) { skipped.push({ name: file, file, reason: skip }); continue }
+    for (const item of loadInstructionFile(join(repo, file), kind, raw.toString("utf8"))) {
       records.push({ ...item, dimension: null, file, ignoredKeys: [] })
     }
   }
-  const lenses = loadLenses(repo)
-  return { records: [...records, ...lenses.lenses], rejected: [...rejected, ...lenses.rejected] }
+  const lenses = loadLenses(repo, run)
+  return {
+    records: [...records, ...lenses.lenses],
+    rejected: [...rejected, ...lenses.rejected],
+    skipped: [...skipped, ...lenses.skipped],
+  }
 }
 
-/** Run one selection for $WD and write its files. Exported for an in-process caller. */
-export function select({ wd, repo = null, dims, mode = null }) {
+/** Run one selection for $WD and write its files. Exported for an in-process caller. Throws on a git failure. */
+export function select({ wd, repo = null, dims, mode = null, run }) {
   const sections = parseDiff(readFileSync(join(wd, "diff.patch"), "utf8"))
   const root = repo ? resolve(repo) : null
   let plan = planLenses({ records: [], d5Paths: [], matchPaths: [], dims })
   if (root) {
     const untracked = mode === "uncommitted" ? untrackedPaths(root) : []
     // Unfiltered on purpose: the working tree's .gitattributes could otherwise mark a lens the
-    // change adds as generated and so hide it from this check.
-    const d5Paths = [...sections.flatMap((s) => [s.path, s.oldPath]), ...untracked].filter(Boolean)
+    // change adds as generated and so hide it from this check. Untracked files need no entry
+    // here: tracked-only skips them, which a .gitignore the diff adds cannot hide.
+    const d5Paths = sections.flatMap((s) => [s.path, s.oldPath]).filter(Boolean)
     const changed = [...sections.map((s) => s.path).filter(Boolean), ...untracked]
     // Unfiltered too: a lens matching a generated file is harmless, and the checkout's
     // .gitattributes is the change's own and could otherwise mark the changed code generated.
     const matchPaths = [...new Set(changed)]
-    plan = planLenses({ ...loadRecords(root), d5Paths, matchPaths, dims })
+    plan = planLenses({ ...loadRecords(root, run), d5Paths, matchPaths, dims })
   }
   const { texts, ...result } = plan
   const lenses = {
@@ -230,7 +249,7 @@ export function standalone({ dim, target = null, cwd = process.cwd() }) {
   }
 }
 
-export function main(argv) {
+export function main(argv, { run } = {}) {
   let values
   let positionals
   try {
@@ -253,7 +272,13 @@ export function main(argv) {
     process.stderr.write(`${USAGE}\n`)
     return 2
   }
-  const lenses = select({ wd: values.wd, repo: values.repo ?? null, dims, mode: values.mode ?? null })
+  let lenses
+  try {
+    lenses = select({ wd: values.wd, repo: values.repo ?? null, dims, mode: values.mode ?? null, run })
+  } catch (error) {
+    process.stderr.write(`${String(error?.message ?? error).split("\n")[0]}\n`)
+    return 2
+  }
   const summary = {
     outputs: lenses.outputs,
     selected: lenses.selected.length,

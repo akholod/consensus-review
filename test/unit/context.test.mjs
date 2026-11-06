@@ -485,6 +485,12 @@ const withDir = (fn) => {
     rmSync(dir, { recursive: true, force: true })
   }
 }
+/** Commit everything in `repo` (made a git repository first): loadLenses applies only committed lenses. */
+const commitAll = (repo) => {
+  for (const args of [["init", "-q"], ["add", "-A"], ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "lenses"]]) {
+    execFileSync("git", args, { cwd: repo })
+  }
+}
 const lensDir = (repo) => {
   const dir = join(repo, ".consensus-review/lenses")
   mkdirSync(dir, { recursive: true })
@@ -494,6 +500,7 @@ const lensDir = (repo) => {
 test("loadLenses loads a valid lens with its record shape", () => {
   withDir((repo) => {
     writeFileSync(join(lensDir(repo), "payments.md"), LENS)
+    commitAll(repo)
     const { lenses, rejected } = loadLenses(repo)
     assert.deepEqual(rejected, [])
     assert.equal(lenses.length, 1)
@@ -509,7 +516,7 @@ test("loadLenses loads a valid lens with its record shape", () => {
 test("loadLenses rejects a file name that is not a valid lens name", () => {
   withDir((repo) => {
     writeFileSync(join(lensDir(repo), "Bad Name.md"), LENS)
-    assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [{ file: ".consensus-review/lenses/Bad Name.md", reason: "invalid name" }] })
+    assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [{ file: ".consensus-review/lenses/Bad Name.md", reason: "invalid name" }], skipped: [] })
   })
 })
 
@@ -519,6 +526,7 @@ test("loadLenses caps a lens file at 8192 bytes", () => {
     const pad = (size) => LENS + "x".repeat(size - Buffer.byteLength(LENS))
     writeFileSync(join(dir, "fits.md"), pad(8192))
     writeFileSync(join(dir, "over.md"), pad(8193))
+    commitAll(repo)
     const { lenses, rejected } = loadLenses(repo)
     assert.deepEqual(lenses.map((l) => l.name), ["fits"])
     assert.deepEqual(rejected, [{ file: ".consensus-review/lenses/over.md", reason: "too large" }])
@@ -530,7 +538,7 @@ test("loadLenses rejects an oversized lens by its size, without reading it", () 
     const file = join(lensDir(repo), "huge.md")
     writeFileSync(file, LENS)
     truncateSync(file, 3 * 1024 ** 3) // sparse; reading it would fail with ERR_FS_FILE_TOO_LARGE
-    assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [{ file: ".consensus-review/lenses/huge.md", reason: "too large" }] })
+    assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [{ file: ".consensus-review/lenses/huge.md", reason: "too large" }], skipped: [] })
   })
 })
 
@@ -546,18 +554,19 @@ test("loadLenses rejects a symlinked lens file without reading its target", () =
         { file: ".consensus-review/lenses/x.md", reason: "symlink" },
         { file: ".consensus-review/lenses/y.md", reason: "symlink" },
       ],
+      skipped: [],
     })
   })
 })
 
 test("loadLenses finds nothing in a repository without .consensus-review", () => {
-  withDir((repo) => assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [] }))
+  withDir((repo) => assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [], skipped: [] }))
 })
 
 test("loadLenses ignores files that are not .md", () => {
   withDir((repo) => {
     writeFileSync(join(lensDir(repo), "notes.txt"), LENS)
-    assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [] })
+    assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [], skipped: [] })
   })
 })
 
@@ -567,7 +576,7 @@ test("loadLenses rejects a symlinked lenses directory and reads nothing under it
     writeFileSync(join(repo, "elsewhere/p.md"), LENS)
     mkdirSync(join(repo, ".consensus-review"))
     symlinkSync(join(repo, "elsewhere"), join(repo, ".consensus-review/lenses"))
-    assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [{ file: ".consensus-review/lenses", reason: "symlink" }] })
+    assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [{ file: ".consensus-review/lenses", reason: "symlink" }], skipped: [] })
   })
 })
 
@@ -576,7 +585,7 @@ test("loadLenses rejects a symlinked .consensus-review ancestor and reads nothin
     mkdirSync(join(repo, "elsewhere/lenses"), { recursive: true })
     writeFileSync(join(repo, "elsewhere/lenses/p.md"), LENS)
     symlinkSync(join(repo, "elsewhere"), join(repo, ".consensus-review"))
-    assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [{ file: ".consensus-review/lenses", reason: "symlink" }] })
+    assert.deepEqual(loadLenses(repo), { lenses: [], rejected: [{ file: ".consensus-review/lenses", reason: "symlink" }], skipped: [] })
   })
 })
 
@@ -590,7 +599,7 @@ test("loadLenses rejects a FIFO as not a regular file and returns", { timeout: 5
       "--input-type=module", "-e",
       `import { loadLenses } from ${JSON.stringify(CONTEXT)}; process.stdout.write(JSON.stringify(loadLenses(${JSON.stringify(repo)})))`,
     ], { encoding: "utf8", timeout: 5000 })
-    assert.deepEqual(JSON.parse(out), { lenses: [], rejected: [{ file: ".consensus-review/lenses/fifo.md", reason: "not a regular file" }] })
+    assert.deepEqual(JSON.parse(out), { lenses: [], rejected: [{ file: ".consensus-review/lenses/fifo.md", reason: "not a regular file" }], skipped: [] })
   })
 })
 

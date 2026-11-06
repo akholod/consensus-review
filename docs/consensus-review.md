@@ -378,12 +378,20 @@ path; the old path only for a deleted file), generated files included.
 **Caps.** A lens file over 8 KiB is rejected. All selected lenses share
 one 24576-byte budget, admitted in name order; the rest are skipped.
 
-**Which files are used.** Lenses are read from the working tree of the
-checkout the review runs in, whatever revision it is at. A lens or
-instruction file that the diff changes (in uncommitted mode, including
-untracked files) is not applied, so a change cannot add its own lens.
+**Which files are used.** Lenses are read from the checkout the review
+runs in, whatever revision it is at, and a lens or instruction file is
+applied only when it is tracked at `HEAD`, its bytes equal the `HEAD`
+blob, and the diff does not change it. An untracked or ignored file is
+skipped as `not committed`; one modified against `HEAD` (even behind
+`--skip-worktree` or `--assume-unchanged`) or changed by the diff is
+skipped as `changed in this diff`. So a change cannot add or edit its own
+lens, not even by adding a `.gitignore` entry that hides it. If git
+cannot run the check, `lenses.mjs select` exits 2 and the review stops.
 A symlink anywhere on the path, or a file that is not a regular file, is
 rejected. A diff-only review has no checkout and applies none.
+
+Residual risk: in uncommitted mode, a lens committed earlier on the
+current branch is applied, since `HEAD` already holds it.
 
 **Authority.** Lenses are untrusted advisory input. They add checks; they
 cannot relax the severity bars, the sceptic or read-only, and the
@@ -396,7 +404,8 @@ finding schema carries it as `lens`.
 
 **Legacy files.** `.claude/review-instructions.json` and
 `.gitlab/duo/mr-review-instructions.yaml` keep working as inputs; they
-apply to every lane, under the same rules.
+apply to every lane, under the same rules, so an untracked or ignored
+one no longer applies.
 
 **Archive.** `sources/<lane>/prompt.md` is the brief only. The prompt the
 lane actually got is that brief + `"\n\n"` + `sources/lenses/<status.lenses>`,
@@ -409,7 +418,8 @@ the current repository, same host included. Any other scope (a range, a
 path, a glob) runs without lenses.
 
 `/consensus-review:doctor` lists the lenses it finds and warns about
-rejected files, ignored keys and globs that match no tracked file.
+rejected files, files `not committed` or `modified` against `HEAD`,
+ignored keys and globs that match no tracked file.
 
 Not supported yet: lenses in `~/.config`, built-in lenses, an
 `init-lenses` command, a severity hint. `/loop-review` does not read lens

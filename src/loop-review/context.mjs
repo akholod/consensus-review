@@ -2,7 +2,7 @@
 // select matching custom instructions, and assemble a byte-stable prompt prefix.
 // Nothing here reasons about code — it only decides what the model is allowed to see.
 
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { readFileSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { join } from "node:path"
@@ -421,11 +421,13 @@ const unquote = (value) => {
  * carry no authority: nothing here can relax read-only, budgets, admission, stopping or
  * escalation rules, because none of those are expressed as instruction fields.
  */
-export function loadInstructionFile(file, kind) {
+export function loadInstructionFile(file, kind, text = null) {
   const out = []
-  if (!existsSync(file)) return out
-  let raw
-  try { raw = readFileSync(file, "utf8") } catch { return out }
+  let raw = text
+  if (raw == null) {
+    if (!existsSync(file)) return out
+    try { raw = readFileSync(file, "utf8") } catch { return out }
+  }
   let parsed = []
   if (kind === "json") {
     try {
@@ -482,6 +484,37 @@ export function checkSourcePath(repo, rel, last = "file") {
     if ((!isLast || last === "dir") && !stat.isDirectory()) return "not a directory"
   }
   return null
+}
+
+/**
+ * Whether a repository source is tracked at HEAD: `{ status }` (`ok`, `not committed` or
+ * `modified`) or `{ error }`. Fails closed: a spawn failure or an unexpected exit is an error,
+ * never "modified" or "not committed". `raw` (the worktree bytes, when there are any) is compared
+ * with the HEAD blob, so index flags such as skip-worktree or assume-unchanged cannot hide an edit.
+ * `run` is spawnSync's shape, injectable for tests.
+ */
+export function trackedState(repo, file, raw, run = spawnSync) {
+  const git = (args, options = {}) =>
+    run("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], ...options })
+  const failure = (name, result) =>
+    `git check failed (${result.error ? result.error.code ?? result.error.message : `git ${name} exit ${result.status ?? result.signal}`})`
+  const listed = git(["ls-tree", "-z", "HEAD", "--", file])
+  if (listed.error || listed.status !== 0) return { error: failure("ls-tree", listed) }
+  if (!listed.stdout) return { status: "not committed" }
+  if (!raw) return { status: "ok" }
+  const blob = git(["cat-file", "blob", `HEAD:./${file}`], { encoding: "buffer", maxBuffer: raw.length + 1 })
+  // A HEAD blob longer than the worktree bytes overflows the buffer: it differs.
+  if (blob.error?.code === "ENOBUFS") return { status: "modified" }
+  if (blob.error || blob.status !== 0) return { error: failure("cat-file", blob) }
+  return { status: blob.stdout.equals(raw) ? "ok" : "modified" }
+}
+
+/** `trackedState` for a lens source: a skip reason, null when it applies; a git failure throws. */
+export function trackedSkip(repo, file, raw, run) {
+  const state = trackedState(repo, file, raw, run)
+  if (state.error) throw new Error(`${state.error}: ${file}`)
+  if (state.status === "not committed") return "not committed"
+  return state.status === "modified" ? "changed in this diff" : null
 }
 
 const LENS_DIMENSIONS = { architecture: "architecture", quality: "quality", impact: "impact", tests: "tests" }
@@ -542,18 +575,22 @@ const LENS_DIR = ".consensus-review/lenses"
 export const LENS_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const MAX_LENS_BYTES = 8192
 
-/** Repository lenses, `.consensus-review/lenses/*.md`, each checked before it is read. */
-export function loadLenses(repo) {
+/**
+ * Repository lenses, `.consensus-review/lenses/*.md`, each checked before it is read and applied
+ * only when tracked and unchanged at HEAD (else `skipped`). A git failure throws.
+ */
+export function loadLenses(repo, run) {
   const lenses = []
   const rejected = []
+  const skipped = []
   const dirProblem = checkSourcePath(repo, LENS_DIR, "dir")
-  if (dirProblem === "absent") return { lenses, rejected }
-  if (dirProblem) return { lenses, rejected: [{ file: LENS_DIR, reason: dirProblem }] }
+  if (dirProblem === "absent") return { lenses, rejected, skipped }
+  if (dirProblem) return { lenses, rejected: [{ file: LENS_DIR, reason: dirProblem }], skipped }
   let entries
   try {
     entries = readdirSync(join(repo, LENS_DIR)).filter((entry) => entry.endsWith(".md")).sort()
   } catch (error) {
-    return { lenses, rejected: [{ file: LENS_DIR, reason: String(error.code ?? error.message) }] }
+    return { lenses, rejected: [{ file: LENS_DIR, reason: String(error.code ?? error.message) }], skipped }
   }
   for (const entry of entries) {
     const file = `${LENS_DIR}/${entry}`
@@ -570,6 +607,8 @@ export function loadLenses(repo) {
       continue
     }
     if (raw.length > MAX_LENS_BYTES) { rejected.push({ file, reason: "too large" }); continue }
+    const skip = trackedSkip(repo, file, raw, run)
+    if (skip) { skipped.push({ name, file, reason: skip }); continue }
     const lens = parseLensFile(raw.toString("utf8"))
     if (lens.error) { rejected.push({ file, reason: lens.error }); continue }
     lenses.push({
@@ -583,7 +622,7 @@ export function loadLenses(repo) {
       ignoredKeys: lens.ignoredKeys,
     })
   }
-  return { lenses, rejected }
+  return { lenses, rejected, skipped }
 }
 
 const escapeAttr = (value) => String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")
