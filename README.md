@@ -128,21 +128,27 @@ Flags: [docs/consensus-review.md](https://github.com/akholod/consensus-review/bl
 
 ## Profiles
 
-A profile is a named set of settings, kept in the repository and
-applied with `profile=<name>`. Flags still win over it, and the report's
-`Settings:` line names where each value came from. There is no implicit
-default profile: without `profile=`, the built-in defaults apply.
+A profile is a named set of settings applied with `profile=<name>`.
+Flags still win over it, and the report's `Settings:` line names where
+each value came from. There is no implicit default profile: without
+`profile=`, the built-in defaults apply.
+
+Two profiles ship with the plugin, so these work out of the box:
 
 ```text
-/consensus-review:profile                       # built-in defaults, then your profiles
-/consensus-review:profile quick depth=minimal dims=+quality sceptic=basic effort=verifier:medium,impact:medium
-/consensus-review:profile release depth=deep extra=pi timeout=1200 models=verifier:fable effort=verifier:high,impact:high,architecture:high
-/consensus-review profile=release <PR-url>
+/consensus-review profile=quick                 # depth=minimal dims=+quality sceptic=basic effort=verifier:medium,impact:medium
+/consensus-review profile=release <PR-url>      # depth=deep extra=pi timeout=1200 models=verifier:fable effort=verifier:high,impact:high,architecture:high
+/consensus-review:profile                       # built-in defaults, then every profile and its layer
+/consensus-review:profile ci depth=minimal sceptic=basic   # a repository profile
 ```
 
-A profile applies only once it is committed and unchanged: a profile the
-reviewed change adds or edits stops the run instead of configuring its
-own review.
+Your own profiles live in `~/.config/consensus-review/profiles/` (all your
+repositories) or `.consensus-review/profiles/` (this one); user beats
+repository beats built-in. A repository profile applies only once it is
+committed and unchanged: a profile the reviewed change adds or edits stops
+the run instead of configuring its own review, and never falls back to the
+built-in of the same name. Lenses layer the same way, and the built-in
+example lenses apply only when named (`lenses=+migrations`).
 
 Default model and effort per role, which `models=` and `effort=` can
 override per run or per profile:

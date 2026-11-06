@@ -5,7 +5,7 @@
 // Every test here runs `--offline`: the live probes cost real model calls and belong to a release
 // gate, not to `node --test`. The claude-cli probe is driven directly against a fake `claude`.
 
-import { test } from "node:test"
+import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync, chmodSync } from "node:fs"
@@ -13,6 +13,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { diagnose } from "../../scripts/doctor.mjs"
 import { probeClaudeCli } from "../../scripts/lib/probe.mjs"
+
+// The user lens and profile layer comes from $XDG_CONFIG_HOME: an empty one, so ~/.config never leaks in.
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "xdg-"))
+after(() => rmSync(process.env.XDG_CONFIG_HOME, { recursive: true, force: true }))
 
 const ROOT = process.cwd()
 
@@ -456,5 +460,38 @@ test("profiles: an uncommitted profile warns", () => {
 test("profiles: no profiles directory is skip, none found", () => {
   withRepo((dir) => {
     assert.deepEqual(profileRows(doctor(dir)).map((r) => [r.status, r.detail]), [["skip", "none found"]])
+  })
+})
+
+// ── sources: user and built-in layers (#12 item 2, stage 5) ──────────────────────────────────
+test("sources: the user row prints the resolved root, reserved and shadowed names; built-in shows what the repo shadows", () => {
+  withRepo((dir) => {
+    const xdg = mkdtempSync(join(tmpdir(), "doctor-xdg-"))
+    try {
+      const root = join(xdg, "consensus-review")
+      for (const sub of ["lenses", "profiles"]) mkdirSync(join(root, sub), { recursive: true })
+      for (const d of [root, join(root, "lenses"), join(root, "profiles")]) chmodSync(d, 0o755)
+      writeFileSync(join(root, "lenses/broken.md"), "no front matter\n")
+      writeFileSync(join(root, "lenses/payments.md"), "---\npaths: [src/**]\n---\nCheck it.\n")
+      for (const f of ["lenses/broken.md", "lenses/payments.md"]) chmodSync(join(root, f), 0o644)
+      addLens(dir, "payments", "paths: [a.txt]")
+      addProfile(dir, "release", "---\ndepth: minimal\n---\n")
+      const rows = diagnose({ root: ROOT, repo: dir, offline: true, sources: { env: { XDG_CONFIG_HOME: xdg } } })
+        .filter((r) => r.section === "sources")
+      assert.deepEqual(rows.map((r) => [r.label, r.status, r.detail]), [
+        ["user layer", "warn",
+          `${root}; lenses ok; profiles ok; loaded: lens payments; reserved (fix the file; a run naming it stops): lens broken`],
+        ["built-in layer", "ok",
+          `${join(ROOT, "presets")}; lenses ok; profiles ok; loaded: lens migrations, lens public-api, profile quick, profile release; shadowed: profile release (by repo)`],
+      ])
+      const lens = lensRows({ results: diagnose({ root: ROOT, repo: dir, offline: true, sources: { env: { XDG_CONFIG_HOME: xdg } } }) })
+      assert.deepEqual(lens.map((r) => [r.status, r.label, r.detail]), [
+        ["ok", "lens payments (user)", "lens all, 1 globs"],
+        ["skip", "lens payments", "shadowed by user"],
+        ["warn", join(root, "lenses/broken.md"), "no front matter"],
+      ])
+    } finally {
+      rmSync(xdg, { recursive: true, force: true })
+    }
   })
 })

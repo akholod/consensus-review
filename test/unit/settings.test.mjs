@@ -11,7 +11,11 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { SETTINGS, parseProfileFile, parseValue, resolveSettings } from "../../scripts/settings.mjs"
+import { SETTINGS, main, parseProfileFile, parseValue, resolveSettings } from "../../scripts/settings.mjs"
+
+// The user lens and profile layer comes from $XDG_CONFIG_HOME: an empty one, so ~/.config never leaks in.
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "xdg-"))
+after(() => rmSync(process.env.XDG_CONFIG_HOME, { recursive: true, force: true }))
 
 const SCRIPT = new URL("../../scripts/settings.mjs", import.meta.url).pathname
 
@@ -489,13 +493,13 @@ const put = (root, path, text) => {
 }
 
 /** `resolve` then `profile`, as §0 and §1.5 run them; returns the second run and settings.json before it. */
-function applyProfile({ repo, wd }, { args = "profile=release", diff = "", extra = ["--repo", repo] } = {}) {
+function applyProfile({ repo, wd }, { args = "profile=release", diff = "", extra = ["--repo", repo], env = process.env } = {}) {
   writeFileSync(join(wd, "args.txt"), args)
   writeFileSync(join(wd, "diff.patch"), diff)
   const first = spawnSync(process.execPath, [SCRIPT, "resolve", "--wd", wd, "--args-file", join(wd, "args.txt")], { encoding: "utf8" })
   assert.equal(first.status, 0, first.stderr)
   const before = readFileSync(join(wd, "settings.json"), "utf8")
-  const run = spawnSync(process.execPath, [SCRIPT, "profile", "--wd", wd, ...extra], { encoding: "utf8", timeout: 10_000 })
+  const run = spawnSync(process.execPath, [SCRIPT, "profile", "--wd", wd, ...extra], { encoding: "utf8", timeout: 10_000, env })
   const after = readFileSync(join(wd, "settings.json"), "utf8")
   return { ...run, before, after, saved: JSON.parse(after) }
 }
@@ -511,7 +515,7 @@ test("L1: a committed profile applies its values with source profile", () => {
   const run = applyProfile(profileRepo())
   assert.equal(run.status, 0, run.stderr)
   assert.deepEqual(run.saved.settings.depth, { value: "deep", source: "profile" })
-  assert.deepEqual(run.saved.profile, { name: "release", file: PROFILE_FILE })
+  assert.deepEqual(run.saved.profile, { name: "release", layer: "repo", file: PROFILE_FILE })
   assert.match(run.saved.lines.settings, /^Settings: depth=deep \(profile release\) \| /)
   assert.deepEqual(JSON.parse(run.stdout), run.saved)
 })
@@ -594,9 +598,9 @@ test("L12: a committed profile over 4096 bytes stops", () => {
   assertStops(applyProfile(ws), "profile release: too large (over 4096 bytes)")
 })
 
-test("L13: only Release.md committed: profile=release finds nothing", () => {
-  const ws = profileRepo({ ".consensus-review/profiles/Release.md": RELEASE })
-  assertStops(applyProfile(ws), "profile=release: no such profile (available: none)")
+test("L13: only Ci.md committed: profile=ci finds nothing", () => {
+  const ws = profileRepo({ ".consensus-review/profiles/Ci.md": RELEASE })
+  assertStops(applyProfile(ws, { args: "profile=ci" }), "profile=ci: no such profile (available: quick, release)")
 })
 
 /** Whether `dir`'s filesystem folds case: write `x`, look for `X`. */
@@ -626,15 +630,15 @@ test("L15: an unknown name lists the valid available profiles", () => {
     ".consensus-review/profiles/quick.md": RELEASE,
     ".consensus-review/profiles/Bad.md": RELEASE,
   })
-  assertStops(applyProfile(ws, { args: "profile=nope" }), "profile=nope: no such profile (available: ci, quick)")
+  assertStops(applyProfile(ws, { args: "profile=nope" }), "profile=nope: no such profile (available: ci, quick, release)")
 })
 
 test("L16: no profiles directory", () => {
-  assertStops(applyProfile(profileRepo({}), { args: "profile=nope" }), "profile=nope: no such profile (available: none)")
+  assertStops(applyProfile(profileRepo({}), { args: "profile=nope" }), "profile=nope: no such profile (available: quick, release)")
 })
 
-test("L17: no --repo is the diff-only stop", () => {
-  assertStops(applyProfile(profileRepo(), { extra: [] }), "profile=release: needs the repository (diff-only mode)")
+test("L17: no --repo and no user or built-in profile of that name is the diff-only stop", () => {
+  assertStops(applyProfile(profileRepo(), { args: "profile=zz", extra: [] }), "profile=zz: needs the repository (diff-only mode)")
 })
 
 test("L18: a bad value in a committed profile names the profile", () => {
@@ -684,6 +688,10 @@ const PROFILE_DIR = ".consensus-review/profiles"
 const W1_TEXT = "---\ndepth: deep\nextra: pi\ntimeout: 1200\n---\n"
 const ADD_REMINDER = `Not applied until committed: git add -- ${PROFILE_FILE} && git commit -m 'Add review profile release' -- ${PROFILE_FILE}`
 const DEFAULTS_LISTING = "defaults (built-in): depth=auto | dims=tier | lenses=auto | sceptic=strict | lang=en | out=default | archive=on | consultant=auto | extra=off | pi-model=auto | timeout=900 | models=agent | effort=agent"
+const BUILTIN_LISTING = [
+  "quick (builtin): depth=minimal dims=+quality sceptic=basic effort=impact:medium,verifier:medium",
+  "release (builtin): depth=deep extra=pi timeout=1200 models=verifier:fable effort=architecture:high,impact:high,verifier:high",
+]
 const CI_TEXT = "---\ndepth: minimal\nsceptic: basic\ndims: impact,tests\nout: none\n---\n"
 
 /** Runs profile-edit with `args` written to a file outside the repo; `umask` wraps it in `sh -c`. */
@@ -846,7 +854,7 @@ test("list P1: no profiles directory lists the defaults and no profiles", () => 
   const { repo } = profileRepo({})
   const run = edit(repo, "")
   assert.equal(run.status, 0, run.stderr)
-  assert.equal(run.stdout, `${DEFAULTS_LISTING}\nno profiles in .consensus-review/profiles/\n`)
+  assert.equal(run.stdout, [DEFAULTS_LISTING, "no profiles in .consensus-review/profiles/", ...BUILTIN_LISTING, ""].join("\n"))
 })
 
 test("list P0: the defaults line is built from SETTINGS", () => {
@@ -856,7 +864,7 @@ test("list P0: the defaults line is built from SETTINGS", () => {
   assert.equal(first, DEFAULTS_LISTING)
 })
 
-test("list P2: one line per profile in name order, SETTINGS key order, no status", () => {
+test("list P2: one line per profile, by layer then name, SETTINGS key order, no status", () => {
   const { repo } = profileRepo({
     ".consensus-review/profiles/ci.md": CI_TEXT,
     ".consensus-review/profiles/bad.md": "---\nsceptic: strct\n---\n",
@@ -866,9 +874,11 @@ test("list P2: one line per profile in name order, SETTINGS key order, no status
   assert.equal(run.status, 0, run.stderr)
   assert.equal(run.stdout, [
     DEFAULTS_LISTING,
-    "bad: invalid (sceptic=strct: expected off|basic|strict)",
-    "ci: depth=minimal dims=impact,tests sceptic=basic out=none",
-    "release: depth=deep extra=pi timeout=1200",
+    "bad (repo): invalid (sceptic=strct: expected off|basic|strict)",
+    "ci (repo): depth=minimal dims=impact,tests sceptic=basic out=none",
+    "release (repo): depth=deep extra=pi timeout=1200",
+    BUILTIN_LISTING[0],
+    BUILTIN_LISTING[1].replace("release (builtin)", "release (builtin, shadowed by repo)"),
     "",
   ].join("\n"))
 })
@@ -917,4 +927,144 @@ test("lenses: profile-edit writes lenses=+a and refuses lenses=none without writ
   const written = edit(repo, "p lenses=+a dims=+tests")
   assert.equal(written.status, 0, written.stderr)
   assert.equal(readFileSync(join(repo, ".consensus-review/profiles/p.md"), "utf8"), "---\ndims: +tests\nlenses: +a\n---\n")
+})
+
+// ---------------------------------------------------------------------------------------------
+// User and built-in profiles (#12 item 2, stage 5): user > repo > built-in; a repo or user file of
+// the name that fails stops, never falls through. Built-in values are the README's.
+// ---------------------------------------------------------------------------------------------
+
+/** A fresh $XDG_CONFIG_HOME with consensus-review/profiles/<name>.md for each of `profiles`, modes set (umask-proof). */
+const userEnv = (profiles = {}) => {
+  const xdg = mkdtempSync(join(tmpdir(), "xdg-user-"))
+  dirs.push(xdg)
+  const root = join(xdg, "consensus-review")
+  mkdirSync(join(root, "profiles"), { recursive: true })
+  for (const dir of [root, join(root, "profiles")]) chmodSync(dir, 0o755)
+  for (const [name, text] of Object.entries(profiles)) {
+    writeFileSync(join(root, "profiles", `${name}.md`), text)
+    chmodSync(join(root, "profiles", `${name}.md`), 0o644)
+  }
+  return { ...process.env, XDG_CONFIG_HOME: xdg }
+}
+const QUICK_FILE = ".consensus-review/profiles/quick.md"
+const QUICK_VALUES = {
+  depth: { value: "minimal", source: "profile" },
+  dims: { value: { add: ["quality"], remove: [] }, source: "profile" },
+  sceptic: { value: "basic", source: "profile" },
+  effort: { value: { impact: "medium", verifier: "medium" }, source: "profile" },
+}
+
+test("layers: profile=release with no repo or user release applies the built-in README values", () => {
+  const run = applyProfile(profileRepo({}))
+  assert.equal(run.status, 0, run.stderr)
+  const { settings } = run.saved
+  assert.deepEqual([settings.depth.value, settings.extra.value, settings.timeout.value, settings.models.value],
+    ["deep", "pi", 1200, { verifier: "fable" }])
+  assert.deepEqual(settings.effort.value, { architecture: "high", impact: "high", verifier: "high" })
+  assert.deepEqual(run.saved.profile, { name: "release", layer: "builtin", file: "builtin:profiles/release.md" })
+  assert.match(run.saved.lines.settings, /^Settings: depth=deep \(profile release, builtin\) \| /)
+})
+
+test("layers: a committed repo release.md beats the built-in release", () => {
+  const run = applyProfile(profileRepo({ [PROFILE_FILE]: "---\ndepth: minimal\n---\n" }))
+  assert.equal(run.status, 0, run.stderr)
+  assert.deepEqual(run.saved.settings.depth, { value: "minimal", source: "profile" })
+  assert.deepEqual(run.saved.settings.extra, { value: "off", source: "default" })
+  assert.equal(run.saved.profile.layer, "repo")
+})
+
+test("layers: no repo quick.md applies the built-in quick", () => {
+  const run = applyProfile(profileRepo({}), { args: "profile=quick" })
+  assert.equal(run.status, 0, run.stderr)
+  for (const [key, value] of Object.entries(QUICK_VALUES)) assert.deepEqual(run.saved.settings[key], value, key)
+  assert.match(run.saved.lines.settings, /depth=minimal \(profile quick, builtin\)/)
+})
+
+test("layers: profile=quick with the repo quick.md changed in the diff stops; the built-in is not applied", () => {
+  const ws = profileRepo({ [QUICK_FILE]: "---\nsceptic: strict\ndepth: deep\n---\n" })
+  put(ws.repo, QUICK_FILE, "---\nsceptic: off\n---\n")
+  const diff = git(ws.repo, "diff", "HEAD")
+  assertStops(applyProfile(ws, { args: "profile=quick", diff, extra: ["--repo", ws.repo, "--mode", "uncommitted"] }),
+    `profile quick: changed in this diff (${QUICK_FILE}); commit it first or pass its settings as flags`)
+})
+
+test("layers: profile=quick with a malformed committed repo quick.md stops; the built-in is not applied", () => {
+  const ws = profileRepo({ [QUICK_FILE]: "depth: deep\n" })
+  assertStops(applyProfile(ws, { args: "profile=quick" }), "profile quick: no front matter")
+})
+
+test("layers: a malformed user quick reserves the name over a valid repo quick", () => {
+  const env = userEnv({ quick: "no front matter\n" })
+  const ws = profileRepo({ [QUICK_FILE]: "---\ndepth: deep\n---\n" })
+  const file = join(env.XDG_CONFIG_HOME, "consensus-review/profiles/quick.md")
+  assertStops(applyProfile(ws, { args: "profile=quick", env }), `profile quick: no front matter (user ${file})`)
+})
+
+test("layers: a group-writable user profile stops with the chmod hint, never falls through", () => {
+  const env = userEnv({ quick: "---\ndepth: deep\n---\n" })
+  const file = join(env.XDG_CONFIG_HOME, "consensus-review/profiles/quick.md")
+  chmodSync(file, 0o664)
+  assertStops(applyProfile(profileRepo({}), { args: "profile=quick", env }),
+    `profile quick: group-writable (${file}); fix with chmod go-w ${file} (user ${file})`)
+})
+
+test("layers: a user profile beats the repo one, may remove lenses, and is named (profile x, user)", () => {
+  const env = userEnv({ release: "---\nlenses: none\nsceptic: off\n---\n" })
+  const run = applyProfile(profileRepo(), { env })
+  assert.equal(run.status, 0, run.stderr)
+  assert.deepEqual(run.saved.settings.lenses, { value: "none", source: "profile" })
+  assert.deepEqual(run.saved.settings.depth, { value: "auto", source: "default" })
+  assert.equal(run.saved.profile.layer, "user")
+  assert.match(run.saved.lines.settings, /sceptic=off \(profile release, user\)/)
+})
+
+test("layers: diff-only, profile=release applies the built-in; a user quick applies as (profile quick, user)", () => {
+  const builtin = applyProfile(profileRepo({}), { extra: [] })
+  assert.equal(builtin.status, 0, builtin.stderr)
+  assert.equal(builtin.saved.profile.layer, "builtin")
+  assert.match(builtin.saved.lines.settings, /depth=deep \(profile release, builtin\)/)
+  const user = applyProfile(profileRepo({}), { args: "profile=quick", extra: [], env: userEnv({ quick: "---\ndepth: deep\n---\n" }) })
+  assert.equal(user.status, 0, user.stderr)
+  assert.match(user.saved.lines.settings, /^Settings: depth=deep \(profile quick, user\) \| /)
+})
+
+test("layers: profile=quick with the injected git failing ls-tree exits 2, settings.json unchanged", () => {
+  const ws = profileRepo({ [QUICK_FILE]: "---\ndepth: deep\n---\n" })
+  writeFileSync(join(ws.wd, "args.txt"), "profile=quick")
+  writeFileSync(join(ws.wd, "diff.patch"), "")
+  assert.equal(main(["resolve", "--wd", ws.wd, "--args-file", join(ws.wd, "args.txt")]), 0)
+  const before = readFileSync(join(ws.wd, "settings.json"), "utf8")
+  const failing = (cmd, args, options) => (args[0] === "ls-tree" ? { status: 128, stdout: "" } : spawnSync(cmd, args, options))
+  const errors = []
+  const stdoutWrite = process.stdout.write
+  const stderrWrite = process.stderr.write
+  process.stderr.write = (chunk) => errors.push(String(chunk))
+  process.stdout.write = () => true
+  let code
+  try {
+    code = main(["profile", "--wd", ws.wd, "--repo", ws.repo], { run: failing })
+  } finally {
+    process.stderr.write = stderrWrite
+    process.stdout.write = stdoutWrite
+  }
+  assert.equal(code, 2)
+  assert.equal(errors.join(""), "profile quick: git check failed (git ls-tree exit 128)\n")
+  assert.equal(readFileSync(join(ws.wd, "settings.json"), "utf8"), before)
+})
+
+test("layers: the profile listing tags user profiles and the repo one they shadow", () => {
+  const env = userEnv({ ci: "---\nsceptic: off\n---\n" })
+  const { repo } = profileRepo({ ".consensus-review/profiles/ci.md": CI_TEXT })
+  const args = join(dirs.at(-1), "args")
+  writeFileSync(args, "")
+  const run = spawnSync(process.execPath, [SCRIPT, "profile-edit", "--repo", repo, "--args-file", args], { encoding: "utf8", env })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(run.stdout, [
+    DEFAULTS_LISTING,
+    "ci (user): sceptic=off",
+    "ci (repo, shadowed by user): depth=minimal dims=impact,tests sceptic=basic out=none",
+    ...BUILTIN_LISTING,
+    "",
+  ].join("\n"))
 })

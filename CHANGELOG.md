@@ -53,6 +53,27 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
   `Settings:` line gains `lenses=…`. The dimension commands and
   `/loop-review` keep `auto`.
 
+- **Added — user-level and built-in lenses and profiles**
+  ([#12](https://github.com/akholod/consensus-review/issues/12)). Lenses
+  and profiles now resolve user > repo > built-in. The user layer is
+  `$XDG_CONFIG_HOME/consensus-review/{lenses,profiles}/` (else
+  `~/.config/…`): symlinks allowed, but the root, its subdirectory and each
+  file must resolve outside the reviewed repository, be owned by you or
+  root and not be group- or world-writable (rejected with a `chmod go-w`
+  hint). A user file that fails reserves its name and stops a run that
+  names it. The plugin ships `presets/`: the profiles `quick` and
+  `release` (the README values, now real) and the example lenses
+  `migrations` and `public-api`, which apply only when named in
+  `lenses=`. A repository lens that is skipped or rejected falls through
+  to the lower layer; a repository profile that exists but cannot apply
+  still stops the run, so a built-in never replaces it. Diff-only reviews
+  use the user and built-in layers. Reports show the layer (`(profile
+  quick, builtin)`, `name (…, user)`), the profile listing tags each
+  entry with its layer, and the doctor has one row per layer with its
+  resolved root. **Changed:** `profile=quick` / `profile=release` with no
+  such repository file now apply the built-in instead of stopping with
+  `no such profile`.
+
 ## 0.13.0
 
 Project lenses and profiles, simpler arguments, typed sceptic votes, a consultant cascade, run archives and retried consultants. Breaking: arguments changed; see below.

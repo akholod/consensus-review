@@ -6,7 +6,7 @@ argument-hint: "[<name> [key=value…]]"
 Create, update, print or list the review profiles that `/consensus-review profile=<name>` applies.
 All the work is done by `settings.mjs profile-edit`; you only pass the arguments through and print its output.
 
-- No arguments: list the built-in defaults, then each profile with its keys. Read-only.
+- No arguments: list the built-in defaults, then each profile with its layer (`user`, `repo`, `builtin`, and `shadowed by <layer>` when a higher one holds the name) and its keys. Read-only. User profiles (`~/.config/consensus-review/profiles/`) are edited by hand, never by this command.
 - `<name>`: print `.consensus-review/profiles/<name>.md`.
 - `<name> key=value…`: create or update that profile. `key=` (an empty value) removes the key. Only `key=value` pairs are accepted (no `deep`, `minimal` or `no-file`); the keys and values are those of `/consensus-review`.
 

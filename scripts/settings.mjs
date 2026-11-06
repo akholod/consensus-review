@@ -8,9 +8,9 @@
 //
 // `resolve` splits the file on whitespace, writes <WD>/settings.json atomically and prints it, exit
 // 0. A `profile=<name>` token leaves the profile pending: `profile`, run once the diff exists,
-// re-resolves <WD>/args.txt with the repository profile .consensus-review/profiles/<name>.md and
-// rewrites settings.json. Only a profile tracked and unchanged at HEAD, and outside the diff, is
-// applied. Any error prints the message to stderr and exits 2 with settings.json untouched.
+// re-resolves <WD>/args.txt with the profile <name> (user, else .consensus-review/profiles/<name>.md,
+// else built-in) and rewrites settings.json. A repository profile is applied only when tracked and
+// unchanged at HEAD, and outside the diff. Any error prints the message to stderr and exits 2 with settings.json untouched.
 // Precedence is flag > profile > default. `profile-edit`, the writer behind /consensus-review:profile,
 // lists the profiles (no args), prints one (`<name>`) or writes one (`<name> key=value…`); it never
 // commits.
@@ -24,7 +24,9 @@ import {
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
-import { LENS_NAME, checkSourcePath, isBranchName, parseDiff, trackedState } from "../src/loop-review/context.mjs"
+import {
+  LENS_NAME, checkSourcePath, isBranchName, layerEntries, parseDiff, readLayerFile, sourceRoots, trackedState,
+} from "../src/loop-review/context.mjs"
 import { PI_MODEL_ID } from "./lib/lanes.mjs"
 
 const USAGE = [
@@ -169,10 +171,11 @@ const renderValue = (key, value) => {
   return [...value.add.map((d) => `+${d}`), ...value.remove.map((d) => `-${d}`)].join(",")
 }
 
-const renderLines = (settings, ignored, clamped, profileName) => {
+const renderLines = (settings, ignored, clamped, profile) => {
   // An unset `base` has no default to show.
   const parts = Object.entries(settings).filter(([, { value }]) => value !== null).map(([key, { value, source }]) => {
-    const origin = source === "profile" ? `profile ${profileName}` : source
+    const layer = profile?.layer && profile.layer !== "repo" ? `, ${profile.layer}` : ""
+    const origin = source === "profile" ? `profile ${profile.name}${layer}` : source
     let note = clamped.has(key) ? `${origin}, clamped` : origin
     if (ROLE_VALUES[key] && value !== "agent") note = `${note}, requested`
     return `${key}=${renderValue(key, value)} (${note})`
@@ -197,7 +200,10 @@ const REPO_LENSES_ERROR = "lenses may only add (+name) in a repository profile"
 const repoLensesProblem = (key, value) =>
   key === "lenses" && (value === "none" || value.set || value.remove?.length) ? REPO_LENSES_ERROR : null
 
-/** A profile's raw values as parsed settings, or `{ error }` without the `profile <name>: ` prefix. */
+/**
+ * A profile's raw values as parsed settings, or `{ error }` without the `profile <name>: ` prefix.
+ * Only the repository layer is add-only for `lenses`.
+ */
 const parseProfileValues = (values, layer = "repo") => {
   const parsed = []
   for (const [rawKey, raw] of Object.entries(values)) {
@@ -225,7 +231,7 @@ export function resolveSettings(tokens, { profile = null } = {}) {
   const clamped = new Set()
 
   if (profile) {
-    const layer = parseProfileValues(profile.values)
+    const layer = parseProfileValues(profile.values, profile.layer)
     if (layer.error) return { error: `profile ${profile.name}: ${layer.error}` }
     for (const { key, value, clamped: isClamped } of layer.parsed) {
       settings[key] = { value, source: "profile" }
@@ -287,8 +293,10 @@ export function resolveSettings(tokens, { profile = null } = {}) {
     settings.base = { value: null, source: "default" }
   }
 
-  const lines = renderLines(settings, ignored, clamped, profile?.name)
-  if (profile) return { schema: 1, target, settings, ignored, profile: { name: profile.name, file: profile.file ?? null }, lines }
+  const lines = renderLines(settings, ignored, clamped, profile)
+  if (profile) {
+    return { schema: 1, target, settings, ignored, profile: { name: profile.name, layer: profile.layer ?? "repo", file: profile.file ?? null }, lines }
+  }
   if (!profileName) return { schema: 1, target, settings, ignored, profile: null, lines }
   lines.settings = `Settings: profile ${profileName} NOT APPLIED (pending)`
   return { schema: 1, target, settings, ignored, profile: { name: profileName, pending: true }, lines }
@@ -348,58 +356,116 @@ const readProfileDir = (repo) => {
   }
 }
 
-const profileNames = (entries) => entries.map((entry) => entry.slice(0, -3)).filter((name) => LENS_NAME.test(name))
+/**
+ * One user or built-in profile file: `{ name, file, layer, values }`, or `{ error }` with the
+ * unprefixed reason and where it is. The exact readdir entry, so a case-insensitive filesystem never
+ * answers for another spelling.
+ */
+const readLayerProfile = (layer, entry) => {
+  const read = readLayerFile(layer, entry, MAX_PROFILE_BYTES)
+  const parsed = read.error ? read : parseProfileFile(read.raw.toString("utf8"))
+  if (parsed.error) return { error: `${parsed.error} (${layer.layer} ${read.file})` }
+  return { name: entry.slice(0, -3), file: read.file, layer: layer.layer, values: parsed.values }
+}
 
 /**
  * The profile a run names, or `{ error }` with the literal stop message. `changed` is the diff's
- * path/oldPath set. Applied only when tracked, unchanged against HEAD and outside the diff.
+ * path/oldPath set. Layers, high to low: user, repo, built-in. A user or repo file of that name that
+ * fails a check stops the run; it never falls through. A repo profile applies only when tracked,
+ * unchanged against HEAD and outside the diff. With no `repo` (diff-only), user and built-in only.
  */
-export function loadProfile({ repo, name, changed = [] }) {
+export function loadProfile({ repo = null, name, changed = [], run, sources = {} }) {
   if (!LENS_NAME.test(name)) return { error: nameError(name) }
   const fail = (reason) => ({ error: `profile ${name}: ${reason}` })
-  const notFound = (names) => ({ error: `profile=${name}: no such profile (available: ${names.length ? names.join(", ") : "none"})` })
-  const dir = readProfileDir(repo)
-  if (dir.absent) return notFound([])
+  const entry = `${name}.md`
+  const [user, builtin] = sourceRoots({ ...sources, repo, kind: "profiles" })
+  const fromUser = layerEntries(user)
+  if (fromUser.error) return fail(`${fromUser.error} (user)`)
+  if (fromUser.entries.includes(entry)) {
+    const profile = readLayerProfile(user, entry)
+    return profile.error ? fail(profile.error) : profile
+  }
+  const dir = repo ? readProfileDir(repo) : { absent: true }
   if (dir.error) return fail(dir.error)
-  // The exact readdir entry, so a case-insensitive filesystem never answers for another spelling.
-  if (!dir.entries.includes(`${name}.md`)) return notFound(profileNames(dir.entries))
+  if (dir.entries?.includes(entry)) return loadRepoProfile({ repo, name, changed, run })
+  const fromBuiltin = layerEntries(builtin)
+  if (fromBuiltin.error) return fail(`${fromBuiltin.error} (builtin)`)
+  if (fromBuiltin.entries.includes(entry)) {
+    const profile = readLayerProfile(builtin, entry)
+    return profile.error ? fail(profile.error) : profile
+  }
+  if (!repo) return { error: `profile=${name}: needs the repository (diff-only mode)` }
+  const names = [...new Set([...fromUser.entries, ...(dir.entries ?? []), ...fromBuiltin.entries].map((e) => e.slice(0, -3)))]
+    .filter((n) => LENS_NAME.test(n)).sort()
+  return { error: `profile=${name}: no such profile (available: ${names.length ? names.join(", ") : "none"})` }
+}
+
+/** The repository profile `name`, whose file exists: today's checks, every failure a stop. */
+const loadRepoProfile = ({ repo, name, changed, run }) => {
+  const fail = (reason) => ({ error: `profile ${name}: ${reason}` })
   const file = `${PROFILE_DIR}/${name}.md`
   const problem = checkSourcePath(repo, file)
   if (problem) return fail(`${problem} (${file})`)
   const changedMessage = fail(`changed in this diff (${file}); commit it first or pass its settings as flags`)
   if (changed.includes(file)) return changedMessage
-  const tracked = trackedState(repo, file)
+  const tracked = trackedState(repo, file, undefined, run)
   if (tracked.error) return fail(tracked.error)
   if (tracked.status === "not committed") return fail(`not tracked (${file}); commit it first or pass its settings as flags`)
   const parsed = readProfile(repo, file)
   if (parsed.raw) {
-    const git = trackedState(repo, file, parsed.raw)
+    const git = trackedState(repo, file, parsed.raw, run)
     if (git.error) return fail(git.error)
     if (git.status === "modified") return changedMessage
   }
   if (parsed.error) return fail(parsed.error)
-  return { name, file, values: parsed.values }
+  return { name, file, layer: "repo", values: parsed.values }
 }
 
 /**
- * Every `*.md` in the profiles directory, for doctor and the profile listing:
- * `{ name, file, values, status, error }`. `status` is `ok`, `not committed` or `modified` (there is
- * no diff here); `error` (D15, git, size, format or a value, unprefixed) is null when it loads.
- * A directory problem is one entry with `name: null`.
+ * Every profile of every layer, user, repo, then built-in, for doctor and the profile listing:
+ * `{ name, file, layer, values, status, error, shadowedBy }`. `status` is `ok`, `not committed` or
+ * `modified` (there is no diff here); `error` (D15, git, size, format or a value, unprefixed) is
+ * null when it loads; `shadowedBy` names the higher layer holding the same name, else null. A
+ * directory problem, or an ignored layer, is one entry with `name: null`.
  */
-export function listProfiles(repo) {
-  const dir = readProfileDir(repo)
+export function listProfiles(repo, { run, sources = {} } = {}) {
+  const [user, builtin] = sourceRoots({ ...sources, repo, kind: "profiles" })
+  const fromLayer = (layer) => {
+    const listed = layerEntries(layer)
+    const problem = listed.error ?? (layer.problem !== "absent" && layer.problem)
+    if (problem) return [{ name: null, file: layer.dir, layer: layer.layer, values: null, status: null, error: problem }]
+    return listed.entries.map((entry) => {
+      const name = entry.slice(0, -3)
+      const base = { name, file: null, layer: layer.layer, values: null, status: null }
+      if (!LENS_NAME.test(name)) return { ...base, file: entry, error: "invalid name" }
+      const profile = readLayerProfile(layer, entry)
+      if (profile.error) return { ...base, error: profile.error }
+      const checked = parseProfileValues(profile.values, layer.layer)
+      return { ...base, file: profile.file, values: profile.values, status: "ok", error: checked.error ?? null }
+    })
+  }
+  const entries = [...fromLayer(user), ...listRepoProfiles(repo, run), ...fromLayer(builtin)]
+  const holder = new Map()
+  for (const entry of entries) {
+    if (entry.name && !holder.has(entry.name)) holder.set(entry.name, entry.layer)
+    entry.shadowedBy = entry.name && holder.get(entry.name) !== entry.layer ? holder.get(entry.name) : null
+  }
+  return entries
+}
+
+const listRepoProfiles = (repo, run) => {
+  const dir = repo ? readProfileDir(repo) : { absent: true }
   if (dir.absent) return []
-  if (dir.error) return [{ name: null, file: PROFILE_DIR, values: null, status: null, error: dir.error }]
+  if (dir.error) return [{ name: null, file: PROFILE_DIR, layer: "repo", values: null, status: null, error: dir.error }]
   return dir.entries.map((entry) => {
     const name = entry.slice(0, -3)
     const file = `${PROFILE_DIR}/${entry}`
-    const result = (status, error, values = null) => ({ name, file, values, status, error })
+    const result = (status, error, values = null) => ({ name, file, layer: "repo", values, status, error })
     if (!LENS_NAME.test(name)) return result(null, "invalid name")
     const problem = checkSourcePath(repo, file)
     if (problem) return result(null, `${problem} (${file})`)
     const parsed = readProfile(repo, file)
-    const git = trackedState(repo, file, parsed.raw)
+    const git = trackedState(repo, file, parsed.raw, run)
     if (git.error) return result(null, git.error)
     if (parsed.error) return result(git.status, parsed.error)
     const checked = parseProfileValues(parsed.values)
@@ -422,7 +488,7 @@ const fail = (message) => {
   return 2
 }
 
-const applyProfile = ({ wd, repo, mode }) => {
+const applyProfile = ({ wd, repo, mode, run, sources }) => {
   const argsFile = join(wd, "args.txt")
   const diffFile = join(wd, "diff.patch")
   if ((mode && mode !== "uncommitted") || !existsSync(argsFile)) return fail(USAGE)
@@ -431,10 +497,9 @@ const applyProfile = ({ wd, repo, mode }) => {
   if (pending.error) return fail(pending.error)
   if (!pending.profile) return fail("no profile=<name> in args.txt")
   const { name } = pending.profile
-  if (!repo) return fail(`profile=${name}: needs the repository (diff-only mode)`)
-  if (!existsSync(diffFile)) return fail(USAGE)
-  const changed = parseDiff(readFileSync(diffFile, "utf8")).flatMap((s) => [s.path, s.oldPath]).filter(Boolean)
-  const profile = loadProfile({ repo, name, changed })
+  if (repo && !existsSync(diffFile)) return fail(USAGE)
+  const changed = repo ? parseDiff(readFileSync(diffFile, "utf8")).flatMap((s) => [s.path, s.oldPath]).filter(Boolean) : []
+  const profile = loadProfile({ repo, name, changed, run, sources })
   if (profile.error) return fail(profile.error)
   const resolved = resolveSettings(tokens, { profile })
   if (resolved.error) return fail(resolved.error)
@@ -464,18 +529,19 @@ const splitFrontMatter = (raw) => {
   return { body: Buffer.alloc(0), hasComments }
 }
 
-const listProfileLines = (repo) => {
+const listProfileLines = (repo, sources) => {
   const defaults = Object.entries(SETTINGS).filter(([, { default: value }]) => value !== null).map(([key, { default: value }]) => `${key}=${value}`)
   const lines = [`defaults (built-in): ${defaults.join(" | ")}`]
-  const entries = listProfiles(repo)
-  if (!entries.length) lines.push(`no profiles in ${PROFILE_DIR}/`)
+  const entries = listProfiles(repo, { sources })
+  if (!entries.some((entry) => entry.layer === "repo")) lines.push(`no profiles in ${PROFILE_DIR}/`)
   for (const entry of entries) {
-    const label = entry.name ?? entry.file
+    const shadowed = entry.shadowedBy ? `, shadowed by ${entry.shadowedBy}` : ""
+    const label = entry.name ? `${entry.name} (${entry.layer}${shadowed})` : `${entry.file} (${entry.layer})`
     if (entry.error) {
       lines.push(`${label}: invalid (${entry.error})`)
       continue
     }
-    const values = new Map(parseProfileValues(entry.values).parsed.map(({ key, value }) => [key, value]))
+    const values = new Map(parseProfileValues(entry.values, entry.layer).parsed.map(({ key, value }) => [key, value]))
     const pairs = orderedPairs(values).map(([key, value]) => `${key}=${value}`)
     lines.push(`${label}: ${pairs.length ? pairs.join(" ") : "(no keys)"}`)
   }
@@ -529,11 +595,11 @@ const replaceFile = (dir, name, target, content, mode) => {
 }
 
 /** /consensus-review:profile: list (no args), print (`<name>`) or write (`<name> key=value…`). Never commits. */
-const editProfile = ({ repo, argsFile }) => {
+const editProfile = ({ repo, argsFile, sources }) => {
   const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
   if (inside.error || inside.status !== 0) return fail(`not a git repository (${repo})`)
   const tokens = readTokens(argsFile)
-  if (!tokens.length) return listProfileLines(repo)
+  if (!tokens.length) return listProfileLines(repo, sources)
   const name = tokens[0]
   if (!LENS_NAME.test(name)) return fail(nameError(name))
   const parsedUpdates = parseUpdates(tokens.slice(1))
@@ -603,7 +669,8 @@ const editProfile = ({ repo, argsFile }) => {
   return 0
 }
 
-export function main(argv) {
+/** `run` (spawnSync's shape) and `sources` (see `sourceRoots`) are injectable for tests. */
+export function main(argv, { run, sources } = {}) {
   let values
   let positionals
   try {
@@ -622,10 +689,12 @@ export function main(argv) {
   const file = values["args-file"]
   if (positionals[0] === "profile-edit") {
     if (!values.repo || !existsSync(values.repo) || !file || !existsSync(file)) return fail(USAGE)
-    return editProfile({ repo: values.repo, argsFile: file })
+    return editProfile({ repo: values.repo, argsFile: file, sources })
   }
   if (!values.wd || !existsSync(values.wd)) return fail(USAGE)
-  if (positionals[0] === "profile") return applyProfile({ wd: values.wd, repo: values.repo ?? null, mode: values.mode ?? null })
+  if (positionals[0] === "profile") {
+    return applyProfile({ wd: values.wd, repo: values.repo ?? null, mode: values.mode ?? null, run, sources })
+  }
   if (positionals[0] !== "resolve" || !file || !existsSync(file)) return fail(USAGE)
   const resolved = resolveSettings(readTokens(file))
   if (resolved.error) return fail(resolved.error)

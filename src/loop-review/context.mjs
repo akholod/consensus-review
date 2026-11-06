@@ -4,9 +4,10 @@
 // Nothing here reasons about code — it only decides what the model is allowed to see.
 
 import { execFileSync, spawnSync } from "node:child_process"
-import { readFileSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs"
+import { readFileSync, existsSync, lstatSync, readdirSync, realpathSync, statSync } from "node:fs"
 import { createHash } from "node:crypto"
-import { join } from "node:path"
+import { isAbsolute, join, resolve, sep } from "node:path"
+import { fileURLToPath } from "node:url"
 import { SURFACE, RISK, HIGH_RISK, makeCell } from "./schema.mjs"
 
 const MAX_ORIGINAL_LINES = 10_000
@@ -604,18 +605,142 @@ export function loadLenses(repo, run) {
     if (skip) { skipped.push({ name, file, reason: skip }); continue }
     const lens = parseLensFile(raw.toString("utf8"))
     if (lens.error) { rejected.push({ file, reason: lens.error }); continue }
-    lenses.push({
-      name,
-      text: lens.body,
-      include: lens.include,
-      exclude: lens.exclude,
-      source: "lens",
-      dimension: lens.dimension,
-      file,
-      ignoredKeys: lens.ignoredKeys,
-    })
+    lenses.push(lensRecord(name, file, "repo", lens))
   }
   return { lenses, rejected, skipped }
+}
+
+const lensRecord = (name, file, layer, lens) => ({
+  name,
+  text: lens.body,
+  include: lens.include,
+  exclude: lens.exclude,
+  source: "lens",
+  dimension: lens.dimension,
+  file,
+  layer,
+  ignoredKeys: lens.ignoredKeys,
+})
+
+const PLUGIN_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const realOrNull = (path) => {
+  try {
+    return realpathSync(path)
+  } catch {
+    return null
+  }
+}
+const isInside = (path, root) => path === root || path.startsWith(`${root}${sep}`)
+
+/** A user-layer path's ownership problem, or null: owned by you or root, and not group- or world-writable. */
+const ownerProblem = (st, uid, path) => {
+  if (st.uid !== uid && st.uid !== 0) return `not owned by you or root (${path})`
+  const writable = st.mode & 0o002 ? "world-writable" : st.mode & 0o020 ? "group-writable" : null
+  return writable && `${writable} (${path}); fix with chmod go-w ${path}`
+}
+
+/**
+ * The user and built-in layers of one kind (`lenses` or `profiles`), highest first: each `{ layer,
+ * root, dir, problem, failure }`. `problem` is null when `dir` may be listed, `absent` when there is
+ * nothing, else why the whole layer is ignored. The user root is `$XDG_CONFIG_HOME/consensus-review`,
+ * else `~/.config/consensus-review`; it and `dir` must resolve outside the reviewed repository (else
+ * ignored), be owned by you or root and not be group- or world-writable (no ancestor walk). That
+ * ownership `failure` still lists the files, and each one fails with it: a user failure reserves
+ * its names instead of falling through to a lower layer. The built-in root
+ * `<plugin>/presets` must resolve outside the reviewed repository. `env`, `pluginRoot`, `uid` and
+ * `stat` are injectable for tests.
+ */
+export function sourceRoots({ repo = null, kind, env = process.env, pluginRoot = PLUGIN_ROOT, uid = process.getuid?.() ?? null, stat = statSync }) {
+  const repoReal = repo ? realOrNull(repo) ?? resolve(repo) : null
+  const outside = (path) => {
+    const real = realOrNull(path)
+    if (!real) return { problem: "absent" }
+    if (repoReal && isInside(real, repoReal)) return { problem: `inside the reviewed repository (${path})` }
+    return { real }
+  }
+  const xdg = env.XDG_CONFIG_HOME && isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : null
+  const base = xdg ?? (env.HOME ? join(env.HOME, ".config") : null)
+  const userRoot = base && join(base, "consensus-review")
+  const user = {
+    layer: "user", root: userRoot, dir: userRoot && join(userRoot, kind), problem: null, failure: null, home: env.HOME, uid, stat, repoReal,
+  }
+  if (uid === null) user.problem = "no user id on this platform"
+  else if (!userRoot) user.problem = "no HOME or XDG_CONFIG_HOME"
+  for (const path of user.problem ? [] : [user.root, user.dir]) {
+    const found = outside(path)
+    if (found.problem) { user.problem = found.problem; break }
+    const st = stat(found.real)
+    if (!st.isDirectory()) { user.problem = `not a directory (${path})`; break }
+    const failure = ownerProblem(st, uid, path)
+    if (failure) user.failure ??= failure
+  }
+  const builtinRoot = join(pluginRoot, "presets")
+  const builtin = { layer: "builtin", root: builtinRoot, dir: join(builtinRoot, kind), problem: null, failure: null, stat: statSync, repoReal }
+  builtin.problem = outside(builtin.dir).problem ?? null
+  return [user, builtin]
+}
+
+/** The sorted `*.md` entries of a usable layer: `{ entries }` or `{ error }`. */
+export function layerEntries(layer) {
+  if (layer.problem) return { entries: [] }
+  try {
+    return { entries: readdirSync(layer.dir).filter((entry) => entry.endsWith(".md")).sort() }
+  } catch (error) {
+    return { error: `${String(error.code ?? error.message)} (${layer.dir})` }
+  }
+}
+
+/** How a layer file is named in reports: `~/…` for the user layer, `builtin:<kind>/x.md`. */
+const layerFileName = (layer, entry) => {
+  const path = join(layer.dir, entry)
+  if (layer.layer === "builtin") return `builtin:${path.slice(layer.root.length + 1)}`
+  return layer.home && isInside(path, layer.home) ? `~${path.slice(layer.home.length)}` : path
+}
+
+/**
+ * Check, then read, one file of a user or built-in layer: `{ file, raw }` or `{ file, error }`.
+ * Symlinks are resolved first; the target must be a regular file outside the reviewed repository,
+ * and in the user layer owned by you or root and not group- or world-writable.
+ */
+export function readLayerFile(layer, entry, maxBytes) {
+  const file = layerFileName(layer, entry)
+  if (layer.failure) return { file, error: layer.failure }
+  const path = join(layer.dir, entry)
+  const real = realOrNull(path)
+  if (!real) return { file, error: "dangling symlink" }
+  if (layer.repoReal && isInside(real, layer.repoReal)) return { file, error: "inside the reviewed repository" }
+  let raw
+  try {
+    const st = layer.stat(real)
+    if (!st.isFile()) return { file, error: "not a regular file" }
+    const problem = layer.layer === "user" && ownerProblem(st, layer.uid, path)
+    if (problem) return { file, error: problem }
+    if (st.size > maxBytes) return { file, error: `too large (over ${maxBytes} bytes)` }
+    raw = readFileSync(real)
+  } catch (error) {
+    return { file, error: String(error.code ?? error.message) }
+  }
+  if (raw.length > maxBytes) return { file, error: `too large (over ${maxBytes} bytes)` }
+  return { file, raw }
+}
+
+/** The lenses of one user or built-in layer: `{ lenses, rejected }`, each rejection with its name and layer. */
+export function loadLayerLenses(layer) {
+  const lenses = []
+  const rejected = []
+  const listed = layerEntries(layer)
+  if (listed.error) return { lenses, rejected: [{ name: null, file: layer.dir, layer: layer.layer, reason: listed.error }] }
+  for (const entry of listed.entries) {
+    const name = entry.slice(0, -3)
+    const read = readLayerFile(layer, entry, MAX_LENS_BYTES)
+    const reject = (reason) => rejected.push({ name: LENS_NAME.test(name) ? name : null, file: read.file, layer: layer.layer, reason })
+    if (!LENS_NAME.test(name)) { reject("invalid name"); continue }
+    if (read.error) { reject(read.error); continue }
+    const lens = parseLensFile(read.raw.toString("utf8"))
+    if (lens.error) { reject(lens.error); continue }
+    lenses.push(lensRecord(name, read.file, layer.layer, lens))
+  }
+  return { lenses, rejected }
 }
 
 const escapeAttr = (value) => String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")

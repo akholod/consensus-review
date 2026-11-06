@@ -1,13 +1,14 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   parseDiff, changedLines, classify, risksFor, deriveCells, isTrivial, isHighRisk,
   fnmatch, parseInstructionsYaml, instructionMatches, touchesHighRisk, buildContext,
   diffHash, buildStaticPrefix, parseLensFile, loadLenses, loadInstructionFile, renderInstructions,
+  sourceRoots, readLayerFile, loadLayerLenses,
 } from "../../src/loop-review/context.mjs"
 import { SURFACE, RISK } from "../../src/loop-review/schema.mjs"
 
@@ -489,7 +490,7 @@ test("loadLenses loads a valid lens with its record shape", () => {
     const { text, ...rest } = lenses[0]
     assert.deepEqual(rest, {
       name: "payments", include: ["src/payments/**"], exclude: ["src/payments/fixtures/**"],
-      source: "lens", dimension: "impact", file: ".consensus-review/lenses/payments.md", ignoredKeys: [],
+      source: "lens", dimension: "impact", file: ".consensus-review/lenses/payments.md", layer: "repo", ignoredKeys: [],
     })
     assert.ok(text.startsWith("- Every charge path"))
   })
@@ -663,4 +664,110 @@ test("renderInstructions adds dimension only when set, and sorts by name", () =>
   assert.doesNotMatch(renderInstructions([item()]), /dimension=/)
   const names = renderInstructions([item({ name: "b" }), item({ name: "a" })]).match(/name="(\w)"/g)
   assert.deepEqual(names, ['name="a"', 'name="b"'])
+})
+
+// ---------------------------------------------------------------------------------------------
+// User and built-in layers (#12 item 2, stage 5): the trust table of .omc/plans/issue-12-followups.md
+// ---------------------------------------------------------------------------------------------
+
+const VALID_LENS = "---\npaths: [src/**]\n---\n- check it\n"
+
+/** A user root under a fresh XDG dir with lenses/x.md at `mode`; the reviewed repo is a sibling. */
+function withUserLayer(fn, { mode = 0o644, text = VALID_LENS } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "layers-"))
+  try {
+    const xdg = join(dir, "xdg")
+    const lenses = join(xdg, "consensus-review/lenses")
+    mkdirSync(lenses, { recursive: true, mode: 0o755 })
+    chmodSync(join(xdg, "consensus-review"), 0o755)
+    chmodSync(lenses, 0o755)
+    writeFileSync(join(lenses, "x.md"), text)
+    chmodSync(join(lenses, "x.md"), mode)
+    mkdirSync(join(dir, "repo"))
+    return fn({ dir, xdg, lenses, repo: join(dir, "repo"), env: { XDG_CONFIG_HOME: xdg, HOME: join(dir, "home") } })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+const userLayer = (options) => sourceRoots({ kind: "lenses", ...options })[0]
+
+test("layers: the user root is $XDG_CONFIG_HOME/consensus-review, else ~/.config; a relative XDG is ignored", () => {
+  const uid = process.getuid()
+  assert.equal(userLayer({ env: { XDG_CONFIG_HOME: "/x/cfg", HOME: "/h" }, uid }).root, "/x/cfg/consensus-review")
+  assert.equal(userLayer({ env: { HOME: "/h" }, uid }).root, "/h/.config/consensus-review")
+  assert.equal(userLayer({ env: { XDG_CONFIG_HOME: "rel", HOME: "/h" }, uid }).root, "/h/.config/consensus-review")
+  assert.equal(userLayer({ env: { XDG_CONFIG_HOME: "/x/cfg", HOME: "/h" }, uid }).dir, "/x/cfg/consensus-review/lenses")
+})
+
+test("layers: a 0644 user lens loads with layer user; with no getuid the layer is ignored", () => {
+  withUserLayer(({ repo, env, lenses }) => {
+    const layer = userLayer({ repo, env, uid: process.getuid() })
+    assert.equal(layer.problem, null)
+    const loaded = loadLayerLenses(layer)
+    assert.deepEqual(loaded.rejected, [])
+    assert.deepEqual(loaded.lenses.map((l) => [l.name, l.layer, l.file]), [["x", "user", join(lenses, "x.md")]])
+    assert.equal(userLayer({ repo, env, uid: null }).problem, "no user id on this platform")
+  })
+})
+
+for (const [mode, word] of [[0o664, "group-writable"], [0o666, "world-writable"]]) {
+  test(`layers: a ${mode.toString(8)} user lens is rejected ${word}, with the chmod go-w hint`, () => {
+    withUserLayer(({ repo, env, lenses }) => {
+      const read = readLayerFile(userLayer({ repo, env, uid: process.getuid() }), "x.md", 8192)
+      const path = join(lenses, "x.md")
+      assert.equal(read.error, `${word} (${path}); fix with chmod go-w ${path}`)
+    }, { mode })
+  })
+}
+
+test("layers: a 0775 layer root reserves every name it holds with the root's reason", () => {
+  withUserLayer(({ repo, env, xdg }) => {
+    const root = join(xdg, "consensus-review")
+    chmodSync(root, 0o775)
+    const layer = userLayer({ repo, env, uid: process.getuid() })
+    assert.equal(layer.failure, `group-writable (${root}); fix with chmod go-w ${root}`)
+    assert.deepEqual(loadLayerLenses(layer).rejected.map((r) => [r.name, r.layer, r.reason]), [["x", "user", layer.failure]])
+  })
+})
+
+test("layers: a file owned by another user is rejected; a 0444 file owned by root is accepted", () => {
+  withUserLayer(({ repo, env, lenses }) => {
+    const path = join(lenses, "x.md")
+    const root = join(env.XDG_CONFIG_HOME, "consensus-review")
+    // An injected getuid of uid+1: the root (ours) fails first, and so every file in it.
+    const asOther = readLayerFile(userLayer({ repo, env, uid: process.getuid() + 1 }), "x.md", 8192)
+    assert.equal(asOther.error, `not owned by you or root (${root})`)
+    const foreign = (p) => {
+      const st = statSync(p)
+      return p === path ? { uid: process.getuid() + 1, mode: 0o100644, size: st.size, isFile: () => true, isDirectory: () => false } : st
+    }
+    const read0 = readLayerFile(userLayer({ repo, env, uid: process.getuid(), stat: foreign }), "x.md", 8192)
+    assert.equal(read0.error, `not owned by you or root (${path})`)
+    // Nix-store shape: the file is root:root 0444; the directories stay ours.
+    const stat = (p) => {
+      const st = statSync(p)
+      return p === path ? { uid: 0, mode: 0o100444, size: st.size, isFile: () => true, isDirectory: () => false } : st
+    }
+    const read = readLayerFile(userLayer({ repo, env, uid: process.getuid(), stat }), "x.md", 8192)
+    assert.equal(read.error, undefined)
+    assert.equal(read.raw.toString(), VALID_LENS)
+  })
+})
+
+test("layers: a user root symlinked into the reviewed repository is ignored", () => {
+  withUserLayer(({ dir, repo }) => {
+    mkdirSync(join(repo, "cfg/consensus-review/lenses"), { recursive: true })
+    symlinkSync(join(repo, "cfg"), join(dir, "linked"))
+    const layer = userLayer({ repo, env: { XDG_CONFIG_HOME: join(dir, "linked") }, uid: process.getuid() })
+    assert.equal(layer.problem, `inside the reviewed repository (${join(dir, "linked/consensus-review")})`)
+  })
+})
+
+test("layers: the built-in layer is ignored when the plugin root is inside the reviewed repository", () => {
+  withUserLayer(({ repo }) => {
+    mkdirSync(join(repo, "presets/lenses"), { recursive: true })
+    const builtin = sourceRoots({ repo, kind: "lenses", env: {}, pluginRoot: repo })[1]
+    assert.equal(builtin.problem, `inside the reviewed repository (${join(repo, "presets/lenses")})`)
+    assert.equal(sourceRoots({ repo: null, kind: "lenses", env: {}, pluginRoot: repo })[1].problem, null)
+  })
 })

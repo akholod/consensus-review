@@ -2,7 +2,7 @@
 // PATH (test/fixtures/fake-lane.mjs). T=1 throughout; the time bounds come from the plan's
 // arithmetic table plus a generous margin for process start-up.
 
-import { test } from "node:test"
+import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
@@ -12,6 +12,10 @@ import { validStatus } from "../../scripts/lib/lanes.mjs"
 import { makeReadHeadFile } from "../../scripts/lib/quote-check.mjs"
 import { buildVerifyCitation } from "../../scripts/run-lane.mjs"
 import { planLenses } from "../../scripts/lenses.mjs"
+
+// The user lens and profile layer comes from $XDG_CONFIG_HOME: an empty one, so ~/.config never leaks in.
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "xdg-"))
+after(() => rmSync(process.env.XDG_CONFIG_HOME, { recursive: true, force: true }))
 
 const ROOT = new URL("../..", import.meta.url).pathname
 const HELPER = join(ROOT, "scripts/run-lane.mjs")

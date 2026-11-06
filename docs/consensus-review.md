@@ -418,7 +418,8 @@ skipped as `changed in this diff`. So a change cannot add or edit its own
 lens, not even by adding a `.gitignore` entry that hides it. If git
 cannot run the check, `lenses.mjs select` exits 2 and the review stops.
 A symlink anywhere on the path, or a file that is not a regular file, is
-rejected. A diff-only review has no checkout and applies none.
+rejected. A diff-only review has no checkout and applies no repository
+lens (user and built-in lenses still apply; see below).
 
 Residual risk: in uncommitted mode, a lens committed earlier on the
 current branch is applied, since `HEAD` already holds it.
@@ -450,6 +451,63 @@ path, a glob) runs without lenses. They fail open: an error in the lens
 helper, a failed git check included, is a `helper error: …` note and a
 review without lenses, since these commands are advisory.
 
+### User and built-in lenses
+
+Lenses and profiles come from three layers, highest first:
+
+| Layer | Where | Lenses apply | Profiles |
+|---|---|---|---|
+| user | `$XDG_CONFIG_HOME/consensus-review/{lenses,profiles}/`, else `~/.config/consensus-review/…` | by globs, like repository lenses | yes |
+| repo | `.consensus-review/{lenses,profiles}/` | by globs | yes; `lenses` may only add |
+| built-in | the plugin's `presets/{lenses,profiles}/` | only when named in `lenses=` | `quick`, `release`, by `profile=` |
+
+The built-in lenses are examples: `migrations` (impact: expand/contract,
+locks, down steps) and `public-api` (architecture: breaking exports,
+endpoints and defaults). `lenses=+migrations` applies one; `lenses=auto`
+never does. A diff-only review (a public PR fetched by URL) uses the user
+and built-in layers only.
+
+**Names.** For each name the highest layer with a file wins, and a lower
+file of that name is reported `shadowed by <layer>`:
+
+- A user file that fails a check or does not parse **reserves** the name:
+  no lower layer takes it, and a run that names it in `lenses=` stops. You
+  own those bytes; fix them.
+- A repository lens that is skipped (`changed in this diff`, `not
+  committed`) or rejected does **not** reserve the name, so a diff that
+  adds or edits a repo `migrations.md` cannot remove the built-in
+  `migrations` you named. A lens only adds checks, so this is safe.
+- A git failure in the tracked check stops the run; it never falls
+  through to a lower layer.
+- A name in `lenses=` with no valid source in any layer stops the run:
+  `lenses=x: no valid source (user: …; repo: …)`.
+
+**Trust.** Who can change the bytes decides the check:
+
+| | repo | user | built-in |
+|---|---|---|---|
+| Who can change them | the change under review | you | the plugin release |
+| Check | no symlink on the path; tracked, equal to `HEAD`, not in the diff | below | resolves outside the reviewed repository |
+
+The user check, and nothing more: the layer root and its `lenses/` or
+`profiles/` directory, and each file, resolve (symlinks followed, so stow,
+chezmoi and home-manager work) to a path outside the reviewed repository,
+are owned by you or by root, and are neither group- nor world-writable
+(`mode & 022`). A file that fails is rejected with the reason and a
+`chmod go-w <path>` hint; a group-writable root rejects every file in it
+(with a umask of `002`, run `chmod go-w` on the directories you created).
+Ancestor directories are not checked, as git trusts `~/.gitconfig`;
+root-owned read-only files (the Nix store) pass. A root that resolves
+inside the reviewed repository, or a platform without user ids
+(Windows), ignores the user layer. Reviewing the plugin from its own
+checkout ignores the built-in layer for the same reason.
+
+Caps, parsing, escaping, the preamble and the budget are the same in every
+layer. The `Lenses:` line shows a non-repository lens as
+`name (<dim>; <n> files, user)` or `…, builtin)`, and `lenses.json` has
+`layer` on each selected lens and a `layers` list with each root and why
+it was ignored.
+
 ### Selecting lenses: `lenses=`
 
 `lenses=auto` (the default) applies every lens whose globs match.
@@ -476,15 +534,19 @@ value whole. The dimension commands and `/loop-review` always use `auto`.
 
 `/consensus-review:doctor` lists the lenses it finds and warns about
 rejected files, files `not committed` or `modified` against `HEAD`,
-ignored keys and globs that match no tracked file.
+ignored keys and globs that match no tracked file. Its `sources` section
+has one row per user and built-in layer with the resolved root (which a
+direnv-set `XDG_CONFIG_HOME` changes), whether it is used or ignored and
+why, and the names reserved or shadowed.
 
-Not supported yet: lenses in `~/.config`, built-in lenses, an
-`init-lenses` command, a severity hint.
+Not supported yet: an `init-lenses` command, a severity hint.
 
 ## Profiles
 
-A profile is a named set of settings kept in the repository, one
-Markdown file each, chosen with `profile=<name>`:
+A profile is a named set of settings, one Markdown file each, chosen with
+`profile=<name>`. It is looked up in the user layer
+(`~/.config/consensus-review/profiles/`), then the repository, then the
+built-in profiles (see [User and built-in lenses](#user-and-built-in-lenses)):
 
 ```text
 .consensus-review/profiles/release.md
@@ -528,8 +590,18 @@ value whole (`dims=-quality` replaces the profile's `dims`). One profile
 per run; a second `profile=` wins and the first goes to `Ignored args`.
 There is no implicit default profile.
 
+**Built-in profiles.** `quick` (`depth: minimal`, `dims: +quality`,
+`sceptic: basic`, `effort: verifier:medium,impact:medium`) and `release`
+(the example above) ship with the plugin. One applies only when neither
+your user layer nor the repository has a file of that name: a repository
+`quick.md` that is changed, untracked or malformed stops the run and never
+falls back to the built-in, so a diff cannot swap a strict repository
+profile for a weaker built-in one. A user profile that fails a check
+stops the run too. A user profile may use any `lenses` value.
+
 **Visible.** Every value a profile sets shows `(profile <name>)` on the
-`Settings:` line, for example `sceptic=off (profile ci)`. A profile may
+`Settings:` line, for example `sceptic=off (profile ci)`, or
+`(profile quick, builtin)` / `(profile x, user)` for the other layers. A profile may
 weaken a review (fewer lanes, `sceptic=off`); it can change only what
 flags can change, and the severity bars stay.
 
@@ -544,7 +616,7 @@ defaults:
 - an untracked profile, an ignored one included: `not tracked`;
 - a symlink anywhere on the path, or a file that is not a regular file;
 - a malformed file, a bad value, an unknown name (the message lists the available profiles);
-- diff-only mode, which has no checkout to read a profile from;
+- in diff-only mode, a name with no user or built-in profile: `needs the repository`;
 - a git error during the check: `git check failed`.
 
 To use an edited profile, commit it first, or pass its settings as flags.
@@ -552,13 +624,14 @@ In PR mode the profile is read from your local checkout and must match
 its `HEAD`: a profile you edited locally stops the run, even when the PR
 does not touch it.
 
-`/consensus-review:doctor` lists the profiles with their keys and warns
-about one that would stop a run.
+`/consensus-review:doctor` lists the repository and user profiles with
+their keys and warns about one that would stop a run.
 
 ### Writing profiles: `/consensus-review:profile`
 
 `/consensus-review:profile` is the only command that writes, and it
-writes only `.consensus-review/profiles/<name>.md`. It never commits.
+writes only `.consensus-review/profiles/<name>.md`, a repository profile.
+It never commits. User profiles are files you edit yourself.
 
 ```text
 /consensus-review:profile quick depth=minimal dims=+quality sceptic=basic effort=verifier:medium,impact:medium
@@ -592,7 +665,7 @@ Not applied until committed: git add -- .consensus-review/profiles/quick.md && g
 - Every value is checked as a flag would be and stored in its canonical form (`sceptic=BASIC` → `basic`, `timeout=5000` → `1800`). The keys are rewritten in settings order; comments in the front matter are dropped (the output says so); the body is kept byte for byte.
 - An existing file that does not parse is never overwritten: `profile <name>: <error>; fix or delete the file`. A symlink anywhere on the path stops it too.
 - The file is replaced atomically and keeps its mode; a new file is created `0644`, less your umask.
-- `/consensus-review:profile <name>` prints a profile; with no arguments it lists the built-in defaults on the first line, then each profile with its keys (an invalid one as `<name>: invalid (<error>)`). To delete a profile, use `git rm`.
+- `/consensus-review:profile <name>` prints a profile; with no arguments it lists the built-in defaults on the first line, then each profile of every layer, user, repo, then built-in, with its keys, as `<name> (<layer>): …` (`<name> (builtin, shadowed by repo): …` when a higher layer holds the name; an invalid one as `<name> (<layer>): invalid (<error>)`). To delete a profile, use `git rm`.
 
 The defaults are shown in two places: the `Settings:` line of a report
 and the first line of the `/consensus-review:profile` listing. No default

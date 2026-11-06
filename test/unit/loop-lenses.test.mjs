@@ -9,6 +9,12 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+// The user lens and profile layer comes from $XDG_CONFIG_HOME: an empty one, so ~/.config never leaks in.
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "xdg-"))
+after(() => rmSync(process.env.XDG_CONFIG_HOME, { recursive: true, force: true }))
+
+import { lensesLine } from "../../src/loop-review/report.mjs"
+
 const BIN = new URL("../../bin/loop-review.mjs", import.meta.url).pathname
 const GIT = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim()
 const temps = []
@@ -138,4 +144,14 @@ test("loop-review --pr of this repository names the checkout its lenses came fro
   assert.ok(report, r.stderr) // the run finished (a budget-capped run exits 2 as ESCALATE)
   assert.equal(JSON.parse(r.stdout).lenses.source.checkout, sha)
   assert.ok(report.includes(`| repo lenses from checkout ${sha}`), report)
+})
+
+test("the Lenses line tags user and built-in lenses with their layer, and names an ignored layer", () => {
+  const lens = (name, layer) => ({ name, dimension: null, layer, files: ["a.js"] })
+  const plan = {
+    selected: [lens("money", "repo"), lens("mine", "user"), lens("migrations", "builtin")], skipped: [], rejected: [], note: null,
+    layers: [{ layer: "user", problem: "inside the reviewed repository (/r/cfg)" }, { layer: "builtin", problem: "absent" }],
+  }
+  assert.equal(lensesLine(plan),
+    "Lenses: money (all; 1 files), mine (all; 1 files, user), migrations (all; 1 files, builtin) | user lenses ignored: inside the reviewed repository (/r/cfg)")
 })

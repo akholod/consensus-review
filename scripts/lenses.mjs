@@ -8,7 +8,8 @@
 // Reads $WD/diff.patch, writes $WD/lenses.json plus one lenses-<target>.md per target that got a
 // lens, and prints `{"outputs":{…},"selected":n,"skipped":n,"rejected":n}`. Every content outcome
 // exits 0; a usage error, or a git check that cannot run (fail closed), exits 2. A repository
-// source applies only when it is tracked and unchanged at HEAD.
+// source applies only when it is tracked and unchanged at HEAD. Lenses come from three layers,
+// user > repo > built-in (`sourceRoots`); a built-in lens applies only when `lenses=` names it.
 //
 // `standalone` serves the four dimension commands: run in the caller's cwd, it writes the diff to a
 // fresh temp WD, runs the same select, and prints `{"wd":…,"lensFile":…|null,"note":…}`. It
@@ -21,8 +22,8 @@ import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import {
-  checkSourcePath, instructionMatches, loadInstructionFile, loadLenses, originRepo, parseDiff, parseScope,
-  renderInstructions, resolveTarget, trackedSkip,
+  checkSourcePath, instructionMatches, loadInstructionFile, loadLayerLenses, loadLenses, originRepo, parseDiff, parseScope,
+  renderInstructions, resolveTarget, sourceRoots, trackedSkip,
 } from "../src/loop-review/context.mjs"
 
 const OPTIONS = {
@@ -58,21 +59,23 @@ const renderLensFile = (items, withTrailer) => {
  * never reach here). Admission is one budget checked against the consultant file, which is the
  * superset of every per-dimension file, so no lens is selected for one lane and skipped for another.
  */
-export function planLenses({ records, rejected = [], skipped: loadSkipped = [], d5Paths, matchPaths, dims, wanted = null }) {
+export function planLenses({ records, rejected = [], skipped: loadSkipped = [], d5Paths, matchPaths, dims, wanted = null, reserved = [] }) {
   const skipped = [...loadSkipped]
-  const seen = new Set()
+  // The layer holding each name: records come user, repo, built-in; a rejected user lens reserves its name.
+  const seen = new Map(reserved.map((name) => [name, "user"]))
   const candidates = []
-  // D5 before duplicates, so a changed item cannot take a name from an unchanged lens.
+  // D5 before duplicates, so a changed item cannot take a name from an unchanged lens or a lower layer.
   for (const record of records) {
-    if (d5Paths.includes(record.file)) {
+    if (record.layer === "repo" && d5Paths.includes(record.file)) {
       skipped.push({ name: record.name, file: record.file, reason: "changed in this diff" })
       continue
     }
     if (seen.has(record.name)) {
-      skipped.push({ name: record.name, file: record.file, reason: "duplicate name" })
+      const holder = seen.get(record.name)
+      skipped.push({ name: record.name, file: record.file, reason: holder === record.layer ? "duplicate name" : `shadowed by ${holder}` })
       continue
     }
-    seen.add(record.name)
+    seen.set(record.name, record.layer)
     if (wanted && !wanted.has(record.name)) {
       skipped.push({ name: record.name, file: record.file, reason: "not in lenses=" })
       continue
@@ -114,6 +117,7 @@ export function planLenses({ records, rejected = [], skipped: loadSkipped = [], 
       dimension: lens.dimension,
       source: lens.source,
       file: lens.file,
+      layer: lens.layer,
       files: lens.files,
       targets: lens.dimension ? [lens.dimension, "consultant"] : [...dims, "consultant"],
     })),
@@ -155,7 +159,7 @@ export function loadRecords(repo, run) {
     const skip = trackedSkip(repo, file, raw, run)
     if (skip) { skipped.push({ name: file, file, reason: skip }); continue }
     for (const item of loadInstructionFile(join(repo, file), kind, raw.toString("utf8"))) {
-      records.push({ ...item, dimension: null, file, ignoredKeys: [] })
+      records.push({ ...item, dimension: null, file, layer: "repo", ignoredKeys: [] })
     }
   }
   const lenses = loadLenses(repo, run)
@@ -166,25 +170,49 @@ export function loadRecords(repo, run) {
   }
 }
 
+/**
+ * Every lens source, records in layer order user > repo > built-in: the repository's (`repo` null:
+ * none) between the user and the built-in layers. `layers` is each non-repo layer's `{ layer, root,
+ * problem }`. `sources` (`env`, `pluginRoot`, `uid`, `stat`) is injectable for tests.
+ */
+export function loadSources({ repo = null, run, sources = {} }) {
+  const [user, builtin] = sourceRoots({ ...sources, repo, kind: "lenses" })
+  const fromUser = loadLayerLenses(user)
+  const fromRepo = repo ? loadRecords(repo, run) : { records: [], rejected: [], skipped: [] }
+  const fromBuiltin = loadLayerLenses(builtin)
+  return {
+    records: [...fromUser.lenses, ...fromRepo.records, ...fromBuiltin.lenses],
+    rejected: [...fromUser.rejected, ...fromRepo.rejected, ...fromBuiltin.rejected],
+    skipped: fromRepo.skipped,
+    layers: [user, builtin].map(({ layer, root, problem }) => ({ layer, root, problem })),
+  }
+}
+
 const LENS_FILE = /^\.consensus-review\/lenses\/([^/]+)\.md$/
+
+/** The names of rejected user lenses: each reserves its name, so no lower layer takes it. */
+const reservedNames = (rejected) => rejected.filter((r) => r.layer === "user" && r.name).map((r) => r.name)
 
 /**
  * The names `lensesSetting` keeps (null: all), after checking every name it gives. An unknown name,
- * or a named lens with no valid source (D5, not committed, modified, rejected), throws: a lens the
- * reviewer asked for never silently goes missing. Globs, dimension and budget still gate after this.
+ * a named lens with no valid source in any layer (D5, not committed, modified, rejected), or one a
+ * rejected user lens reserves, throws: a lens the reviewer asked for never silently goes missing.
+ * Globs, dimension and budget still gate after this.
  */
 const wantedNames = (lensesSetting, { records, rejected, skipped }, d5Paths) => {
   if (lensesSetting === "auto") return null
   if (lensesSetting === "none") return new Set()
-  const valid = new Set(records.filter((r) => !d5Paths.includes(r.file)).map((r) => r.name))
+  const changed = (r) => r.layer === "repo" && d5Paths.includes(r.file)
+  const reserved = new Set(reservedNames(rejected))
+  const valid = new Set(records.filter((r) => !changed(r) && !reserved.has(r.name)).map((r) => r.name))
   const reasons = new Map()
-  const note = (name, reason) => reasons.set(name, [...(reasons.get(name) ?? []), `repo: ${reason}`])
-  for (const r of records) if (d5Paths.includes(r.file)) note(r.name, "changed in this diff")
+  const note = (name, layer, reason) => reasons.set(name, [...(reasons.get(name) ?? []), `${layer}: ${reason}`])
   // A skipped legacy file is named by its path, not by its items.
-  for (const s of skipped) if (s.name !== s.file) note(s.name, s.reason)
+  for (const s of skipped) if (s.name !== s.file) note(s.name, "repo", s.reason)
+  for (const r of records) if (changed(r)) note(r.name, "repo", "changed in this diff")
   for (const r of rejected) {
-    const name = r.file.match(LENS_FILE)?.[1]
-    if (name) note(name, r.reason)
+    const name = r.layer ? r.name : r.file.match(LENS_FILE)?.[1]
+    if (name) note(name, r.layer ?? "repo", r.reason)
   }
   const known = new Set([...records.map((r) => r.name), ...reasons.keys()])
   const available = [...known].sort()
@@ -195,7 +223,8 @@ const wantedNames = (lensesSetting, { records, rejected, skipped }, d5Paths) => 
   for (const name of lensesSetting.set ?? lensesSetting.add) {
     if (!valid.has(name)) throw new Error(`lenses=${name}: no valid source (${[...new Set(reasons.get(name))].join("; ")})`)
   }
-  // Relative: the default set is every repository lens, so `+name` only checks the name here.
+  // Relative: the default set is every user and repository lens (built-ins only when named), so
+  // `+name` only checks the name here.
   if (lensesSetting.set) return new Set(lensesSetting.set)
   return new Set([...known].filter((name) => !lensesSetting.remove.includes(name)))
 }
@@ -206,32 +235,31 @@ const wantedNames = (lensesSetting, { records, rejected, skipped }, d5Paths) => 
  * `lensesSetting` is the `lenses` setting value (`auto`, `none`, `{ set }` or `{ add, remove }`).
  * Throws on a git failure and on a named lens that is unknown or has no valid source.
  */
-export function selectLenses({ repo = null, diffText, mode = null, dims, lensesSetting = "auto", run = spawnSync }) {
+export function selectLenses({ repo = null, diffText, mode = null, dims, lensesSetting = "auto", run = spawnSync, sources = {} }) {
   const sections = parseDiff(diffText)
   const root = repo ? resolve(repo) : null
-  let plan
+  // Unfiltered on purpose: the working tree's .gitattributes could otherwise mark a lens the
+  // change adds as generated and so hide it from this check. Untracked files need no entry
+  // here: tracked-only skips them, which a .gitignore the diff adds cannot hide.
+  const d5Paths = root ? sections.flatMap((s) => [s.path, s.oldPath]).filter(Boolean) : []
+  const untracked = root && mode === "uncommitted" ? untrackedPaths(root) : []
+  // Unfiltered too: a lens matching a generated file is harmless, and the checkout's
+  // .gitattributes is the change's own and could otherwise mark the changed code generated.
+  const matchPaths = [...new Set([...sections.map((s) => s.path).filter(Boolean), ...untracked])]
+  const { layers, ...loaded } = loadSources({ repo: root, run, sources })
+  const wanted = wantedNames(lensesSetting, loaded, d5Paths)
+  // A built-in lens applies only when `lenses=` names it.
+  const named = new Set(lensesSetting.set ?? lensesSetting.add ?? [])
+  const records = loaded.records.filter((r) => r.layer !== "builtin" || named.has(r.name))
+  const { texts, ...result } = planLenses({ ...loaded, records, d5Paths, matchPaths, dims, wanted, reserved: reservedNames(loaded.rejected) })
   let source = null
-  if (!root) {
-    const none = { records: [], rejected: [], skipped: [] }
-    plan = planLenses({ ...none, d5Paths: [], matchPaths: [], dims, wanted: wantedNames(lensesSetting, none, []) })
-  } else {
-    // Unfiltered on purpose: the working tree's .gitattributes could otherwise mark a lens the
-    // change adds as generated and so hide it from this check. Untracked files need no entry
-    // here: tracked-only skips them, which a .gitignore the diff adds cannot hide.
-    const d5Paths = sections.flatMap((s) => [s.path, s.oldPath]).filter(Boolean)
-    const untracked = mode === "uncommitted" ? untrackedPaths(root) : []
-    // Unfiltered too: a lens matching a generated file is harmless, and the checkout's
-    // .gitattributes is the change's own and could otherwise mark the changed code generated.
-    const matchPaths = [...new Set([...sections.map((s) => s.path).filter(Boolean), ...untracked])]
-    const loaded = loadRecords(root, run)
-    plan = planLenses({ ...loaded, d5Paths, matchPaths, dims, wanted: wantedNames(lensesSetting, loaded, d5Paths) })
+  if (root) {
     // Report only: repository lenses come from whatever this checkout has committed.
     const head = run("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
     source = { checkout: head.status === 0 ? head.stdout.trim() : null }
   }
-  const { texts, ...result } = plan
   return {
-    plan: { repo: root, source, dims, ...result, note: root ? null : "diff-only: no repository to read lenses from" },
+    plan: { repo: root, source, dims, ...result, layers, note: root ? null : "diff-only: no repository to read lenses from" },
     texts,
   }
 }
@@ -247,9 +275,9 @@ const lensesSettingOf = (wd) => {
  * Run one selection for $WD and write its files. Exported for an in-process caller. Throws on a git
  * failure, an unreadable settings.json and a named lens with no source.
  */
-export function select({ wd, repo = null, dims, mode = null, run }) {
+export function select({ wd, repo = null, dims, mode = null, run, sources }) {
   const lensesSetting = lensesSettingOf(wd)
-  const { plan, texts } = selectLenses({ repo, diffText: readFileSync(join(wd, "diff.patch"), "utf8"), mode, dims, lensesSetting, run })
+  const { plan, texts } = selectLenses({ repo, diffText: readFileSync(join(wd, "diff.patch"), "utf8"), mode, dims, lensesSetting, run, sources })
   writeFileSync(join(wd, "lenses.json"), `${JSON.stringify(plan, null, 2)}\n`)
   for (const [target, text] of Object.entries(texts)) writeFileSync(join(wd, plan.outputs[target]), text)
   return plan
@@ -294,7 +322,7 @@ export function standalone({ dim, target = null, cwd = process.cwd(), run }) {
   }
 }
 
-export function main(argv, { run } = {}) {
+export function main(argv, { run, sources } = {}) {
   let values
   let positionals
   try {
@@ -319,7 +347,7 @@ export function main(argv, { run } = {}) {
   }
   let lenses
   try {
-    lenses = select({ wd: values.wd, repo: values.repo ?? null, dims, mode: values.mode ?? null, run })
+    lenses = select({ wd: values.wd, repo: values.repo ?? null, dims, mode: values.mode ?? null, run, sources })
   } catch (error) {
     process.stderr.write(`${String(error?.message ?? error).split("\n")[0]}\n`)
     return 2

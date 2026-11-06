@@ -25,8 +25,8 @@ import { dirname, join } from "node:path"
 import { lint } from "./lint-prompts.mjs"
 import { listPiModels, probeClaude, probeClaudeCli, probeCodex, toolVersion } from "./lib/probe.mjs"
 import { selectConsultants } from "./lib/lanes.mjs"
-import { instructionMatches } from "../src/loop-review/context.mjs"
-import { loadRecords } from "./lenses.mjs"
+import { instructionMatches, sourceRoots } from "../src/loop-review/context.mjs"
+import { loadSources } from "./lenses.mjs"
 import { SETTINGS, listProfiles } from "./settings.mjs"
 
 const SELF = join(dirname(fileURLToPath(import.meta.url)), "..")
@@ -43,7 +43,7 @@ const sh = (cmd, args, opts = {}) => {
  * Run every check and return the results. Exported so the tests can drive it in-process against
  * deliberately broken workspaces — the same shape `lint-prompts.mjs` uses.
  */
-export function diagnose({ root = SELF, repo = process.cwd(), offline = false, consultant: forced = null } = {}) {
+export function diagnose({ root = SELF, repo = process.cwd(), offline = false, consultant: forced = null, sources = {} } = {}) {
   const ROOT = root
   const REPO = repo
   const OFFLINE = offline
@@ -218,24 +218,68 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
   }
 
   // ── Lenses (offline: same D15-checked loading as scripts/lenses.mjs) ─────────────────────────
+  let loaded
+  try {
+    loaded = loadSources({ repo: REPO, sources })
+  } catch (error) {
+    loaded = { ...loadSources({ sources }), skipped: [], failed: true }
+    add("lenses", "project lenses", "warn", String(error.message).split("\n")[0],
+      "every /consensus-review run stops (exit 2) until git can check the lens files")
+  }
+  const profiles = listProfiles(REPO, { sources })
+
+  // ── Sources: one row per user and built-in layer, with its resolved root (direnv may set XDG) ──
   {
-    let loaded
-    try {
-      loaded = loadRecords(REPO)
-    } catch (error) {
-      loaded = { records: [], rejected: [], skipped: [], failed: true }
-      add("lenses", "project lenses", "warn", String(error.message).split("\n")[0],
-        "every /consensus-review run stops (exit 2) until git can check the lens files")
+    const lensHolder = new Map()
+    const shadowed = { user: [], builtin: [] }
+    for (const { name, layer } of [...loaded.records, ...loaded.rejected]) {
+      if (!name || !layer) continue
+      if (!lensHolder.has(name)) lensHolder.set(name, layer)
+      else if (lensHolder.get(name) !== layer && shadowed[layer]) shadowed[layer].push(`lens ${name} (by ${lensHolder.get(name)})`)
     }
-    const { records: items, rejected, skipped } = loaded
+    for (const { name, layer, shadowedBy } of profiles) {
+      if (shadowedBy && shadowed[layer]) shadowed[layer].push(`profile ${name} (by ${shadowedBy})`)
+    }
+    const reserved = [
+      ...loaded.rejected.filter((r) => r.layer === "user" && r.name).map((r) => `lens ${r.name}`),
+      ...profiles.filter((p) => p.layer === "user" && p.name && p.error).map((p) => `profile ${p.name}`),
+    ]
+    for (const [index, layer] of [[0, "user"], [1, "builtin"]]) {
+      const kinds = ["lenses", "profiles"].map((kind) => [kind, sourceRoots({ ...sources, repo: REPO, kind })[index]])
+      const states = kinds.map(([kind, l]) =>
+        `${kind} ${l.failure ? `rejected: ${l.failure}` : l.problem === "absent" ? "none" : l.problem ? `ignored: ${l.problem}` : "ok"}`)
+      const names = [...loaded.records.filter((r) => r.layer === layer).map((r) => `lens ${r.name}`),
+        ...profiles.filter((p) => p.layer === layer && p.name && !p.error).map((p) => `profile ${p.name}`)]
+      const parts = [kinds[0][1].root ?? "no root", ...states]
+      if (names.length) parts.push(`loaded: ${names.join(", ")}`)
+      if (layer === "user" && reserved.length) parts.push(`reserved (fix the file; a run naming it stops): ${reserved.join(", ")}`)
+      if (shadowed[layer].length) parts.push(`shadowed: ${shadowed[layer].join(", ")}`)
+      const bad = kinds.some(([, l]) => l.failure || (l.problem && l.problem !== "absent")) || (layer === "user" && reserved.length)
+      const none = kinds.every(([, l]) => l.problem === "absent")
+      add("sources", layer === "user" ? "user layer" : "built-in layer", bad ? "warn" : none ? "skip" : "ok", parts.join("; "),
+        layer === "user"
+          ? "user lenses apply like repository lenses and beat them; user profiles beat repository ones"
+          : "built-in lenses apply only when named in lenses=; built-in profiles only by profile=")
+    }
+  }
+
+  {
+    const items = loaded.records.filter((r) => r.layer !== "builtin")
+    const rejected = loaded.rejected.filter((r) => r.layer !== "builtin")
+    const { skipped } = loaded
     if (!loaded.failed && !items.length && !rejected.length && !skipped.length) {
       add("lenses", "project lenses", "skip", "none found", "reviews apply only the generic dimensions")
     }
     const tracked = (sh("git", ["ls-files", "-z"], { cwd: REPO }) ?? "").split("\0").filter(Boolean)
+    const userNames = new Set([...loaded.records, ...loaded.rejected].filter((r) => r.layer === "user" && r.name).map((r) => r.name))
     for (const item of items) {
-      const label = `${item.source} ${item.name}`
+      const label = item.layer === "user" ? `${item.source} ${item.name} (user)` : `${item.source} ${item.name}`
+      if (item.layer === "repo" && userNames.has(item.name)) {
+        add("lenses", label, "skip", "shadowed by user", "the user lens of this name applies instead (or, rejected, reserves the name)")
+        continue
+      }
       add("lenses", label, "ok", `${item.source} ${item.dimension ?? "all"}, ${item.include.length} globs`)
-      for (const glob of item.include) {
+      for (const glob of item.layer === "repo" ? item.include : []) {
         if (!tracked.some((path) => instructionMatches(path, { include: [glob], exclude: [] }))) {
           add("lenses", label, "warn", `glob matches no tracked file: ${glob}`,
             "this glob matches no tracked file; the lens fires only for new files it matches")
@@ -256,14 +300,17 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
 
   // ── Profiles (offline: the same checks as `settings.mjs profile`, minus the diff) ───────────
   {
-    const profiles = listProfiles(REPO)
-    if (!profiles.length) {
-      add("profiles", "review profiles", "skip", "none found", "a run that names `profile=<name>` stops: no such profile")
+    // Built-in profiles and an ignored layer are on the sources rows.
+    const own = profiles.filter((p) => p.layer === "repo" || (p.layer === "user" && p.name))
+    if (!own.length) {
+      add("profiles", "review profiles", "skip", "none found", "a run that names `profile=<name>` uses the built-in one, else stops: no such profile")
     }
     const stops = "this profile stops any run that names it"
-    for (const { name, file, values, status, error } of profiles) {
-      const label = name ? `profile ${name}` : file
-      if (error) {
+    for (const { name, file, layer, values, status, error, shadowedBy } of own) {
+      const label = name ? `profile ${name}${layer === "user" ? " (user)" : ""}` : file
+      if (shadowedBy) {
+        add("profiles", label, "skip", `profile ${name}: shadowed by ${shadowedBy}`, "a run naming it uses the higher layer's file")
+      } else if (error) {
         add("profiles", label, "warn", name ? `profile ${name}: ${error}` : error, stops)
       } else if (status !== "ok") {
         add("profiles", label, "warn", `profile ${name}: ${status}`, `${stops} until it is committed`)

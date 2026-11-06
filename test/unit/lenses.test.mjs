@@ -5,10 +5,15 @@
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { main, planLenses } from "../../scripts/lenses.mjs"
+import { main, planLenses, selectLenses } from "../../scripts/lenses.mjs"
+
+// The user lens and profile layer comes from $XDG_CONFIG_HOME: an empty one, so ~/.config never leaks in.
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "xdg-"))
+const layerDirs = [process.env.XDG_CONFIG_HOME]
+after(() => { for (const dir of layerDirs) rmSync(dir, { recursive: true, force: true }) })
 
 const SCRIPT = new URL("../../scripts/lenses.mjs", import.meta.url).pathname
 const TRAILER = "End of project lenses. Your output format above (the schema, any required markers) is unchanged."
@@ -19,11 +24,11 @@ const TRAILER = "End of project lenses. Your output format above (the schema, an
 
 const lens = (name, extra = {}) => ({
   name, text: "check it", include: ["src/payments/**"], exclude: ["src/payments/fixtures/**"],
-  source: "lens", dimension: "impact", file: `.consensus-review/lenses/${name}.md`, ignoredKeys: [], ...extra,
+  source: "lens", dimension: "impact", file: `.consensus-review/lenses/${name}.md`, layer: "repo", ignoredKeys: [], ...extra,
 })
 const legacy = (name, extra = {}) => ({
   name, text: "legacy check", include: ["src/payments/**"], exclude: [], source: "json", dimension: null,
-  file: ".claude/review-instructions.json", ignoredKeys: [], ...extra,
+  file: ".claude/review-instructions.json", layer: "repo", ignoredKeys: [], ...extra,
 })
 const plan = (records, { d5Paths = [], matchPaths = ["src/payments/charge.js"], dims = ["impact", "quality"] } = {}) =>
   planLenses({ records, rejected: [], d5Paths, matchPaths, dims })
@@ -32,7 +37,7 @@ const skips = (p) => p.skipped.map(({ name, reason }) => ({ name, reason }))
 test("planLenses selects a matching lens for its dimension and the consultant", () => {
   const p = plan([lens("payments")])
   assert.deepEqual(p.selected, [{
-    name: "payments", dimension: "impact", source: "lens", file: ".consensus-review/lenses/payments.md",
+    name: "payments", dimension: "impact", source: "lens", file: ".consensus-review/lenses/payments.md", layer: "repo",
     files: ["src/payments/charge.js"], targets: ["impact", "consultant"],
   }])
   assert.deepEqual(p.outputs, { consultant: "lenses-consultant.md", impact: "lenses-impact.md" })
@@ -436,7 +441,7 @@ test("select: legacy instructions reach every lane of the run as all-dimension l
     stagedDiff(ws.repo, ws.wd)
     const { lenses } = select(ws, "impact,quality")
     assert.deepEqual(lenses.selected, [{
-      name: "money", dimension: null, source: "json", file: ".claude/review-instructions.json",
+      name: "money", dimension: null, source: "json", file: ".claude/review-instructions.json", layer: "repo",
       files: ["src/payments/charge.js"], targets: ["impact", "quality", "consultant"],
     }])
   })
@@ -755,9 +760,9 @@ test("a named lens still needs a matching changed file", () => {
 })
 
 for (const [args, message] of [
-  ["lenses=zz", "lenses=zz: no such lens (available: a, b)"],
-  ["lenses=+zz", "lenses=zz: no such lens (available: a, b)"],
-  ["lenses=-zz", "lenses=zz: no such lens (available: a, b)"],
+  ["lenses=zz", "lenses=zz: no such lens (available: a, b, migrations, public-api)"],
+  ["lenses=+zz", "lenses=zz: no such lens (available: a, b, migrations, public-api)"],
+  ["lenses=-zz", "lenses=zz: no such lens (available: a, b, migrations, public-api)"],
 ]) {
   test(`${args} exits 2: ${message}`, () => {
     withTwoLenses((ws) => {
@@ -845,6 +850,178 @@ test("diff-only: lenses=a has no source to name, so it exits 2", () => {
     resolveArgs(ws, "lenses=a")
     const r = run(["--wd", ws.wd, "--dims", "impact"])
     assert.equal(r.status, 2)
-    assert.equal(r.stderr, "lenses=a: no such lens (available: none)\n")
+    assert.equal(r.stderr, "lenses=a: no such lens (available: migrations, public-api)\n")
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// User and built-in layers (#12 item 2, stage 5): user > repo > built-in, built-ins only by name
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A fresh $XDG_CONFIG_HOME holding `files` (paths under consensus-review/), as the environment to
+ * spawn with. Modes are set explicitly: a umask of 002 would make the layer group-writable.
+ */
+const userEnv = (files = {}) => {
+  const xdg = mkdtempSync(join(tmpdir(), "xdg-user-"))
+  layerDirs.push(xdg)
+  const root = join(xdg, "consensus-review")
+  mkdirSync(join(root, "lenses"), { recursive: true })
+  mkdirSync(join(root, "profiles"))
+  for (const dir of [root, join(root, "lenses"), join(root, "profiles")]) chmodSync(dir, 0o755)
+  for (const [rel, text] of Object.entries(files)) {
+    writeFileSync(join(root, rel), text)
+    chmodSync(join(root, rel), 0o644)
+  }
+  return { ...process.env, XDG_CONFIG_HOME: xdg }
+}
+const runWith = (env, args) => spawnSync(process.execPath, [SCRIPT, "select", ...args], { encoding: "utf8", timeout: 5000, env })
+const selectWith = (env, { repo, wd }, extra = []) => {
+  const r = runWith(env, ["--wd", wd, ...(repo ? ["--repo", repo] : []), "--dims", "impact,architecture", ...extra])
+  assert.equal(r.status, 0, r.stderr)
+  return JSON.parse(readFileSync(join(wd, "lenses.json"), "utf8"))
+}
+const setLenses = (wd, value) => {
+  writeFileSync(join(wd, "args.txt"), `lenses=${value}`)
+  const r = spawnSync(process.execPath, [SETTINGS_SCRIPT, "resolve", "--wd", wd, "--args-file", join(wd, "args.txt")], { encoding: "utf8" })
+  assert.equal(r.status, 0, r.stderr)
+}
+const MIGRATION = "db/migrations/001.sql"
+const BUILTIN_MIGRATIONS = readFileSync(new URL("../../presets/lenses/migrations.md", import.meta.url), "utf8")
+
+test("layers: a user lens reached through a symlink is selected; the repo lens of that name is shadowed by user", () => {
+  withRepo((ws) => {
+    const outside = mkdtempSync(join(tmpdir(), "dotfiles-"))
+    layerDirs.push(outside)
+    writeFileSync(join(outside, "payments.md"), lensAt("src/payments/**"))
+    chmodSync(join(outside, "payments.md"), 0o644)
+    const env = userEnv()
+    symlinkSync(join(outside, "payments.md"), join(env.XDG_CONFIG_HOME, "consensus-review/lenses/payments.md"))
+    write(ws.repo, ".consensus-review/lenses/payments.md", LENS)
+    commit(ws.repo)
+    write(ws.repo, "src/payments/charge.js", "export const charge = 2\n")
+    stagedDiff(ws.repo, ws.wd)
+    const lenses = selectWith(env, ws)
+    assert.deepEqual(lenses.selected.map((l) => [l.name, l.layer, l.dimension]), [["payments", "user", null]])
+    assert.deepEqual(lenses.skipped, [{ name: "payments", file: ".consensus-review/lenses/payments.md", reason: "shadowed by user" }])
+  })
+})
+
+test("layers: a malformed user lens reserves its name: auto skips the valid repo lens, lenses=x exits 2", () => {
+  withRepo((ws) => {
+    const env = userEnv({ "lenses/x.md": "no front matter\n" })
+    write(ws.repo, ".consensus-review/lenses/x.md", lensAt("src/payments/**"))
+    commit(ws.repo)
+    write(ws.repo, "src/payments/charge.js", "export const charge = 2\n")
+    stagedDiff(ws.repo, ws.wd)
+    const auto = selectWith(env, ws)
+    assert.deepEqual(auto.selected, [])
+    assert.deepEqual(auto.skipped, [{ name: "x", file: ".consensus-review/lenses/x.md", reason: "shadowed by user" }])
+    setLenses(ws.wd, "x")
+    const r = runWith(env, ["--wd", ws.wd, "--repo", ws.repo, "--dims", "impact"])
+    assert.equal(r.status, 2)
+    assert.equal(r.stderr, "lenses=x: no valid source (user: no front matter)\n")
+  })
+})
+
+test("layers: a matching built-in lens is not applied under lenses=auto; lenses=+migrations selects it", () => {
+  withRepo((ws) => {
+    write(ws.repo, MIGRATION, "alter table t drop column c;\n")
+    stagedDiff(ws.repo, ws.wd)
+    const env = userEnv()
+    const auto = selectWith(env, ws)
+    assert.deepEqual(auto.selected, [])
+    assert.deepEqual(auto.skipped, [])
+    setLenses(ws.wd, "+migrations")
+    const named = selectWith(env, ws)
+    assert.deepEqual(named.selected, [{
+      name: "migrations", dimension: "impact", source: "lens", file: "builtin:lenses/migrations.md", layer: "builtin",
+      files: [MIGRATION], targets: ["impact", "consultant"],
+    }])
+    assert.ok(readFileSync(join(ws.wd, "lenses-impact.md"), "utf8").includes(BUILTIN_MIGRATIONS.split("---\n")[2].trim()))
+  })
+})
+
+test("layers: a diff adding repo migrations.md cannot remove the named built-in migrations", () => {
+  withRepo((ws) => {
+    write(ws.repo, ".consensus-review/lenses/migrations.md", `---\npaths: [db/**]\n---\n- Nothing to check here.\n`)
+    write(ws.repo, MIGRATION, "alter table t drop column c;\n")
+    stagedDiff(ws.repo, ws.wd)
+    setLenses(ws.wd, "+migrations")
+    const lenses = selectWith(userEnv(), ws, ["--mode", "uncommitted"])
+    assert.deepEqual(lenses.selected.map((l) => [l.name, l.layer]), [["migrations", "builtin"]])
+    assert.deepEqual(lenses.skipped, [{ name: "migrations", file: ".consensus-review/lenses/migrations.md", reason: "not committed" }])
+  })
+})
+
+test("layers: a PR diff editing a committed repo migrations.md falls through to the built-in", () => {
+  withRepo((ws) => {
+    write(ws.repo, ".consensus-review/lenses/migrations.md", `---\npaths: [db/**]\n---\n- Nothing to check here.\n`)
+    write(ws.repo, MIGRATION, "alter table t drop column c;\n")
+    commit(ws.repo)
+    writeFileSync(join(ws.wd, "diff.patch"), git(ws.repo, "diff", "-M", "HEAD~1", "HEAD"))
+    setLenses(ws.wd, "+migrations")
+    const lenses = selectWith(userEnv(), ws)
+    assert.deepEqual(lenses.selected.map((l) => [l.name, l.layer]), [["migrations", "builtin"]])
+    assert.deepEqual(lenses.skipped, [{ name: "migrations", file: ".consensus-review/lenses/migrations.md", reason: "changed in this diff" }])
+  })
+})
+
+test("layers: with the plugin root inside the reviewed repository the built-in layer is ignored", () => {
+  withRepo((ws) => {
+    write(ws.repo, "presets/lenses/migrations.md", BUILTIN_MIGRATIONS)
+    write(ws.repo, MIGRATION, "alter table t drop column c;\n")
+    commit(ws.repo)
+    const diffText = git(ws.repo, "diff", "-M", "HEAD~1", "HEAD")
+    const sources = { env: {}, pluginRoot: ws.repo }
+    assert.throws(() => selectLenses({ repo: ws.repo, diffText, dims: ["impact"], lensesSetting: { add: ["migrations"], remove: [] }, sources }),
+      { message: "lenses=migrations: no such lens (available: none)" })
+    const { plan } = selectLenses({ repo: ws.repo, diffText, dims: ["impact"], sources })
+    assert.equal(plan.layers.find((l) => l.layer === "builtin").problem, `inside the reviewed repository (${join(ws.repo, "presets/lenses")})`)
+  })
+})
+
+test("layers: diff-only, a user lens matching a diff path is selected and no repository record is read", () => {
+  withRepo((ws) => {
+    writeFileSync(join(ws.wd, "diff.patch"), PR_DIFF)
+    const lenses = selectWith(userEnv({ "lenses/money.md": lensAt("src/payments/**") }), { repo: null, wd: ws.wd })
+    assert.equal(lenses.repo, null)
+    assert.deepEqual(lenses.selected.map((l) => [l.name, l.layer, l.files]), [["money", "user", ["src/payments/charge.js"]]])
+    assert.deepEqual(lenses.skipped, [])
+  })
+})
+
+test("layers: lenses=migrations with the git check failing on the repo lens exits 2, no fall-through to the built-in", () => {
+  withRepo((ws) => {
+    write(ws.repo, ".consensus-review/lenses/migrations.md", lensAt("db/**"))
+    write(ws.repo, MIGRATION, "x\n")
+    commit(ws.repo)
+    writeFileSync(join(ws.wd, "diff.patch"), git(ws.repo, "diff", "-M", "HEAD~1", "HEAD", "--", "db"))
+    const failing = (cmd, args, options) => (args[0] === "ls-tree" ? { status: 128, stdout: "" } : spawnSync(cmd, args, options))
+    assert.throws(() => selectLenses({
+      repo: ws.repo, diffText: readFileSync(join(ws.wd, "diff.patch"), "utf8"), dims: ["impact"],
+      lensesSetting: { set: ["migrations"] }, run: failing,
+    }), { message: "git check failed (git ls-tree exit 128): .consensus-review/lenses/migrations.md" })
+  })
+})
+
+test("layers: a user lens symlinked to a file inside the reviewed repository is rejected and reserves its name", () => {
+  withRepo((ws) => {
+    write(ws.repo, "notes/x.md", lensAt("src/payments/**"))
+    write(ws.repo, ".consensus-review/lenses/x.md", lensAt("src/payments/**"))
+    commit(ws.repo)
+    const env = userEnv()
+    symlinkSync(join(ws.repo, "notes/x.md"), join(env.XDG_CONFIG_HOME, "consensus-review/lenses/x.md"))
+    write(ws.repo, "src/payments/charge.js", "export const charge = 2\n")
+    stagedDiff(ws.repo, ws.wd)
+    const auto = selectWith(env, ws)
+    assert.deepEqual(auto.selected, [])
+    assert.deepEqual(auto.rejected, [{
+      name: "x", file: join(env.XDG_CONFIG_HOME, "consensus-review/lenses/x.md"), layer: "user", reason: "inside the reviewed repository",
+    }])
+    setLenses(ws.wd, "x")
+    const r = runWith(env, ["--wd", ws.wd, "--repo", ws.repo, "--dims", "impact"])
+    assert.equal(r.status, 2)
+    assert.equal(r.stderr, "lenses=x: no valid source (user: inside the reviewed repository)\n")
   })
 })
