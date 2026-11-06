@@ -35,6 +35,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/loop-review.mjs" [flags]
 | Flag | Meaning |
 |---|---|
 | `--pr=<n\|url>` | Review a pull request (reuses the `gh` path; the fallback fetch stays in a temp dir) |
+| `--base=<branch>` | The branch the PR targets; without `gh`, a PR from a local clone needs it (and stops otherwise) |
 | `--range=<base..head>` | Review a git range |
 | *(neither)* | Review uncommitted changes against `HEAD` |
 | `--model=<m>` | Runner model (default `sonnet`) |

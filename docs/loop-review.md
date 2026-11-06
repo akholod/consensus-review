@@ -27,6 +27,7 @@ not an omission.
 | Flag                                       | Meaning                                                          |
 | ------------------------------------------ | ---------------------------------------------------------------- |
 | `--pr=<n\|url>`                            | review a pull request                                            |
+| `--base=<branch>`                          | the branch the PR targets; needed for a PR from a local clone without `gh` ([how](consensus-review.md#pull-requests-without-gh)) |
 | `--range=<base..head>`                     | review a git range                                               |
 | _(neither)_                                | review uncommitted changes against `HEAD`                        |
 | `--model=<m>`                              | model for every pass, default `sonnet`                           |

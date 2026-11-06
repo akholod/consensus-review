@@ -24,7 +24,7 @@ import {
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
-import { LENS_NAME, checkSourcePath, parseDiff, trackedState } from "../src/loop-review/context.mjs"
+import { LENS_NAME, checkSourcePath, isBranchName, parseDiff, trackedState } from "../src/loop-review/context.mjs"
 import { PI_MODEL_ID } from "./lib/lanes.mjs"
 
 const USAGE = [
@@ -51,6 +51,7 @@ export const SETTINGS = {
   timeout: { default: 900 },
   models: { default: "agent" },
   effort: { default: "agent" },
+  base: { default: null },
 }
 
 const ROLES = ["architecture", "impact", "quality", "tests", "verifier"]
@@ -132,6 +133,7 @@ const parseRaw = (key, raw) => {
     if (PI_MODEL_ID.test(raw)) return { value: raw }
     return { error: "expected auto or a model id ([A-Za-z0-9._:/@+-], up to 100)" }
   }
+  if (key === "base") return isBranchName(raw) ? { value: raw } : { error: "expected a branch name" }
   if (!/^[+-]?\d+$/.test(raw)) return { error: "expected an integer" }
   const seconds = Number(raw)
   const value = Math.min(TIMEOUT_MAX, Math.max(TIMEOUT_MIN, seconds))
@@ -152,7 +154,8 @@ const renderValue = (key, value) => {
 }
 
 const renderLines = (settings, ignored, clamped, profileName) => {
-  const parts = Object.entries(settings).map(([key, { value, source }]) => {
+  // An unset `base` has no default to show.
+  const parts = Object.entries(settings).filter(([, { value }]) => value !== null).map(([key, { value, source }]) => {
     const origin = source === "profile" ? `profile ${profileName}` : source
     let note = clamped.has(key) ? `${origin}, clamped` : origin
     if (ROLE_VALUES[key] && value !== "agent") note = `${note}, requested`
@@ -168,7 +171,7 @@ const renderLines = (settings, ignored, clamped, profileName) => {
 /** The lower-cased settings key a profile may hold, or `{ error }` without the `profile <name>: ` prefix. */
 const profileKey = (rawKey) => {
   const key = rawKey.toLowerCase()
-  if (key === "target" || key === "profile") return { error: `${key} is not a profile key` }
+  if (key === "target" || key === "profile" || key === "base") return { error: `${key} is not a profile key` }
   if (!Object.hasOwn(SETTINGS, key)) return { error: `unknown key ${rawKey}` }
   return { key }
 }
@@ -255,6 +258,11 @@ export function resolveSettings(tokens, { profile = null } = {}) {
   if (noPiLane && settings["pi-model"].source === "flag") {
     ignored.push({ token: tokenOf["pi-model"], reason: "no pi lane" })
     settings["pi-model"] = { value: SETTINGS["pi-model"].default, source: "default" }
+  }
+
+  if (settings.base.source === "flag" && target.kind !== "pr") {
+    ignored.push({ token: tokenOf.base, reason: "no PR target" })
+    settings.base = { value: null, source: "default" }
   }
 
   const lines = renderLines(settings, ignored, clamped, profile?.name)
@@ -435,7 +443,7 @@ const splitFrontMatter = (raw) => {
 }
 
 const listProfileLines = (repo) => {
-  const defaults = Object.entries(SETTINGS).map(([key, { default: value }]) => `${key}=${value}`)
+  const defaults = Object.entries(SETTINGS).filter(([, { default: value }]) => value !== null).map(([key, { default: value }]) => `${key}=${value}`)
   const lines = [`defaults (built-in): ${defaults.join(" | ")}`]
   const entries = listProfiles(repo)
   if (!entries.length) lines.push(`no profiles in ${PROFILE_DIR}/`)

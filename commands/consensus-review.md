@@ -44,6 +44,7 @@ What each setting means (`settings.<key>.value`):
 - `lang` — output language for the review, a code or a name. Code identifiers, paths, and technical terms always stay in their original form. Pass the chosen language to the dimension agents and into the consultant brief.
 - `models` — `agent` (default) → every role runs on its agent's frontmatter model. Otherwise a map in role order, e.g. `{"impact": "sonnet", "verifier": "opus"}` (roles `architecture`, `impact`, `quality`, `tests`, `verifier`; models `opus|sonnet|haiku|fable`): §5 and §8 pass the listed role's model on its Task, and an unlisted role keeps its frontmatter model. It is a *requested* model — the host may reject or substitute it — so the `Settings:` line marks it `requested`, and the report never names an effective model the Task result does not show.
 - `effort` — the same shape as `models`, with values `low|medium|high|xhigh|max`: `agent` (default) → each agent's frontmatter `effort:`; a listed role gets that effort on its Task (§5, §8).
+- `base` — `null` unless `base=<branch>` was given: the branch the PR targets, used only when §1 diffs a PR from a local clone without `gh` (that path stops without it). Not a profile key; with no PR target it is in `ignored`.
 - `profile` (top-level, not under `settings`) — `null` without a `profile=<name>` argument. With one, it is `{"name", "pending": true}` and `lines.settings` reads `Settings: profile <name> NOT APPLIED (pending)`: the repository profile `.consensus-review/profiles/<name>.md` is applied in code by §1.5, once the diff exists, and §2 refuses to start while it is pending. After §1.5 it is `{"name", "file"}`, and every value the profile set shows `(profile <name>)` on the `Settings:` line. A flag still beats the profile.
 
 ## 1. Resolve diff and context
@@ -55,10 +56,11 @@ What each setting means (`settings.<key>.value`):
 - `gh pr diff '<target>' [-R '<owner/repo>'] > "$WD/diff.patch"`
 - `gh pr view '<target>' [-R '<owner/repo>'] --json headRefOid` again. `HEAD_SHA` = that `headRefOid` if it equals the first one; if they differ, the PR moved under the diff and `HEAD_SHA` is **empty**.
 - `REPO` = the current clone if it matches the PR; otherwise **diff-only mode** (note it in the report).
-- **If `gh` is unavailable/unauthenticated** (first parse `owner/repo` + `N` from the URL or `owner/repo#N`):
-  1. If a local clone of that repo exists: `git fetch '<remote>' 'pull/<N>/head'` then `git diff <baseRef>...FETCH_HEAD > "$WD/diff.patch"` and `HEAD_SHA=$(git rev-parse FETCH_HEAD)`. Never `git checkout` the PR in the user's clone.
-  2. Else, for a public repository, fetch the diff over HTTP: `curl -fsSL 'https://github.com/<owner>/<repo>/pull/<N>.diff' > "$WD/diff.patch"`. This path is **diff-only** — note it. Never read a token from the environment to reach a private repository: that is what `gh` and a local clone are for.
-  3. If none works (a private repository without `gh` or a clone, bare `#N` with no remote, or no network) → stop and report that PR mode needs `gh` or a local clone.
+- **If `gh` is unavailable/unauthenticated**, resolve the diff in code, in **one** foreground call:
+  ```bash
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/pr-diff.mjs" --wd '<literal WD>' --repo '<literal INVOKE>' --target '<target.ref>' [--base '<settings.base.value>']
+  ```
+  `--base` only when `settings.base.value` is set. It tries a local clone of the PR's repository (it needs `base=<branch>` and full history, never checks the PR out, and writes no ref, `FETCH_HEAD` or config), then, for a URL or `owner/repo#N`, the public diff over HTTP on the PR's own host (never a token from the environment). It writes `$WD/diff.patch` and prints `{"headSha","baseRef","mode"}`. Exit 2 → print its stderr message and **stop**: no guessed base, no other fallback. `mode: "clone"` → `REPO` = the current clone and `HEAD_SHA` = `headSha`; `mode: "curl"` → **diff-only mode** (note it), no `HEAD_SHA`; `mode: "gh"` → as the gh path, with an empty `HEAD_SHA`.
 
 **Uncommitted mode:**
 - `git diff HEAD > "$WD/diff.patch"`; untracked via `git status --porcelain`.

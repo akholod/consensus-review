@@ -731,8 +731,113 @@ export function buildStaticPrefix(ctx) {
   return parts.join("\n")
 }
 
-/** Resolve a target to a raw diff plus the base it was taken against. */
-export function resolveTarget({ repo, mode, range, prTarget, workDir }) {
+/**
+ * The scope of a PR target: `{ pr: null }` for empty (uncommitted), `{ pr: N, repo }` for a PR
+ * (`repo` is `host/owner/repo` for a URL, `owner/repo` for the `owner/repo#N` shorthand, which takes
+ * the origin's host, or null for `#N`/`N`, i.e. this repository), null for anything else.
+ */
+export const parseScope = (target) => {
+  const scope = String(target ?? "").trim()
+  if (!scope) return { pr: null }
+  const bare = /^#?(\d+)$/.exec(scope)
+  if (bare) return { pr: bare[1], repo: null }
+  const ref = /^([^/\s#]+)\/([^/\s#]+)#(\d+)$/.exec(scope)
+  if (ref) return { pr: ref[3], repo: `${ref[1]}/${ref[2]}`.toLowerCase() }
+  const url = /^https?:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)\/?$/.exec(scope)
+  if (url) return { pr: url[4], repo: `${url[1]}/${url[2]}/${url[3]}`.toLowerCase(), ref: scope }
+  return null
+}
+
+/** `host/owner/repo` from a remote URL: `https://host/o/r(.git)`, `git@host:o/r(.git)` or `ssh://git@host/o/r`. */
+export const originRepo = (url) => {
+  const text = String(url).trim().replace(/\/+$/, "").replace(/\.git$/, "")
+  const m = /^(?:https?|ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/([^/]+)\/([^/]+)$/.exec(text) ??
+    /^(?:[^@/]+@)?([^/:]+):([^/]+)\/([^/]+)$/.exec(text)
+  return m ? `${m[1]}/${m[2]}/${m[3]}`.toLowerCase() : null
+}
+
+/** A branch name `git check-ref-format --branch` accepts, from a shell-safe alphabet and not an option. */
+export function isBranchName(raw, run = spawnSync) {
+  if (!/^[A-Za-z0-9._/-]+$/.test(raw) || raw.startsWith("-")) return false
+  return run("git", ["check-ref-format", "--branch", raw], { stdio: "ignore" }).status === 0
+}
+
+const BIG = 256 * 1024 * 1024
+const failed = (cmd, result) => {
+  const why = result.error ? result.error.code ?? result.error.message : String(result.stderr ?? "").trim().split("\n")[0] || `exit ${result.status}`
+  return `Command failed: ${cmd}: ${why}`
+}
+
+/**
+ * The PR's diff from a local clone's remote, exact or not at all. Only advertised SHAs are used:
+ * `S1` from ls-remote, a fetch that writes no ref, no FETCH_HEAD and no config (objects only), then
+ * `S2` from a second ls-remote, which must equal `S1`. The diff takes SHAs, never branch names, so a
+ * stale local `<base>` branch cannot change it.
+ */
+function cloneDiff({ repo, remote, pr, base, run }) {
+  const git = (args) => {
+    // No credential prompt: a review must fail on a private remote, not hang on a password.
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" }
+    const result = run("git", args, { cwd: repo, env, encoding: "utf8", maxBuffer: BIG, stdio: ["ignore", "pipe", "pipe"] })
+    if (result.error || result.status !== 0) throw new Error(failed(`git ${args[0]}`, result))
+    return result.stdout
+  }
+  if (git(["rev-parse", "--is-shallow-repository"]).trim() === "true") throw new Error("shallow clone; fetch full history or use gh")
+  if (!base) throw new Error("PR mode without gh needs base=<branch> (the branch the PR targets)")
+  if (!isBranchName(base, run)) throw new Error(`base=${base}: expected a branch name`)
+  const refs = [`refs/pull/${pr}/head`, `refs/heads/${base}`]
+  const advertised = () => {
+    const shas = new Map(git(["ls-remote", remote, ...refs]).split("\n").filter(Boolean).map((line) => line.split("\t").reverse()))
+    return refs.map((ref) => {
+      if (!shas.has(ref)) throw new Error(`${ref} not found on remote ${remote}`)
+      return shas.get(ref)
+    })
+  }
+  const [headSha, baseSha] = advertised()
+  git(["fetch", "--refmap=", "--no-write-fetch-head", "--no-tags", "--no-auto-gc", remote, ...refs])
+  const moved = new Error("PR ref moved during fetch; run it again")
+  for (const sha of [headSha, baseSha]) {
+    if (run("git", ["cat-file", "-e", `${sha}^{commit}`], { cwd: repo, stdio: "ignore" }).status !== 0) throw moved
+  }
+  const [headNow, baseNow] = advertised()
+  if (headNow !== headSha || baseNow !== baseSha) throw moved
+  const mb = run("git", ["merge-base", baseSha, headSha], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+  if (mb.status === 1) throw new Error(`no merge base between ${base} and the PR head`)
+  if (mb.error || mb.status !== 0) throw new Error(failed("git merge-base", mb))
+  const mergeBase = mb.stdout.trim()
+  return { diffText: git(["diff", "-M", mergeBase, headSha]), base: mergeBase, headSha, baseRef: base, mode: "clone" }
+}
+
+/** The remote of `repo` whose raw URL names the PR's repository; `#N` means origin. Null when none does. */
+function prRemote(repo, scope, run) {
+  const rawUrl = (name) => {
+    // The raw value: `remote get-url` expands insteadOf, which is the user's routing, not identity.
+    const result = run("git", ["config", "--get", `remote.${name}.url`], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+    return result.status === 0 ? result.stdout.trim() : null
+  }
+  if (!scope.repo) return rawUrl("origin") ? "origin" : null
+  const listed = run("git", ["remote"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  const names = listed.status === 0 ? listed.stdout.split("\n").filter(Boolean) : []
+  const ordered = [...names.filter((name) => name === "origin"), ...names.filter((name) => name !== "origin")]
+  const wanted = scope.ref ? scope.repo : `${originRepo(rawUrl("origin") ?? "")?.split("/")[0]}/${scope.repo}`
+  return ordered.find((name) => originRepo(rawUrl(name) ?? "") === wanted) ?? null
+}
+
+/** The public diff URL for a PR target, on its own host (a URL's, or origin's for `owner/repo#N`). */
+function diffUrl(repo, scope, run) {
+  if (scope.ref) return `${scope.ref.replace(/\/+$/, "")}.diff`
+  if (!scope.repo || !repo) return null
+  const origin = run("git", ["config", "--get", "remote.origin.url"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  const host = origin.status === 0 ? originRepo(origin.stdout)?.split("/")[0] : null
+  return host ? `https://${host}/${scope.repo}/pull/${scope.pr}.diff` : null
+}
+
+/**
+ * Resolve a target to a raw diff plus the base it was taken against. A PR comes from `gh`, else from
+ * a local clone's matching remote (`base` required), else, for a URL or `owner/repo#N`, from the
+ * public diff URL (diff-only). `run` is spawnSync's shape, injectable for tests.
+ */
+export function resolveTarget({ repo, mode, range, prTarget, workDir, base = null, run = spawnSync }) {
   if (mode === "range") {
     // Honour the right-hand revision: `a..b` must review b, not whatever HEAD happens to be.
     const [lhs, rhs = "HEAD"] = String(range).split("..")
@@ -740,18 +845,19 @@ export function resolveTarget({ repo, mode, range, prTarget, workDir }) {
     return { diffText: git(repo, "diff", "-M", `${base}..${rhs}`), base, describe: range }
   }
   if (mode === "pr") {
-    // Same target semantics as commands/consensus-review.md §1. The `gh`-unavailable fallback
-    // fetches into workDir so the invoking repository's git state is never modified.
-    try {
-      const out = execFileSync("gh", ["pr", "diff", prTarget], { cwd: repo, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 })
-      return { diffText: out, base: null, describe: `PR ${prTarget}` }
-    } catch (err) {
-      if (!workDir) throw err
-      const url = /^https?:\/\//.test(prTarget) ? `${prTarget}.diff` : null
-      if (!url) throw err
-      const out = execFileSync("curl", ["-fsSL", url], { cwd: workDir, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 })
-      return { diffText: out, base: null, describe: `PR ${prTarget} (diff-only)` }
-    }
+    // Same target semantics as commands/consensus-review.md §1. Never checks the PR out.
+    const gh = run("gh", ["pr", "diff", prTarget], { cwd: repo, encoding: "utf8", maxBuffer: BIG, stdio: ["ignore", "pipe", "pipe"] })
+    if (!gh.error && gh.status === 0) return { diffText: gh.stdout, base: null, describe: `PR ${prTarget}`, mode: "gh" }
+    const scope = parseScope(prTarget)
+    const noSource = new Error(`${failed(`gh pr diff ${prTarget}`, gh)}; no local clone or public diff URL for it`)
+    if (!scope?.pr) throw noSource
+    const remote = repo ? prRemote(repo, scope, run) : null
+    if (remote) return { ...cloneDiff({ repo, remote, pr: scope.pr, base, run }), describe: `PR ${prTarget}` }
+    const url = diffUrl(repo, scope, run)
+    if (!url || !workDir) throw noSource
+    const curl = run("curl", ["-fsSL", url], { cwd: workDir, encoding: "utf8", maxBuffer: BIG, stdio: ["ignore", "pipe", "pipe"] })
+    if (curl.error || curl.status !== 0) throw new Error(failed(`curl -fsSL ${url}`, curl))
+    return { diffText: curl.stdout, base: null, describe: `PR ${prTarget} (diff-only)`, mode: "curl" }
   }
   // Uncommitted: tracked changes plus untracked files, which `git diff HEAD` alone omits — an
   // entirely new source file would otherwise be reviewed as if it did not exist.

@@ -28,6 +28,7 @@ const DEFAULTS = {
   timeout: { value: 900, source: "default" },
   models: { value: "agent", source: "default" },
   effort: { value: "agent", source: "default" },
+  base: { value: null, source: "default" },
 }
 const DEFAULT_LINE = "Settings: depth=auto (default) | dims=tier (default) | sceptic=strict (default) | lang=en (default) | out=default (default) | archive=on (default) | consultant=auto (default) | extra=off (default) | pi-model=auto (default) | timeout=900 (default) | models=agent (default) | effort=agent (default)"
 
@@ -243,6 +244,28 @@ test("P5: target and profile are not profile keys", () => {
   assert.deepEqual(resolveSettings([], team({ profile: "x" })), { error: "profile team: profile is not a profile key" })
 })
 
+test("base: a PR target keeps the branch name verbatim and shows it on the Settings line", () => {
+  const r = resolveSettings(["#1", "base=Release/2.x"])
+  assert.deepEqual(r.settings.base, { value: "Release/2.x", source: "flag" })
+  assert.ok(r.lines.settings.endsWith(" | base=Release/2.x (flag)"), r.lines.settings)
+})
+
+for (const raw of ["-x", "a..b", "@{-1}", "HEAD", "a;b"]) {
+  test(`base=${raw} stops: expected a branch name`, () => {
+    assert.deepEqual(resolveSettings(["#1", `base=${raw}`]), { error: `base=${raw}: expected a branch name` })
+  })
+}
+
+test("base without a PR target is ignored with a reason", () => {
+  const r = resolveSettings(["base=release"])
+  assert.deepEqual(r.settings.base, { value: null, source: "default" })
+  assert.deepEqual(r.ignored, [{ token: "base=release", reason: "no PR target" }])
+})
+
+test("base is not a profile key", () => {
+  assert.deepEqual(resolveSettings(["#1"], team({ base: "release" })), { error: "profile team: base is not a profile key" })
+})
+
 test("P6: a flag dims replaces the profile dims whole", () => {
   const r = resolveSettings(["dims=-quality"], team({ dims: "+tests" }))
   assert.deepEqual(r.settings.dims, { value: { add: [], remove: ["quality"] }, source: "flag" })
@@ -250,7 +273,7 @@ test("P6: a flag dims replaces the profile dims whole", () => {
 
 test("drift: SETTINGS keys in order", () => {
   assert.deepEqual(Object.keys(SETTINGS), [
-    "depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort",
+    "depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort", "base",
   ])
 })
 
@@ -732,6 +755,7 @@ const REJECTED = [
   ["W7", "release colour=red", "unknown key colour"],
   ["W7", "release target=#1", "target is not a profile key"],
   ["W7", "release profile=x", "profile is not a profile key"],
+  ["W7", "release base=main", "base is not a profile key"],
   ["W8", "Release depth=deep", "profile=Release: expected a profile name ([a-z0-9][a-z0-9_-], up to 64)"],
   ["W9", "release deep", "deep: expected key=value"],
   ["W13", "release", "profile release: nothing to write (give key=value)"],
@@ -827,7 +851,7 @@ test("list P1: no profiles directory lists the defaults and no profiles", () => 
 test("list P0: the defaults line is built from SETTINGS", () => {
   const { repo } = profileRepo({ ".consensus-review/profiles/ci.md": CI_TEXT })
   const first = edit(repo, "").stdout.split("\n")[0]
-  assert.equal(first, `defaults (built-in): ${Object.entries(SETTINGS).map(([k, s]) => `${k}=${s.default}`).join(" | ")}`)
+  assert.equal(first, `defaults (built-in): ${Object.entries(SETTINGS).filter(([, s]) => s.default !== null).map(([k, s]) => `${k}=${s.default}`).join(" | ")}`)
   assert.equal(first, DEFAULTS_LISTING)
 })
 

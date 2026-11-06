@@ -63,6 +63,7 @@ with its source (`flag`, `profile <name>` or `default`).
 | `timeout=<sec>`           | wall clock per attempt, an integer, default `900`, clamped to `[30, 1800]`; retried once, at most 2×T per phase                              |
 | `models=<role:model,…>`   | request a model per role (default `agent`: each agent's frontmatter model). Roles `architecture`, `impact`, `quality`, `tests`, `verifier`; models `opus`, `sonnet`, `haiku`, `fable`; no spaces, e.g. `models=verifier:fable,tests:haiku`. Unlisted roles keep their frontmatter model. See [Models and effort](#models-and-effort) |
 | `effort=<role:effort,…>`  | request an effort per role (default `agent`: each agent's frontmatter effort). The same roles; efforts `low`, `medium`, `high`, `xhigh`, `max`, e.g. `effort=verifier:high,impact:high` |
+| `base=<branch>`           | the branch the PR targets. Needed only for a PR diffed from a local clone without `gh`, which stops without it; see [Pull requests without `gh`](#pull-requests-without-gh). Not a profile key; without a PR target it is listed in `Ignored args` |
 
 P2 findings are always grouped: up to 7 are listed and the rest are rolled
 up by theme. The run archive holds every P2.
@@ -104,8 +105,9 @@ codex review of a small repository has been measured still working at
 
 ## How a review runs
 
-1. **Resolve the diff.** A PR comes from `gh pr diff` (or a URL fetch
-   without `gh`); local changes from `git diff HEAD` plus untracked
+1. **Resolve the diff.** A PR comes from `gh pr diff`, or without `gh`
+   from a local clone or a public diff URL (see [Pull requests without
+   `gh`](#pull-requests-without-gh)); local changes from `git diff HEAD` plus untracked
    files. Everything is copied to a temp directory outside the repository.
 2. **Triage.** The change gets a tier from its *effective size* (docs,
    lock files, fixtures, assets, generated code, i18n and HTTP
@@ -128,6 +130,33 @@ codex review of a small repository has been measured still working at
 5. **Sceptic.** Fires only when there are P0 or P1 findings, so a clean
    review pays nothing for it.
 6. **Report.** Terminal plus `.reviews/review-<slug>-<date>.md`, and the [run archive](#the-run-archive).
+
+### Pull requests without `gh`
+
+When `gh` is missing or not signed in, `scripts/pr-diff.mjs` resolves
+the PR, in this order:
+
+1. **A local clone.** The remote whose configured URL names the PR's
+   repository (`#N` means `origin`). The raw `remote.<name>.url` is
+   compared, not the `insteadOf`-rewritten one. This path needs
+   `base=<branch>`, the branch the PR targets: guessing it from the
+   default branch would make a backport whose head is already in `main`
+   review as an empty diff. It also needs full history; a shallow clone
+   stops. It reads the SHAs of `refs/pull/<N>/head` and
+   `refs/heads/<base>` with `git ls-remote`, fetches them with no
+   destination (`--refmap= --no-write-fetch-head --no-tags`), then
+   reads the SHAs again; a ref that moved stops the run. The diff is
+   `git diff -M <merge-base> <head>`, by SHA, so a stale local `<base>`
+   branch does not change it. The fetch adds objects to your clone and
+   nothing else: no ref, no `FETCH_HEAD`, no config. It never checks
+   the PR out.
+2. **A public diff URL**, for a PR URL or `owner/repo#N` with no
+   matching remote: `curl` on `https://<host>/<owner>/<repo>/pull/<N>.diff`,
+   where the host is the URL's, or origin's for `owner/repo#N`. This is
+   diff-only mode. No token is read from your environment.
+
+Anything else stops the run. `/loop-review` takes the same path, with
+`--base=<branch>`.
 
 ### Tiers
 

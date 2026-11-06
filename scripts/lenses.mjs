@@ -21,8 +21,8 @@ import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import {
-  checkSourcePath, instructionMatches, loadInstructionFile, loadLenses, parseDiff, renderInstructions,
-  resolveTarget, trackedSkip,
+  checkSourcePath, instructionMatches, loadInstructionFile, loadLenses, originRepo, parseDiff, parseScope,
+  renderInstructions, resolveTarget, trackedSkip,
 } from "../src/loop-review/context.mjs"
 
 const OPTIONS = {
@@ -191,31 +191,6 @@ export function select({ wd, repo = null, dims, mode = null, run }) {
   return lenses
 }
 
-/**
- * The scope of a dimension command: `{ pr: null }` for empty (uncommitted), `{ pr: N, repo }` for a
- * PR (`repo` is `host/owner/repo`, `owner/repo` for the `owner/repo#N` shorthand, which takes the origin's host,
- * or null for `#N`/`N`, i.e. this repository), null for anything else.
- */
-const parseScope = (target) => {
-  const scope = String(target ?? "").trim()
-  if (!scope) return { pr: null }
-  const bare = /^#?(\d+)$/.exec(scope)
-  if (bare) return { pr: bare[1], repo: null }
-  const ref = /^([^/\s#]+)\/([^/\s#]+)#(\d+)$/.exec(scope)
-  if (ref) return { pr: ref[3], repo: `${ref[1]}/${ref[2]}`.toLowerCase() }
-  const url = /^https?:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)\/?$/.exec(scope)
-  if (url) return { pr: url[4], repo: `${url[1]}/${url[2]}/${url[3]}`.toLowerCase(), ref: scope }
-  return null
-}
-
-/** `host/owner/repo` from an origin URL: `https://host/o/r(.git)`, `git@host:o/r(.git)` or `ssh://git@host/o/r`. */
-const originRepo = (url) => {
-  const text = String(url).trim().replace(/\/+$/, "").replace(/\.git$/, "")
-  const m = /^(?:https?|ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/([^/]+)\/([^/]+)$/.exec(text) ??
-    /^(?:[^@/]+@)?([^/:]+):([^/]+)\/([^/]+)$/.exec(text)
-  return m ? `${m[1]}/${m[2]}/${m[3]}`.toLowerCase() : null
-}
-
 /** The four dimension commands' one helper call. Never throws; the caller prints the result. */
 export function standalone({ dim, target = null, cwd = process.cwd() }) {
   let repo
@@ -231,7 +206,8 @@ export function standalone({ dim, target = null, cwd = process.cwd() }) {
     if (scope.repo) {
       let origin = null
       try {
-        origin = originRepo(execFileSync("git", ["remote", "get-url", "origin"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))
+        // The raw URL: `remote get-url` expands insteadOf, which is the user's routing, not identity.
+        origin = originRepo(execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))
       } catch {}
       const own = scope.ref ? origin : origin?.replace(/^[^/]+\//, "")
       if (own !== scope.repo) return { lensFile: null, note: "PR from another repository" }

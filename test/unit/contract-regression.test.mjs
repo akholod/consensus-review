@@ -176,7 +176,7 @@ test("the command no longer mentions a retired argument", () => {
 
 test("SETTINGS, the argument-hint and the docs tables name the same keys", () => {
   assert.deepEqual(Object.keys(SETTINGS), [
-    "depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort",
+    "depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort", "base",
   ])
   const hint = command().match(/^argument-hint: "(.*)"$/m)?.[1]
   assert.equal(hint, "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]")
@@ -223,7 +223,8 @@ test("§0 states the single-quote rule and the PR commands quote every pasted va
   assert.match(s1, /`gh pr view '<target>' \[-R '<owner\/repo>'\] --json title,/)
   assert.match(s1, /`gh pr diff '<target>' \[-R '<owner\/repo>'\] > "\$WD\/diff\.patch"`/)
   assert.match(s1, /`gh pr view '<target>' \[-R '<owner\/repo>'\] --json headRefOid`/)
-  assert.match(s1, /`curl -fsSL 'https:\/\/github\.com\/<owner>\/<repo>\/pull\/<N>\.diff' > "\$WD\/diff\.patch"`/)
+  assert.ok(s1.includes(`pr-diff.mjs" --wd '<literal WD>' --repo '<literal INVOKE>' --target '<target.ref>' [--base '<settings.base.value>']`), s1)
+  assert.doesNotMatch(s1, /github\.com|FETCH_HEAD\b(?!`)|git fetch/, "the gh-less PR path lives in pr-diff.mjs, on the PR's own host")
   assert.match(section(md, 0), /written with the `'\\''` escape/)
   assert.doesNotMatch(md, /gh pr (view|diff) <target>|--report <final|--pi-model <m>|--consultant <x>|--model <model>|--wd <literal|--wd <WD>|--repo <literal|--repo "<literal|cd <literal|--head-sha <literal|--args-file <literal|--skip-reason "|WD=\/tmp/)
 })

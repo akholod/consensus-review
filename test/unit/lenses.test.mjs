@@ -550,6 +550,17 @@ test("standalone: a PR from another repository is refused without calling gh", (
   })
 })
 
+test("standalone: the origin guard reads the raw URL, not the insteadOf-rewritten one", () => {
+  withLens(({ repo, wd }) => {
+    git(repo, "remote", "add", "origin", "https://github.com/me/app.git")
+    git(repo, "config", "url.file:///nowhere/app.git.insteadOf", "https://github.com/me/app.git")
+    const gh = fakeGh(wd, { out: PR_DIFF })
+    const { out } = standalone(repo, ["--dim", "impact", "--target", "https://github.com/me/app/pull/3"], gh.bin)
+    assert.equal(out.lensFile, join(out.wd, "lenses-impact.md"))
+    assert.equal(gh.calls(), "pr diff https://github.com/me/app/pull/3\n")
+  })
+})
+
 test("standalone --target #3 diffs the PR through gh and selects its lens", () => {
   withLens(({ repo, wd }) => {
     git(repo, "remote", "add", "origin", "git@github.com:me/app.git")

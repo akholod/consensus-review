@@ -43,6 +43,7 @@ const noArchive = Boolean(flag("no-archive", false))
 const jsonOut = Boolean(flag("json", false))
 const range = flag("range", null)
 const prTarget = flag("pr", null)
+const base = flag("base", null)
 const outPath = flag("out", null)
 
 const nonNegative = (name) => {
@@ -60,7 +61,7 @@ const workDir = mkdtempSync(join(tmpdir(), "loop-review-"))
 
 const log = (m) => process.stderr.write(`${m}\n`)
 
-const resolved = resolveTarget({ repo, mode, range: String(range ?? ""), prTarget: String(prTarget ?? ""), workDir })
+const resolved = resolveTarget({ repo, mode, range: String(range ?? ""), prTarget: String(prTarget ?? ""), workDir, base: base === null ? null : String(base) })
 if (!resolved.diffText.trim()) {
   log("No changes to review.")
   process.exit(0)
@@ -132,7 +133,7 @@ const run = await runLoop({
 
 // Sample the target again now that all model work is done: a tree that moved during the review
 // makes the run stale, and a stale run is never CLEAN.
-const finalDiff = resolveTarget({ repo, mode, range: String(range ?? ""), prTarget: String(prTarget ?? ""), workDir })
+const finalDiff = resolveTarget({ repo, mode, range: String(range ?? ""), prTarget: String(prTarget ?? ""), workDir, base: base === null ? null : String(base) })
 const finalHash = diffHash(finalDiff.diffText)
 if (finalHash !== ctx.diffHash) log(`diff changed during the run (${ctx.diffHash} -> ${finalHash})`)
 const terminal = evaluateTerminal(run, finalHash)

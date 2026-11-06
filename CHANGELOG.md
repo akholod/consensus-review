@@ -15,6 +15,17 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
   or `.gitlab/duo/mr-review-instructions.yaml` no longer applies
   (`skipped "not committed"`); commit it. The doctor reports such files.
 
+- **Fixed — an exact base for a PR from a local clone without `gh`**
+  ([#12](https://github.com/akholod/consensus-review/issues/12)). The
+  gh-less PR path moved from prose into `scripts/pr-diff.mjs`. It needs
+  the new `base=<branch>` (`--base=` for `/loop-review`) and stops
+  without it, instead of diffing against an unnamed base. It matches the
+  remote on its raw configured URL, stops on a shallow clone, diffs the
+  advertised SHAs (`git diff -M <merge-base> <head>`) and stops when a
+  ref moves during the fetch. The fetch writes no ref, `FETCH_HEAD` or
+  config. The `curl` fallback uses the PR's own host, not github.com.
+  The dimension commands' origin check also reads the raw URL now.
+
 ## 0.13.0
 
 Project lenses and profiles, simpler arguments, typed sceptic votes, a consultant cascade, run archives and retried consultants. Breaking: arguments changed; see below.
