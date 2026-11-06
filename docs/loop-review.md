@@ -34,7 +34,7 @@ not an omission.
 | `--timeout=<sec>`                          | wall clock per pass, default `240`                               |
 | `--max-tokens`, `--max-calls`, `--max-ms`  | hard budgets, unlimited by default (`0`); running out of one rules out `CLEAN` |
 | `--out=<path>`                             | report destination, default `.reviews/loop-review-<hash>.md`     |
-| `--no-file`                                | terminal only, nothing written                                   |
+| `--no-file`                                | terminal only, no file written                                   |
 | `--no-archive`                             | do not write the run archive                                     |
 | `--json`                                   | print the whole run state as JSON instead of the report          |
 
@@ -92,11 +92,12 @@ pull request. This is enforced, not requested:
   `WebFetch` and `WebSearch` disallowed, and with every MCP server removed, so the
   model sees only the context it was given and has no tool that could
   change anything;
-- the runtime runs no `git` or `gh` command that writes; `gh pr diff` is
-  its only call to the forge (when `gh` fails on a PR URL, it fetches
-  `<url>.diff` with `curl` into the temp directory instead);
+- the runtime changes no git ref, `FETCH_HEAD` or config; `gh pr diff` is
+  its only call to the forge. Without `gh`, a PR is fetched through a
+  local clone, which adds the PR's commits to this repository's object
+  store (even with `--no-file`), or as `<url>.diff` with `curl`;
 - it writes only the report and its private run archive in the ignored
-  `.reviews/` (`--no-archive` drops the archive; `--no-file` writes nothing). Working files
+  `.reviews/` (`--no-archive` drops the archive; `--no-file` writes no file). Working files
   stay in a temp directory outside the repository.
 
 The intended cycle: review, then a person or another agent applies the

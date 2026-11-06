@@ -141,11 +141,13 @@ test("the arbiter writes the files the archive expects, with one id space", () =
   assert.doesNotMatch(s8, /Give every P0\/P1 a string id/, "§8 must not renumber")
 })
 
-test("out=none still means zero writes", () => {
+// Zero files, not zero writes: the gh-less clone path adds git objects even with no-file (codex
+// completion review, item 3), and the command must say so.
+test("out=none still means zero files; the clone path's object writes are stated", () => {
   const md = command()
-  assert.match(md, /none at all with `out=none`/)
-  assert.match(section(md, 0), /`none` \(`no-file`\) → terminal output only: the review performs \*\*zero\*\* writes anywhere on disk/)
-  assert.match(md.split("## Hard rules")[1], /with `out=none` \(`no-file`\) there is no write at all/)
+  assert.match(md, /no file at all with `out=none` \(`no-file`\)\. Without `gh`, a PR reviewed through a local clone fetches its commits into this repository's object store, even with `no-file`; it writes no ref, `FETCH_HEAD` or config\./)
+  assert.match(section(md, 0), /`none` \(`no-file`\) → terminal output only: the review writes \*\*zero\*\* files anywhere on disk .*only the gh-less clone path of §1 adds git objects/)
+  assert.match(md.split("## Hard rules")[1], /with `out=none` \(`no-file`\) no file at all\. The gh-less clone path \(§1\) adds git objects, never a ref, `FETCH_HEAD` or config\./)
   assert.match(section(md, 9), /unless `out` is `none` \(terminal only, zero writes, no archive call\)/)
 })
 

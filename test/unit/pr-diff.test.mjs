@@ -206,3 +206,58 @@ test("no gh, no matching remote and no diff URL: #N without an origin stops nami
   assert.throws(() => pr(fx, "#1", { base: "release" }), /^Error: Command failed: gh pr diff #1: ENOENT; no local clone or public diff URL for it$/)
   assert.ok(!existsSync(join(fx.wd, "diff.patch")))
 })
+
+// Codex completion review, item 1: curl must not read ~/.curlrc, and an empty PR diff stops.
+test("a ~/.curlrc with `output` does not divert the diff: curl runs with -q first and the patch comes back", () => {
+  const fx = fixture()
+  git(fx.clone, "config", "remote.origin.url", "https://git.example.com/a/b")
+  const home = join(fx.root, "home")
+  mkdirSync(home)
+  const diverted = join(fx.root, "diverted.patch")
+  writeFileSync(join(home, ".curlrc"), `output = "${diverted}"\n`)
+  const patch = join(fx.root, "served.diff")
+  writeFileSync(patch, "diff --git a/x b/x\n+served\n")
+  // The real curl, HOME at the temp dir, the URL swapped for the local file; every flag kept.
+  const run = (cmd, args, options) => {
+    if (cmd !== "curl") return noGh()(cmd, args, options)
+    const { XDG_CONFIG_HOME, CURL_HOME, ...env } = process.env
+    return spawnSync("curl", [...args.slice(0, -1), `file://${patch}`], { ...options, env: { ...env, HOME: home } })
+  }
+
+  const r = pr(fx, "owner/repo#7", { run })
+
+  assert.equal(r.diffText, "diff --git a/x b/x\n+served\n")
+  assert.ok(!existsSync(diverted))
+})
+
+test("curl exiting 0 with an empty body stops; pr-diff exits 2 and writes no diff.patch", () => {
+  const fx = fixture()
+  git(fx.clone, "config", "remote.origin.url", "https://git.example.com/a/b")
+  const run = (cmd, args, options) => (cmd === "curl" ? { status: 0, stdout: "" } : noGh()(cmd, args, options))
+  assert.throws(() => pr(fx, "owner/repo#7", { run }), { message: "PR owner/repo#7: the curl diff is empty; nothing to review" })
+  assert.equal(main(["--wd", fx.wd, "--target", "owner/repo#7", "--repo", fx.clone], { run }), 2)
+  assert.ok(!existsSync(join(fx.wd, "diff.patch")))
+})
+
+test("gh printing an empty diff stops instead of becoming no changes", () => {
+  const fx = fixture()
+  const run = (cmd, args, options) => (cmd === "gh" ? { status: 0, stdout: "" } : spawnSync(cmd, args, options))
+  assert.throws(() => pr(fx, "#1", { run }), { message: "PR #1: the gh diff is empty; nothing to review" })
+})
+
+test("a browser URL /pull/7/files?diff=split#r1 curls the canonical .diff URL", () => {
+  const fx = fixture()
+  git(fx.clone, "config", "remote.origin.url", "https://git.example.com/a/b")
+  const urls = []
+  const run = (cmd, args, options) => {
+    if (cmd === "curl") {
+      urls.push(args)
+      return { status: 0, stdout: "diff --git a/x b/x\n" }
+    }
+    return noGh()(cmd, args, options)
+  }
+
+  pr(fx, "https://github.com/owner/repo/pull/7/files?diff=split#r1", { run })
+
+  assert.deepEqual(urls, [["-q", "-fsSL", "https://github.com/owner/repo/pull/7.diff"]])
+})

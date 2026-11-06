@@ -8,7 +8,7 @@ to check) using **independent** reviewers (who checks): your dimension agents + 
 (`codex`, else `pi` ([pi.dev](https://pi.dev)), else `claude-cli`), plus the optional extra advisor `pi` with `extra=pi`.
 Merge everything into a single consensus report with P0–P2 findings.
 This is a **read-only** review: do not fix, commit, push, or comment on the PR.
-The only writes are the markdown report file and its private run archive — and none at all with `out=none` (`no-file`).
+The only writes are the markdown report file and its private run archive — and no file at all with `out=none` (`no-file`). Without `gh`, a PR reviewed through a local clone fetches its commits into this repository's object store, even with `no-file`; it writes no ref, `FETCH_HEAD` or config.
 
 Arguments: `$ARGUMENTS`
 
@@ -40,7 +40,7 @@ What each setting means (`settings.<key>.value`):
 - `pi-model` — a model id (e.g. `pi-model=gemini-2.5-pro`, `pi-model=sonnet:high`) → passed to `pi --model` for whichever pi lane runs, consultant or extra. `auto` → §2 picks pi's model by role from `pi --list-models`: as the consultant an OpenAI model first, then glm → qwen → kimi; as extra glm → qwen → kimi. It never falls back to pi's unpinned default.
   - **Independence check:** the value of an extra consultant is a *different* model family. Read `extraSameEngine` from `review.decision.json` (§6); when it is true, the extra lane adds little — say so in the report (section 9) and suggest `pi-model=<other-model>`.
 - `timeout` — per-attempt wall clock (`T`, integer seconds, already clamped) for the consultant lanes and their refuter re-runs. A lane that times out or fails transiently is **retried once**; a config error (bad auth, rejected schema, unknown model) is not. Each phase is bounded by **2×T** — §5 and §8 separately, so `sceptic=strict` can take up to ~4×T in the worst case. A lane whose attempts all fail is reported `degraded (…)` and **its findings are lost**, so the cost of setting this too low is a whole source silently dropped from the review, not a slower review. The lanes run in parallel, so a higher ceiling costs nothing until something actually hangs. Measured: a codex consultant reading a small repository was still working at **600s**, so the old `240` default truncated ordinary runs.
-- `out` — where the report file goes. `default` → `<INVOKE>/.reviews/review-<slug>-<YYYY-MM-DD>.md`. A path ending in `/`, or naming an existing directory, is a directory and the default filename is used inside it; anything else is the exact file path. `none` (`no-file`) → terminal output only: the review performs **zero** writes anywhere on disk (`$WD` under `/tmp` aside) — no run archive either.
+- `out` — where the report file goes. `default` → `<INVOKE>/.reviews/review-<slug>-<YYYY-MM-DD>.md`. A path ending in `/`, or naming an existing directory, is a directory and the default filename is used inside it; anything else is the exact file path. `none` (`no-file`) → terminal output only: the review writes **zero** files anywhere on disk (`$WD` under `/tmp` aside) — no run archive either; only the gh-less clone path of §1 adds git objects (never a ref, `FETCH_HEAD` or config).
 - `archive` — `on` (default): §9 copies a bounded, private snapshot of `$WD` (diff, each source's prompt and raw output, an event log) to `<INVOKE>/.reviews/<run-id>/`, and only when git confirms `.reviews/` is ignored. `archive=off` → no run archive. `out` moves the report, never the archive.
 - `lang` — output language for the review, a code or a name. Code identifiers, paths, and technical terms always stay in their original form. Pass the chosen language to the dimension agents and into the consultant brief.
 - `models` — `agent` (default) → every role runs on its agent's frontmatter model. Otherwise a map in role order, e.g. `{"impact": "sonnet", "verifier": "opus"}` (roles `architecture`, `impact`, `quality`, `tests`, `verifier`; models `opus|sonnet|haiku|fable`): §5 and §8 pass the listed role's model on its Task, and an unlisted role keeps its frontmatter model. It is a *requested* model — the host may reject or substitute it — so the `Settings:` line marks it `requested`, and the report never names an effective model the Task result does not show.
@@ -470,7 +470,7 @@ Totals: P0=<n> P1=<n> P2=<n>
 ```
 
 ## Hard rules
-- **Read-only:** do not edit code, commit, push, comment on the PR, or run fixes. The only writes are the report file (`.reviews/` by default, or `out=<path>`) and its private run archive (`<INVOKE>/.reviews/<run-id>/`, unless `archive=off`) — and with `out=none` (`no-file`) there is no write at all.
+- **Read-only:** do not edit code, commit, push, comment on the PR, or run fixes. The only writes are the report file (`.reviews/` by default, or `out=<path>`) and its private run archive (`<INVOKE>/.reviews/<run-id>/`, unless `archive=off`) — and with `out=none` (`no-file`) no file at all. The gh-less clone path (§1) adds git objects, never a ref, `FETCH_HEAD` or config.
 - Working files only in `$WD` (mktemp outside the repo).
 - Lenses never change a severity, a bar, the sceptic or the write surface.
 - A profile changes only settings; its body is ignored and never passed to a model. Never read a profile file yourself or copy its values: §1.5 applies it in code.

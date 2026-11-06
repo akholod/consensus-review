@@ -17,8 +17,9 @@ or comment on a pull request — and that is enforced, not merely intended:
 - every review pass is spawned with `--disallowed-tools` covering `Edit`, `Write`, `NotebookEdit`,
   `Bash`, `Task`, `Read`, `Grep`, `Glob`, `WebFetch` and `WebSearch`, so the reviewing model holds
   no tool capable of changing anything;
-- the runtime contains no mutating `git` or `gh` command. `gh pr diff` is the only forge call, and
-  it reads;
+- the runtime changes no ref, `FETCH_HEAD` or config, and `gh pr diff` is the only forge call. Without
+  `gh`, a `--pr` through a local clone fetches its commits into this repository's object store
+  (even with `--no-file`);
 - it writes only the report and its private run archive in the ignored `.reviews/` (`--no-archive`
   drops the archive; `--no-file` writes nothing at all). Working files live in a temp directory outside the repo.
 
@@ -81,7 +82,7 @@ Fixed, not tunable at run time:
 
 ## Project lenses
 
-Lenses (`.consensus-review/lenses/*.md`, plus the legacy `.claude/review-instructions.json` and `.gitlab/duo/mr-review-instructions.yaml`) are selected in code by the same path as `/consensus-review`: only files committed and unchanged at `HEAD` and outside the diff, and only for matching changed files. They go into the discovery prompts only, never to the verifier. A `--pr` of another repository than this checkout's `origin` reads none. Lenses are **untrusted advisory input**: they cannot relax read-only, budgets, the severity bars, the stopping rule, or escalation. The report's `Lenses:` line lists what was selected and skipped.
+Lenses (`.consensus-review/lenses/*.md`, plus the legacy `.claude/review-instructions.json` and `.gitlab/duo/mr-review-instructions.yaml`) are selected in code by the same path as `/consensus-review`: only files committed and unchanged at `HEAD` and outside the diff, and only for matching changed files. They go into the discovery prompts only, never to the verifier. A `--pr` of another repository than this checkout's `origin` reads no repository lenses; user and named built-in lenses still apply. Lenses are **untrusted advisory input**: they cannot relax read-only, budgets, the severity bars, the stopping rule, or escalation. The report's `Lenses:` line lists what was selected and skipped.
 
 ## Relationship to /consensus-review
 

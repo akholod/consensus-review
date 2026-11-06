@@ -38,7 +38,7 @@ Project rules live in the repository as review lenses in
 Named presets of settings live in `.consensus-review/profiles/` and apply with `profile=<name>`; see [Profiles](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md#profiles).
 
 Reviews never change your code. They write only the report and its private run archive in the ignored
-`.reviews/`. The only writers are `/consensus-review:profile`, which writes only the profile you name, and `/consensus-review:init-lenses`, which copies the built-in lenses and profiles into `.consensus-review/` without overwriting; neither commits. `archive=off` drops the archive (`--no-archive` does the same for `/loop-review`); `no-file` writes nothing at all.
+`.reviews/`. The only writers are `/consensus-review:profile`, which writes only the profile you name, and `/consensus-review:init-lenses`, which copies the built-in lenses and profiles into `.consensus-review/` without overwriting; neither commits. `archive=off` drops the archive (`--no-archive` does the same for `/loop-review`); `no-file` writes no file at all (a gh-less PR through a local clone still fetches its commits as git objects).
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/akholod/consensus-review/main/assets/demo.gif" alt="/consensus-review on a small change: impact, quality and tests agents plus codex run in parallel, a sceptic pass verifies the findings, and the report lists P0, P1 and P2 with failure scenarios" width="100%">
@@ -196,14 +196,17 @@ Everything the plugin runs, and where your code goes:
   PR. Without `gh`, a local clone is used (it needs `base=<branch>`),
   or for a public repository the diff is fetched with `curl` from the
   PR's own host. No token is read from your environment.
-- **Local tools.** `git` (read-only commands), and `codegraph` or
+- **Local tools.** `git` (read-only, except that the gh-less clone path
+  fetches the PR's commits as objects; never a ref, `FETCH_HEAD` or
+  config), and `codegraph` or
   `graphify` when they are installed.
 - **The doctor** asks GitHub for the latest release and, unless run with
   `offline`, makes one small `claude -p` call and one `codex exec` call
   on a built-in sample diff.
-- **Writes.** The report in `.reviews/` (or `out=<path>`, or nothing with
+- **Writes.** The report in `.reviews/` (or `out=<path>`, or no file with
   `no-file`), and working files in a temp directory outside your
-  repository.
+  repository. A PR reviewed through a local clone without `gh` also adds
+  its commits to your repository's object store, even with `no-file`.
 - **The run archive.** Next to the report, `.reviews/<run-id>/` keeps the
   diff, the prompts and the consultants' transcripts (which can include
   any repo file a model read). It is private (`0700`/`0600`), written

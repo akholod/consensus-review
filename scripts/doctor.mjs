@@ -99,12 +99,12 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
 
     const gh = toolVersion("gh")
     if (!gh) {
-      add("consultants", "gh", "warn", "not installed", "PR mode falls back to fetching the .diff by URL")
+      add("consultants", "gh", "warn", "not installed", "PR mode falls back to a local clone (needs base=; adds git objects, no ref or config), else the .diff by URL")
     } else {
       // Presence is not the failure mode here either — an unauthenticated gh is.
       const auth = sh("gh", ["auth", "status"]) !== null
       add("consultants", "gh", auth ? "ok" : "warn", auth ? gh : `${gh} — not authenticated`,
-        auth ? "" : "PR mode falls back to fetching the .diff by URL")
+        auth ? "" : "PR mode falls back to a local clone (needs base=; adds git objects, no ref or config), else the .diff by URL")
     }
   }
 

@@ -4,6 +4,33 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
 
 ## Unreleased
 
+- **Fixed — a PR diff fetched without `gh` can no longer come back empty
+  as "no changes"** (codex review of
+  [#12](https://github.com/akholod/consensus-review/issues/12)). `curl`
+  runs with `-q` first, so a `~/.curlrc` (an `output` setting, say) is not
+  read. An empty PR diff from `gh`, the local clone or `curl` now stops
+  the run (`pr-diff.mjs` exits 2) instead of reporting nothing to review.
+
+- **Fixed — an unreadable user layer no longer falls through to a
+  built-in.** Only a missing path (ENOENT, ENOTDIR) under
+  `~/.config/consensus-review` counts as absent. Any other error (an
+  unreadable directory, a symlink loop) stops `profile=<name>`, makes a
+  named lens (`lenses=x`, `+x`) exit 2, and is what the doctor reports.
+
+- **Fixed — browser PR URLs work without `gh`.** `…/pull/12/files`,
+  `/commits` and `/checks`, with a query or fragment, now resolve through
+  the clone and `curl` paths too, which use the canonical
+  `…/pull/12(.diff)`. **Changed:** a URL of one commit in a PR
+  (`…/pull/12/commits/<sha>`) is no longer accepted as a target.
+
+- **Changed — `base=` accepts `+`** (`release+hotfix`); a leading `-`
+  and `git check-ref-format` still apply.
+
+- **Docs — the write surface.** Without `gh`, a PR reviewed through a
+  local clone adds its commits to the repository's object store, also
+  with `no-file`; it writes no ref, `FETCH_HEAD` or config. A
+  cross-repository `/loop-review --pr` omits repository lenses only.
+
 - **Fixed — lenses apply only when tracked and unchanged at `HEAD`**
   ([#12](https://github.com/akholod/consensus-review/issues/12)). A repo
   lens or legacy instruction file applies only when it is tracked at

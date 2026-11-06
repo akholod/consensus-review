@@ -495,3 +495,23 @@ test("sources: the user row prints the resolved root, reserved and shadowed name
     }
   })
 })
+
+test("sources: a mode-000 user root is reported as the EACCES error, not none", { skip: process.getuid?.() === 0 && "root ignores mode 000" }, () => {
+  withRepo((dir) => {
+    const xdg = mkdtempSync(join(tmpdir(), "doctor-xdg-"))
+    const root = join(xdg, "consensus-review")
+    try {
+      for (const sub of ["lenses", "profiles"]) mkdirSync(join(root, sub), { recursive: true })
+      for (const d of [root, join(root, "lenses"), join(root, "profiles")]) chmodSync(d, 0o755)
+      chmodSync(root, 0o000)
+      const rows = diagnose({ root: ROOT, repo: dir, offline: true, sources: { env: { XDG_CONFIG_HOME: xdg } } })
+        .filter((r) => r.section === "sources" && r.label === "user layer")
+      assert.deepEqual(rows.map((r) => [r.status, r.detail]), [
+        ["warn", `${root}; lenses rejected: EACCES (${join(root, "lenses")}); profiles rejected: EACCES (${join(root, "profiles")})`],
+      ])
+    } finally {
+      chmodSync(root, 0o755)
+      rmSync(xdg, { recursive: true, force: true })
+    }
+  })
+})

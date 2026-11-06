@@ -15,7 +15,7 @@ Flags map straight through: `offline` → `--offline`, `repo=<path>` → `--repo
 
 **This review degrades silently, on purpose.** An unavailable consultant marks its lane
 `unavailable` and the run continues. If every consultant fails, the floor case builds the report
-from the Claude lane alone and does not abort. `gh` missing falls back to fetching the diff by URL.
+from the Claude lane alone and does not abort. `gh` missing falls back to a local clone (needs `base=`; adds git objects, never a ref or config), else to fetching the diff by URL.
 Each of those is right at run time — a partial review beats none — but together they mean a
 misconfigured setup yields a report that *looks* complete and is quietly weaker.
 

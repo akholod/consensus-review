@@ -630,6 +630,15 @@ const realOrNull = (path) => {
     return null
   }
 }
+/** `{ real }`, `{ absent: true }` (ENOENT, ENOTDIR) or `{ error }` (EACCES, ELOOP, ...): only absence is absence. */
+const realOrError = (path) => {
+  try {
+    return { real: realpathSync(path) }
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return { absent: true }
+    return { error: `${String(error.code ?? error.message)} (${path})` }
+  }
+}
 const isInside = (path, root) => path === root || path.startsWith(`${root}${sep}`)
 
 /** A user-layer path's ownership problem, or null: owned by you or root, and not group- or world-writable. */
@@ -648,13 +657,15 @@ const ownerProblem = (st, uid, path) => {
  * ownership `failure` still lists the files, and each one fails with it: a user failure reserves
  * its names instead of falling through to a lower layer. The built-in root
  * `<plugin>/presets` must resolve outside the reviewed repository. `env`, `pluginRoot`, `uid` and
- * `stat` are injectable for tests.
+ * `stat` are injectable for tests. Only ENOENT/ENOTDIR is absence: any other error resolving a user
+ * path (EACCES, ELOOP, ...) is a `failure`, so it reserves names too; in the built-in layer, a problem.
  */
 export function sourceRoots({ repo = null, kind, env = process.env, pluginRoot = PLUGIN_ROOT, uid = process.getuid?.() ?? null, stat = statSync }) {
   const repoReal = repo ? realOrNull(repo) ?? resolve(repo) : null
   const outside = (path) => {
-    const real = realOrNull(path)
-    if (!real) return { problem: "absent" }
+    const { real, absent, error } = realOrError(path)
+    if (absent) return { problem: "absent" }
+    if (error) return { error }
     if (repoReal && isInside(real, repoReal)) return { problem: `inside the reviewed repository (${path})` }
     return { real }
   }
@@ -668,6 +679,7 @@ export function sourceRoots({ repo = null, kind, env = process.env, pluginRoot =
   else if (!userRoot) user.problem = "no HOME or XDG_CONFIG_HOME"
   for (const path of user.problem ? [] : [user.root, user.dir]) {
     const found = outside(path)
+    if (found.error) { user.failure ??= found.error; break }
     if (found.problem) { user.problem = found.problem; break }
     const st = stat(found.real)
     if (!st.isDirectory()) { user.problem = `not a directory (${path})`; break }
@@ -676,7 +688,8 @@ export function sourceRoots({ repo = null, kind, env = process.env, pluginRoot =
   }
   const builtinRoot = join(pluginRoot, "presets")
   const builtin = { layer: "builtin", root: builtinRoot, dir: join(builtinRoot, kind), problem: null, failure: null, stat: statSync, repoReal }
-  builtin.problem = outside(builtin.dir).problem ?? null
+  const found = outside(builtin.dir)
+  builtin.problem = found.problem ?? found.error ?? null
   return [user, builtin]
 }
 
@@ -706,8 +719,9 @@ export function readLayerFile(layer, entry, maxBytes) {
   const file = layerFileName(layer, entry)
   if (layer.failure) return { file, error: layer.failure }
   const path = join(layer.dir, entry)
-  const real = realOrNull(path)
-  if (!real) return { file, error: "dangling symlink" }
+  const { real, absent, error } = realOrError(path)
+  if (absent) return { file, error: "dangling symlink" }
+  if (error) return { file, error }
   if (layer.repoReal && isInside(real, layer.repoReal)) return { file, error: "inside the reviewed repository" }
   let raw
   try {
@@ -729,7 +743,7 @@ export function loadLayerLenses(layer) {
   const lenses = []
   const rejected = []
   const listed = layerEntries(layer)
-  if (listed.error) return { lenses, rejected: [{ name: null, file: layer.dir, layer: layer.layer, reason: listed.error }] }
+  if (listed.error) return { lenses, rejected: [{ name: null, file: layer.dir, layer: layer.layer, reason: listed.error, unlisted: true }] }
   for (const entry of listed.entries) {
     const name = entry.slice(0, -3)
     const read = readLayerFile(layer, entry, MAX_LENS_BYTES)
@@ -833,9 +847,17 @@ export function buildStaticPrefix(ctx) {
 }
 
 /**
+ * A PR URL, the one shape settings and parseScope both accept: an optional browser tab (`/files`,
+ * `/commits`, `/checks`), query and fragment, all dropped from the canonical `ref`. The alphabet
+ * stays shell-safe: the target reaches Bash single-quoted.
+ */
+export const PR_URL = /^(https?):\/\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/pull\/(\d+)(?:\/(?:files|commits|checks))?\/?(?:\?[A-Za-z0-9._=-]*)?(?:#[A-Za-z0-9._=-]*)?$/
+
+/**
  * The scope of a PR target: `{ pr: null }` for empty (uncommitted), `{ pr: N, repo }` for a PR
  * (`repo` is `host/owner/repo` for a URL, `owner/repo` for the `owner/repo#N` shorthand, which takes
- * the origin's host, or null for `#N`/`N`, i.e. this repository), null for anything else.
+ * the origin's host, or null for `#N`/`N`, i.e. this repository; a URL also gives its canonical
+ * `ref`, see PR_URL), null for anything else.
  */
 export const parseScope = (target) => {
   const scope = String(target ?? "").trim()
@@ -844,8 +866,8 @@ export const parseScope = (target) => {
   if (bare) return { pr: bare[1], repo: null }
   const ref = /^([^/\s#]+)\/([^/\s#]+)#(\d+)$/.exec(scope)
   if (ref) return { pr: ref[3], repo: `${ref[1]}/${ref[2]}`.toLowerCase() }
-  const url = /^https?:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)\/?$/.exec(scope)
-  if (url) return { pr: url[4], repo: `${url[1]}/${url[2]}/${url[3]}`.toLowerCase(), ref: scope }
+  const url = PR_URL.exec(scope)
+  if (url) return { pr: url[5], repo: `${url[2]}/${url[3]}/${url[4]}`.toLowerCase(), ref: `${url[1]}://${url[2]}/${url[3]}/${url[4]}/pull/${url[5]}` }
   return null
 }
 
@@ -859,7 +881,7 @@ export const originRepo = (url) => {
 
 /** A branch name `git check-ref-format --branch` accepts, from a shell-safe alphabet and not an option. */
 export function isBranchName(raw, run = spawnSync) {
-  if (!/^[A-Za-z0-9._/-]+$/.test(raw) || raw.startsWith("-")) return false
+  if (!/^[A-Za-z0-9._/+-]+$/.test(raw) || raw.startsWith("-")) return false
   return run("git", ["check-ref-format", "--branch", raw], { stdio: "ignore" }).status === 0
 }
 
@@ -948,17 +970,23 @@ export function resolveTarget({ repo, mode, range, prTarget, workDir, base = nul
   if (mode === "pr") {
     // Same target semantics as commands/consensus-review.md §1. Never checks the PR out.
     const gh = run("gh", ["pr", "diff", prTarget], { cwd: repo, encoding: "utf8", maxBuffer: BIG, stdio: ["ignore", "pipe", "pipe"] })
-    if (!gh.error && gh.status === 0) return { diffText: gh.stdout, base: null, describe: `PR ${prTarget}`, mode: "gh" }
+    // An empty PR diff stops: a source that printed nothing must not become "no changes".
+    const nonEmpty = (r) => {
+      if (!String(r.diffText).trim()) throw new Error(`PR ${prTarget}: the ${r.mode} diff is empty; nothing to review`)
+      return r
+    }
+    if (!gh.error && gh.status === 0) return nonEmpty({ diffText: gh.stdout, base: null, describe: `PR ${prTarget}`, mode: "gh" })
     const scope = parseScope(prTarget)
     const noSource = new Error(`${failed(`gh pr diff ${prTarget}`, gh)}; no local clone or public diff URL for it`)
     if (!scope?.pr) throw noSource
     const remote = repo ? prRemote(repo, scope, run) : null
-    if (remote) return { ...cloneDiff({ repo, remote, pr: scope.pr, base, run }), describe: `PR ${prTarget}` }
+    if (remote) return nonEmpty({ ...cloneDiff({ repo, remote, pr: scope.pr, base, run }), describe: `PR ${prTarget}` })
     const url = diffUrl(repo, scope, run)
     if (!url || !workDir) throw noSource
-    const curl = run("curl", ["-fsSL", url], { cwd: workDir, encoding: "utf8", maxBuffer: BIG, stdio: ["ignore", "pipe", "pipe"] })
-    if (curl.error || curl.status !== 0) throw new Error(failed(`curl -fsSL ${url}`, curl))
-    return { diffText: curl.stdout, base: null, describe: `PR ${prTarget} (diff-only)`, mode: "curl" }
+    // -q first: no ~/.curlrc, whose `output` would send the diff elsewhere and leave stdout empty.
+    const curl = run("curl", ["-q", "-fsSL", url], { cwd: workDir, encoding: "utf8", maxBuffer: BIG, stdio: ["ignore", "pipe", "pipe"] })
+    if (curl.error || curl.status !== 0) throw new Error(failed(`curl -q -fsSL ${url}`, curl))
+    return nonEmpty({ diffText: curl.stdout, base: null, describe: `PR ${prTarget} (diff-only)`, mode: "curl" })
   }
   // Uncommitted: tracked changes plus untracked files, which `git diff HEAD` alone omits — an
   // entirely new source file would otherwise be reviewed as if it did not exist.

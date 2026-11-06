@@ -48,7 +48,7 @@ with its source (`flag`, `profile <name>` or `default`).
 | `sceptic=basic`           | the verifier alone, the same vote rules with one voter                                                                                       |
 | `sceptic=off`             | no sceptic pass                                                                                                                              |
 | `lang=<language>`         | report language, default `en`: a code or a name (`uk`, `pt-BR`, `Українська`); code, paths and terms stay as they are                        |
-| `no-file`                 | terminal only; the run writes nothing to disk, the archive included                                                                          |
+| `no-file`                 | terminal only; no report or archive file (a gh-less clone still adds git objects)                                                                       |
 | `profile=<name>`          | apply the repository profile `.consensus-review/profiles/<name>.md` (see [Profiles](#profiles)); flags still win. A profile the run cannot apply stops it |
 
 ### Advanced

@@ -8,7 +8,7 @@ import {
   parseDiff, changedLines, classify, risksFor, deriveCells, isTrivial, isHighRisk,
   fnmatch, parseInstructionsYaml, instructionMatches, touchesHighRisk, buildContext,
   diffHash, buildStaticPrefix, parseLensFile, loadLenses, loadInstructionFile, renderInstructions,
-  sourceRoots, readLayerFile, loadLayerLenses,
+  sourceRoots, readLayerFile, loadLayerLenses, parseScope, isBranchName,
 } from "../../src/loop-review/context.mjs"
 import { SURFACE, RISK } from "../../src/loop-review/schema.mjs"
 
@@ -770,4 +770,58 @@ test("layers: the built-in layer is ignored when the plugin root is inside the r
     assert.equal(builtin.problem, `inside the reviewed repository (${join(repo, "presets/lenses")})`)
     assert.equal(sourceRoots({ repo: null, kind: "lenses", env: {}, pluginRoot: repo })[1].problem, null)
   })
+})
+
+// Only ENOENT/ENOTDIR is absence (codex completion review, item 2): an unreadable user root is a
+// failure that reserves every name, never a quiet fall-through to a weaker built-in.
+test("layers: a mode-000 user root is a failure, not absence: its listing is rejected as unlisted", { skip: process.getuid?.() === 0 && "root ignores mode 000" }, () => {
+  withUserLayer(({ repo, env, xdg, lenses }) => {
+    const root = join(xdg, "consensus-review")
+    chmodSync(root, 0o000)
+    try {
+      const layer = userLayer({ repo, env, uid: process.getuid() })
+      assert.equal(layer.problem, null)
+      assert.equal(layer.failure, `EACCES (${lenses})`)
+      assert.deepEqual(loadLayerLenses(layer).rejected,
+        [{ name: null, file: lenses, layer: "user", reason: `EACCES (${lenses})`, unlisted: true }])
+    } finally {
+      chmodSync(root, 0o755)
+    }
+  })
+})
+
+test("layers: a user root that is a symlink loop is an ELOOP failure; a looping lens file is ELOOP, not dangling", () => {
+  withUserLayer(({ repo, env, xdg, lenses }) => {
+    const loop = join(xdg, "loop")
+    symlinkSync(loop, loop)
+    assert.equal(userLayer({ repo, env: { XDG_CONFIG_HOME: loop }, uid: process.getuid() }).failure, `ELOOP (${join(loop, "consensus-review")})`)
+    const file = join(lenses, "y.md")
+    symlinkSync(file, file)
+    assert.equal(readLayerFile(userLayer({ repo, env, uid: process.getuid() }), "y.md", 8192).error, `ELOOP (${file})`)
+    assert.equal(userLayer({ repo, env: { XDG_CONFIG_HOME: join(xdg, "missing") }, uid: process.getuid() }).problem, "absent")
+  })
+})
+
+// One PR-target shape for settings and parseScope (codex completion review, item 4).
+for (const url of [
+  "https://github.com/O/r/pull/12/files",
+  "https://github.com/O/r/pull/12/commits/",
+  "https://github.com/O/r/pull/12/checks?x=1#r2",
+  "https://github.com/O/r/pull/12/files?diff=split#discussion_r1",
+]) {
+  test(`parseScope: ${url} → PR 12, canonical ref without tab, query or fragment`, () => {
+    assert.deepEqual(parseScope(url), { pr: "12", repo: "github.com/o/r", ref: "https://github.com/O/r/pull/12" })
+  })
+}
+
+test("parseScope: a commit inside a PR or an unknown tab is not a PR target", () => {
+  assert.equal(parseScope("https://github.com/o/r/pull/12/commits/abc123"), null)
+  assert.equal(parseScope("https://github.com/o/r/pull/12/review"), null)
+})
+
+test("isBranchName: + is allowed (release+hotfix); a leading - and shell metacharacters are not", () => {
+  assert.equal(isBranchName("release+hotfix"), true)
+  assert.equal(isBranchName("-release+hotfix"), false)
+  assert.equal(isBranchName("a+b;c"), false)
+  assert.equal(isBranchName("a+b..c"), false)
 })

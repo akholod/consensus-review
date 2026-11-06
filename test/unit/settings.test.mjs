@@ -166,6 +166,8 @@ for (const token of [
   "o/$(x)#12",
   "https://github.com/o/r/pull/12?a=1&b=2",
   "--https://github.com/o/r/pull/12;id",
+  // One commit of the PR, not the PR: parseScope has no such shape, so neither does settings.
+  "https://github.com/o/r/pull/12/commits/abc123",
 ]) {
   test(`17b: ${token} looks like a target but fails the whitelist, so the run stops`, () => {
     assert.deepEqual(resolveSettings([token]), { error: `${token}: not a valid PR target (letters, digits and ._-/#=? only)` })
@@ -1007,6 +1009,17 @@ test("layers: a group-writable user profile stops with the chmod hint, never fal
   chmodSync(file, 0o664)
   assertStops(applyProfile(profileRepo({}), { args: "profile=quick", env }),
     `profile quick: group-writable (${file}); fix with chmod go-w ${file} (user ${file})`)
+})
+
+test("layers: a mode-000 user root stops profile=quick with EACCES; the built-in quick is not applied", { skip: process.getuid?.() === 0 && "root ignores mode 000" }, () => {
+  const env = userEnv({ quick: "---\ndepth: deep\n---\n" })
+  const root = join(env.XDG_CONFIG_HOME, "consensus-review")
+  chmodSync(root, 0o000)
+  try {
+    assertStops(applyProfile(profileRepo({}), { args: "profile=quick", env }), `profile quick: EACCES (${join(root, "profiles")}) (user)`)
+  } finally {
+    chmodSync(root, 0o755)
+  }
 })
 
 test("layers: a user profile beats the repo one, may remove lenses, and is named (profile x, user)", () => {

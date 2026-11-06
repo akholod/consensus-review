@@ -27,7 +27,7 @@ import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import {
-  LENS_NAME, checkSourcePath, isBranchName, layerEntries, parseDiff, readLayerFile, sourceRoots, trackedState,
+  LENS_NAME, PR_URL, checkSourcePath, isBranchName, layerEntries, parseDiff, readLayerFile, sourceRoots, trackedState,
 } from "../src/loop-review/context.mjs"
 import { PI_MODEL_ID } from "./lib/lanes.mjs"
 
@@ -75,7 +75,7 @@ const SHORTHANDS = {
 const TARGETS = [
   /^#\d+$/,
   /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#\d+$/,
-  /^https?:\/\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/\d+(\/[A-Za-z0-9._/-]*)?(\?[A-Za-z0-9._=-]*)?(#[A-Za-z0-9._=-]*)?$/,
+  PR_URL,
 ]
 // A token shaped like a target that fails TARGETS stops the run rather than falling back to uncommitted mode.
 const TARGET_LIKE = /^https?:\/\/|\/pull\/|^[^=\s]*#\d/

@@ -217,6 +217,10 @@ const wantedNames = (lensesSetting, { records, rejected, skipped }, d5Paths) => 
   const known = new Set([...records.map((r) => r.name), ...reasons.keys()])
   const available = [...known].sort()
   const named = lensesSetting.set ?? [...lensesSetting.add, ...lensesSetting.remove]
+  // A user layer that could not be listed may hold any name: a named lens stops rather than fall through.
+  const unlisted = rejected.find((r) => r.layer === "user" && r.unlisted)
+  const wanted = lensesSetting.set ?? lensesSetting.add
+  if (unlisted && wanted.length) throw new Error(`lenses=${wanted[0]}: user lenses unreadable (${unlisted.reason})`)
   for (const name of named) {
     if (!known.has(name)) throw new Error(`lenses=${name}: no such lens (available: ${available.length ? available.join(", ") : "none"})`)
   }

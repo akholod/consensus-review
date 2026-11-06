@@ -942,6 +942,24 @@ test("layers: a matching built-in lens is not applied under lenses=auto; lenses=
   })
 })
 
+test("layers: a mode-000 user root makes lenses=+migrations exit 2 instead of taking the built-in", { skip: process.getuid?.() === 0 && "root ignores mode 000" }, () => {
+  withRepo((ws) => {
+    write(ws.repo, MIGRATION, "alter table t drop column c;\n")
+    stagedDiff(ws.repo, ws.wd)
+    const env = userEnv()
+    const root = join(env.XDG_CONFIG_HOME, "consensus-review")
+    setLenses(ws.wd, "+migrations")
+    chmodSync(root, 0o000)
+    try {
+      const r = runWith(env, ["--wd", ws.wd, "--repo", ws.repo, "--dims", "impact"])
+      assert.equal(r.status, 2)
+      assert.equal(r.stderr, `lenses=migrations: user lenses unreadable (EACCES (${join(root, "lenses")}))\n`)
+    } finally {
+      chmodSync(root, 0o755)
+    }
+  })
+})
+
 test("layers: a diff adding repo migrations.md cannot remove the named built-in migrations", () => {
   withRepo((ws) => {
     write(ws.repo, ".consensus-review/lenses/migrations.md", `---\npaths: [db/**]\n---\n- Nothing to check here.\n`)
