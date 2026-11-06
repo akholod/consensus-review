@@ -176,7 +176,7 @@ test("the command no longer mentions a retired argument", () => {
 
 test("SETTINGS, the argument-hint and the docs tables name the same keys", () => {
   assert.deepEqual(Object.keys(SETTINGS), [
-    "depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort", "base",
+    "depth", "dims", "lenses", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort", "base",
   ])
   const hint = command().match(/^argument-hint: "(.*)"$/m)?.[1]
   assert.equal(hint, "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]")

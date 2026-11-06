@@ -41,6 +41,7 @@ const enumOf = (...values) => ({ values, expected: `expected ${values.join("|")}
 export const SETTINGS = {
   depth: { default: "auto", ...enumOf("auto", "minimal", "deep") },
   dims: { default: "tier" },
+  lenses: { default: "auto" },
   sceptic: { default: "strict", ...enumOf("off", "basic", "strict") },
   lang: { default: "en" },
   out: { default: "default" },
@@ -74,20 +75,34 @@ const TARGETS = [
 // A token shaped like a target that fails TARGETS stops the run rather than falling back to uncommitted mode.
 const TARGET_LIKE = /^https?:\/\/|\/pull\/|^[^=\s]*#\d/
 
-const parseDims = (raw) => {
-  if (!raw) return { error: "no dimensions" }
-  const items = raw.toLowerCase().split(",")
-  if (items.includes("")) return { error: "empty dimension" }
+/** `a,b` as `{ set }` or `+a,-b` as `{ add, remove }`; `check(name)` returns an error or null. */
+const parseList = (items, noun, check) => {
+  if (items.includes("")) return { error: `empty ${noun}` }
   const relative = items.filter((item) => item[0] === "+" || item[0] === "-")
   if (relative.length && relative.length !== items.length) return { error: "mixes absolute and +/- forms" }
   for (const item of items) {
-    const name = relative.length ? item.slice(1) : item
-    if (!DIMS.includes(name)) return { error: `unknown dimension ${name} (expected ${DIMS.join("|")})` }
+    const problem = check(relative.length ? item.slice(1) : item)
+    if (problem) return { error: problem }
   }
   if (!relative.length) return { value: { set: items } }
   const add = items.filter((item) => item[0] === "+").map((item) => item.slice(1))
   const remove = items.filter((item) => item[0] === "-").map((item) => item.slice(1))
   return { value: { add, remove } }
+}
+
+const parseDims = (raw) => {
+  if (!raw) return { error: "no dimensions" }
+  return parseList(raw.toLowerCase().split(","), "dimension",
+    (name) => (DIMS.includes(name) ? null : `unknown dimension ${name} (expected ${DIMS.join("|")})`))
+}
+
+/** `auto`, `none`, or lens names in the dims grammar. Names keep their case: LENS_NAME is lower-case. */
+const parseLenses = (raw) => {
+  const word = raw.toLowerCase()
+  if (word === "auto" || word === "none") return { value: word }
+  if (!raw) return { error: "expected auto, none or lens names" }
+  return parseList(raw.split(","), "lens name",
+    (name) => (LENS_NAME.test(name) ? null : `invalid lens name ${name} ([a-z0-9][a-z0-9_-], up to 64)`))
 }
 
 /** `agent`, or `role:value` items joined by `,`, as an object in ROLES order. */
@@ -118,6 +133,7 @@ const parseRaw = (key, raw) => {
     return setting.values.includes(value) ? { value } : { error: setting.expected }
   }
   if (key === "dims") return parseDims(raw)
+  if (key === "lenses") return parseLenses(raw)
   if (ROLE_VALUES[key]) return parseRoleMap(raw, ROLE_VALUES[key])
   if (key === "lang") {
     if (/^[\p{L}\p{M}0-9_-]{1,40}$/u.test(raw)) return { value: raw }
@@ -148,7 +164,7 @@ export function parseValue(key, raw) {
 
 const renderValue = (key, value) => {
   if (ROLE_VALUES[key] && value !== "agent") return Object.entries(value).map(([role, v]) => `${role}:${v}`).join(",")
-  if (key !== "dims" || value === "tier") return String(value)
+  if ((key !== "dims" && key !== "lenses") || typeof value === "string") return String(value)
   if (value.set) return value.set.join(",")
   return [...value.add.map((d) => `+${d}`), ...value.remove.map((d) => `-${d}`)].join(",")
 }
@@ -176,8 +192,13 @@ const profileKey = (rawKey) => {
   return { key }
 }
 
+/** A repository profile may only add lenses: the change under review must not remove the reviewer's. */
+const REPO_LENSES_ERROR = "lenses may only add (+name) in a repository profile"
+const repoLensesProblem = (key, value) =>
+  key === "lenses" && (value === "none" || value.set || value.remove?.length) ? REPO_LENSES_ERROR : null
+
 /** A profile's raw values as parsed settings, or `{ error }` without the `profile <name>: ` prefix. */
-const parseProfileValues = (values) => {
+const parseProfileValues = (values, layer = "repo") => {
   const parsed = []
   for (const [rawKey, raw] of Object.entries(values)) {
     const named = profileKey(rawKey)
@@ -185,6 +206,7 @@ const parseProfileValues = (values) => {
     const { key } = named
     const result = parseValue(key, raw)
     if (result.error) return { error: result.error }
+    if (layer === "repo" && repoLensesProblem(key, result.value)) return { error: REPO_LENSES_ERROR }
     parsed.push({ key, value: result.value, clamped: Boolean(result.clamped) })
   }
   return { parsed }
@@ -478,6 +500,8 @@ const parseUpdates = (tokens) => {
     }
     const result = parseValue(key, raw)
     if (result.error) return { error: result.error }
+    // The writer writes repository profiles only.
+    if (repoLensesProblem(key, result.value)) return { error: REPO_LENSES_ERROR }
     updates.push({ key, value: result.value })
   }
   return { updates }

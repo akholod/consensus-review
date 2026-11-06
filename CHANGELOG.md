@@ -41,6 +41,18 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
   `repo lenses from checkout <sha>` for a PR.
   **Changed:** the `<custom_instructions>` prefix block is gone.
 
+- **Added — `lenses=` selects lenses by name**
+  ([#12](https://github.com/akholod/consensus-review/issues/12)). A new
+  setting with the `dims` grammar: `auto` (the default), `none`, a set
+  `lenses=a,b`, or `lenses=+a,-b`. Globs, dimension and budget still
+  gate a named lens; a lens left out is `skipped "not in lenses="`. An
+  unknown name (`no such lens (available: …)`) or a named lens that
+  cannot apply (`no valid source (…)`) stops the run. A repository
+  profile may only add (`lenses: +a`); `none`, a set or `-a` there stops
+  the run, and `/consensus-review:profile` refuses to write them. The
+  `Settings:` line gains `lenses=…`. The dimension commands and
+  `/loop-review` keep `auto`.
+
 ## 0.13.0
 
 Project lenses and profiles, simpler arguments, typed sceptic votes, a consultant cascade, run archives and retried consultants. Breaking: arguments changed; see below.

@@ -18,6 +18,7 @@ const SCRIPT = new URL("../../scripts/settings.mjs", import.meta.url).pathname
 const DEFAULTS = {
   depth: { value: "auto", source: "default" },
   dims: { value: "tier", source: "default" },
+  lenses: { value: "auto", source: "default" },
   sceptic: { value: "strict", source: "default" },
   lang: { value: "en", source: "default" },
   out: { value: "default", source: "default" },
@@ -30,7 +31,7 @@ const DEFAULTS = {
   effort: { value: "agent", source: "default" },
   base: { value: null, source: "default" },
 }
-const DEFAULT_LINE = "Settings: depth=auto (default) | dims=tier (default) | sceptic=strict (default) | lang=en (default) | out=default (default) | archive=on (default) | consultant=auto (default) | extra=off (default) | pi-model=auto (default) | timeout=900 (default) | models=agent (default) | effort=agent (default)"
+const DEFAULT_LINE = "Settings: depth=auto (default) | dims=tier (default) | lenses=auto (default) | sceptic=strict (default) | lang=en (default) | out=default (default) | archive=on (default) | consultant=auto (default) | extra=off (default) | pi-model=auto (default) | timeout=900 (default) | models=agent (default) | effort=agent (default)"
 
 // ---------------------------------------------------------------------------------------------
 // resolveSettings (unit)
@@ -273,7 +274,7 @@ test("P6: a flag dims replaces the profile dims whole", () => {
 
 test("drift: SETTINGS keys in order", () => {
   assert.deepEqual(Object.keys(SETTINGS), [
-    "depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort", "base",
+    "depth", "dims", "lenses", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort", "base",
   ])
 })
 
@@ -682,7 +683,7 @@ test("CLI: profile with no profile= in args.txt exits 2", () => {
 const PROFILE_DIR = ".consensus-review/profiles"
 const W1_TEXT = "---\ndepth: deep\nextra: pi\ntimeout: 1200\n---\n"
 const ADD_REMINDER = `Not applied until committed: git add -- ${PROFILE_FILE} && git commit -m 'Add review profile release' -- ${PROFILE_FILE}`
-const DEFAULTS_LISTING = "defaults (built-in): depth=auto | dims=tier | sceptic=strict | lang=en | out=default | archive=on | consultant=auto | extra=off | pi-model=auto | timeout=900 | models=agent | effort=agent"
+const DEFAULTS_LISTING = "defaults (built-in): depth=auto | dims=tier | lenses=auto | sceptic=strict | lang=en | out=default | archive=on | consultant=auto | extra=off | pi-model=auto | timeout=900 | models=agent | effort=agent"
 const CI_TEXT = "---\ndepth: minimal\nsceptic: basic\ndims: impact,tests\nout: none\n---\n"
 
 /** Runs profile-edit with `args` written to a file outside the repo; `umask` wraps it in `sh -c`. */
@@ -870,4 +871,50 @@ test("list P2: one line per profile in name order, SETTINGS key order, no status
     "release: depth=deep extra=pi timeout=1200",
     "",
   ].join("\n"))
+})
+
+// lenses (#12 item 1, stage 4): the dims grammar over lens names; a repository profile may only add
+
+for (const [raw, expected] of [
+  ["auto", { value: "auto" }],
+  ["none", { value: "none" }],
+  ["a,b", { value: { set: ["a", "b"] } }],
+  ["+a,-b", { value: { add: ["a"], remove: ["b"] } }],
+  ["a,+b", { error: "lenses=a,+b: mixes absolute and +/- forms" }],
+  ["a,,b", { error: "lenses=a,,b: empty lens name" }],
+  ["Pay", { error: "lenses=Pay: invalid lens name Pay ([a-z0-9][a-z0-9_-], up to 64)" }],
+]) {
+  test(`lenses: parseValue("lenses", ${JSON.stringify(raw)})`, () => {
+    assert.deepEqual(parseValue("lenses", raw), expected)
+  })
+}
+
+test("lenses: the Settings line shows the value and its source", () => {
+  assert.match(resolveSettings(["lenses=+a,-b"]).lines.settings, / \| lenses=\+a,-b \(flag\) \| /)
+  assert.match(resolveSettings([], team({ lenses: "+a" })).lines.settings, / \| lenses=\+a \(profile team\) \| /)
+})
+
+for (const raw of ["none", "-a", "a", "+a,-b"]) {
+  test(`lenses: a repository profile with lenses: ${raw} stops (add-only)`, () => {
+    assert.deepEqual(resolveSettings([], team({ lenses: raw })), { error: "profile team: lenses may only add (+name) in a repository profile" })
+  })
+}
+
+test("lenses: profile apply, lenses: none in a committed repo profile exits 2; lenses: +a applies", () => {
+  const stopped = applyProfile(profileRepo({ [PROFILE_FILE]: "---\nlenses: none\n---\n" }))
+  assertStops(stopped, "profile release: lenses may only add (+name) in a repository profile")
+  const applied = applyProfile(profileRepo({ [PROFILE_FILE]: "---\nlenses: +a\n---\n" }))
+  assert.equal(applied.status, 0, applied.stderr)
+  assert.deepEqual(applied.saved.settings.lenses, { value: { add: ["a"], remove: [] }, source: "profile" })
+})
+
+test("lenses: profile-edit writes lenses=+a and refuses lenses=none without writing", () => {
+  const { repo } = profileRepo({})
+  const refused = edit(repo, "p lenses=none")
+  assert.equal(refused.status, 2)
+  assert.equal(refused.stderr, "lenses may only add (+name) in a repository profile\n")
+  assert.equal(existsSync(join(repo, ".consensus-review/profiles/p.md")), false)
+  const written = edit(repo, "p lenses=+a dims=+tests")
+  assert.equal(written.status, 0, written.stderr)
+  assert.equal(readFileSync(join(repo, ".consensus-review/profiles/p.md"), "utf8"), "---\ndims: +tests\nlenses: +a\n---\n")
 })

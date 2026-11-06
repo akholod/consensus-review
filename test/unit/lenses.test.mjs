@@ -692,3 +692,159 @@ test("the four lens blocks are identical except --dim, and pass the raw scope as
   assert.match(blocks[0], /standalone --dim <d> \[--target "<scope>"\]`/)
 })
 
+
+// ---------------------------------------------------------------------------------------------
+// lenses= (#12 item 1, stage 4): select reads the setting from $WD/settings.json, as §0/§1.5 wrote it
+// ---------------------------------------------------------------------------------------------
+
+const SETTINGS_SCRIPT = new URL("../../scripts/settings.mjs", import.meta.url).pathname
+const lensAt = (path) => `---\npaths:\n  - "${path}"\n---\n- check ${path}\n`
+
+/** §0 resolve (and §1.5 profile when args name one) into $WD/settings.json. */
+const resolveArgs = ({ repo, wd }, args) => {
+  writeFileSync(join(wd, "args.txt"), args)
+  const r = spawnSync(process.execPath, [SETTINGS_SCRIPT, "resolve", "--wd", wd, "--args-file", join(wd, "args.txt")], { encoding: "utf8" })
+  assert.equal(r.status, 0, r.stderr)
+  if (!args.includes("profile=")) return
+  const p = spawnSync(process.execPath, [SETTINGS_SCRIPT, "profile", "--wd", wd, "--repo", repo], { encoding: "utf8" })
+  assert.equal(p.status, 0, p.stderr)
+}
+
+/** Two committed lenses `a` and `b`, both matching the staged change to src/payments/charge.js. */
+const withTwoLenses = (fn) => withRepo((ws) => {
+  write(ws.repo, ".consensus-review/lenses/a.md", lensAt("src/payments/**"))
+  write(ws.repo, ".consensus-review/lenses/b.md", lensAt("src/payments/**"))
+  commit(ws.repo)
+  write(ws.repo, "src/payments/charge.js", "export const charge = 2\n")
+  return fn(ws)
+})
+const names = (lenses) => lenses.selected.map((l) => l.name)
+
+test("lenses=a selects only a; b is skipped as not in lenses=", () => {
+  withTwoLenses((ws) => {
+    stagedDiff(ws.repo, ws.wd)
+    resolveArgs(ws, "lenses=a")
+    const { lenses } = select(ws)
+    assert.deepEqual(names(lenses), ["a"])
+    assert.deepEqual(lenses.skipped, [{ name: "b", file: ".consensus-review/lenses/b.md", reason: "not in lenses=" }])
+  })
+})
+
+test("lenses=none selects nothing; lenses=-b keeps the rest; no settings.json is auto", () => {
+  withTwoLenses((ws) => {
+    stagedDiff(ws.repo, ws.wd)
+    assert.deepEqual(names(select(ws).lenses), ["a", "b"])
+    resolveArgs(ws, "lenses=none")
+    assert.deepEqual(names(select(ws).lenses), [])
+    resolveArgs(ws, "lenses=-b")
+    assert.deepEqual(names(select(ws).lenses), ["a"])
+  })
+})
+
+test("a named lens still needs a matching changed file", () => {
+  withTwoLenses((ws) => {
+    write(ws.repo, ".consensus-review/lenses/c.md", lensAt("docs/**"))
+    stagedDiff(ws.repo, ws.wd)
+    git(ws.repo, "commit", "-q", "-m", "c")
+    writeFileSync(join(ws.wd, "diff.patch"), git(ws.repo, "diff", "-M", "HEAD~1", "HEAD", "--", "src"))
+    resolveArgs(ws, "lenses=a,c")
+    const { lenses } = select(ws)
+    assert.deepEqual(names(lenses), ["a"])
+    assert.deepEqual(lenses.skipped.find((s) => s.name === "c"), { name: "c", file: ".consensus-review/lenses/c.md", reason: "no changed file matches" })
+  })
+})
+
+for (const [args, message] of [
+  ["lenses=zz", "lenses=zz: no such lens (available: a, b)"],
+  ["lenses=+zz", "lenses=zz: no such lens (available: a, b)"],
+  ["lenses=-zz", "lenses=zz: no such lens (available: a, b)"],
+]) {
+  test(`${args} exits 2: ${message}`, () => {
+    withTwoLenses((ws) => {
+      stagedDiff(ws.repo, ws.wd)
+      resolveArgs(ws, args)
+      const r = run(["--wd", ws.wd, "--repo", ws.repo, "--dims", "impact"])
+      assert.equal(r.status, 2)
+      assert.equal(r.stderr, `${message}\n`)
+      assert.equal(existsSync(join(ws.wd, "lenses.json")), false)
+    })
+  })
+}
+
+test("lenses=a where the diff edits a.md exits 2: no valid source (repo: changed in this diff)", () => {
+  withTwoLenses((ws) => {
+    write(ws.repo, ".consensus-review/lenses/a.md", `${lensAt("src/payments/**")}- extra\n`)
+    stagedDiff(ws.repo, ws.wd)
+    resolveArgs(ws, "lenses=a")
+    const r = run(["--wd", ws.wd, "--repo", ws.repo, "--dims", "impact"])
+    assert.equal(r.status, 2)
+    assert.equal(r.stderr, "lenses=a: no valid source (repo: changed in this diff)\n")
+  })
+})
+
+test("PR mode: lenses=a where the PR diff edits a.md (checkout unchanged) exits 2: no valid source", () => {
+  withTwoLenses((ws) => {
+    write(ws.repo, ".consensus-review/lenses/a.md", `${lensAt("src/payments/**")}- extra\n`)
+    stagedDiff(ws.repo, ws.wd)
+    git(ws.repo, "reset", "-q", "--hard")
+    resolveArgs(ws, "lenses=a")
+    const r = run(["--wd", ws.wd, "--repo", ws.repo, "--dims", "impact"])
+    assert.equal(r.status, 2)
+    assert.equal(r.stderr, "lenses=a: no valid source (repo: changed in this diff)\n")
+  })
+})
+
+test("lenses=+a where a is untracked exits 2: no valid source (repo: not committed)", () => {
+  withRepo((ws) => {
+    write(ws.repo, "src/payments/charge.js", "export const charge = 2\n")
+    writeFileSync(join(ws.wd, "diff.patch"), git(ws.repo, "diff", "HEAD"))
+    write(ws.repo, ".consensus-review/lenses/a.md", lensAt("src/payments/**"))
+    resolveArgs(ws, "lenses=+a")
+    const r = run(["--wd", ws.wd, "--repo", ws.repo, "--dims", "impact", "--mode", "uncommitted"])
+    assert.equal(r.status, 2)
+    assert.equal(r.stderr, "lenses=a: no valid source (repo: not committed)\n")
+  })
+})
+
+test("a lenses= flag beats a repository profile's lenses: +a", () => {
+  withTwoLenses((ws) => {
+    write(ws.repo, ".consensus-review/profiles/p.md", "---\nlenses: +a\n---\n")
+    commit(ws.repo)
+    write(ws.repo, "src/payments/charge.js", "export const charge = 3\n")
+    stagedDiff(ws.repo, ws.wd)
+    resolveArgs(ws, "profile=p lenses=b")
+    const settings = JSON.parse(readFileSync(join(ws.wd, "settings.json"), "utf8"))
+    assert.deepEqual(settings.settings.lenses, { value: { set: ["b"] }, source: "flag" })
+    assert.deepEqual(names(select(ws).lenses), ["b"])
+  })
+})
+
+test("lenses=a with the git check failing exits 2 with the git error, not a lens error", () => {
+  withTwoLenses((ws) => {
+    stagedDiff(ws.repo, ws.wd)
+    resolveArgs(ws, "lenses=a")
+    const failing = (cmd, args, options) => (args[0] === "ls-tree" ? { status: 128, stdout: "" } : spawnSync(cmd, args, options))
+    const errors = []
+    const stderrWrite = process.stderr.write
+    process.stderr.write = (chunk) => errors.push(String(chunk))
+    let code
+    try {
+      code = main(["select", "--wd", ws.wd, "--repo", ws.repo, "--dims", "impact"], { run: failing })
+    } finally {
+      process.stderr.write = stderrWrite
+    }
+    assert.equal(code, 2)
+    assert.equal(errors.join(""), "git check failed (git ls-tree exit 128): .consensus-review/lenses/a.md\n")
+    assert.equal(existsSync(join(ws.wd, "lenses.json")), false)
+  })
+})
+
+test("diff-only: lenses=a has no source to name, so it exits 2", () => {
+  withRepo((ws) => {
+    writeFileSync(join(ws.wd, "diff.patch"), PR_DIFF)
+    resolveArgs(ws, "lenses=a")
+    const r = run(["--wd", ws.wd, "--dims", "impact"])
+    assert.equal(r.status, 2)
+    assert.equal(r.stderr, "lenses=a: no such lens (available: none)\n")
+  })
+})

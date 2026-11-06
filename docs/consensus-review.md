@@ -63,6 +63,7 @@ with its source (`flag`, `profile <name>` or `default`).
 | `timeout=<sec>`           | wall clock per attempt, an integer, default `900`, clamped to `[30, 1800]`; retried once, at most 2×T per phase                              |
 | `models=<role:model,…>`   | request a model per role (default `agent`: each agent's frontmatter model). Roles `architecture`, `impact`, `quality`, `tests`, `verifier`; models `opus`, `sonnet`, `haiku`, `fable`; no spaces, e.g. `models=verifier:fable,tests:haiku`. Unlisted roles keep their frontmatter model. See [Models and effort](#models-and-effort) |
 | `effort=<role:effort,…>`  | request an effort per role (default `agent`: each agent's frontmatter effort). The same roles; efforts `low`, `medium`, `high`, `xhigh`, `max`, e.g. `effort=verifier:high,impact:high` |
+| `lenses=<list>`           | which project lenses may apply (see [Selecting lenses](#selecting-lenses-lenses)): `auto` (the default, every lens whose globs match), `none`, a set `lenses=payments,migrations`, or `lenses=+a,-b` to adjust `auto`. Do not mix both forms. Globs still gate a named lens; a named lens that does not exist or cannot apply stops the run |
 | `base=<branch>`           | the branch the PR targets. Needed only for a PR diffed from a local clone without `gh`, which stops without it; see [Pull requests without `gh`](#pull-requests-without-gh). Not a profile key; without a PR target it is listed in `Ignored args` |
 
 P2 findings are always grouped: up to 7 are listed and the rest are rolled
@@ -449,6 +450,27 @@ path, a glob) runs without lenses. They fail open: an error in the lens
 helper, a failed git check included, is a `helper error: …` note and a
 review without lenses, since these commands are advisory.
 
+### Selecting lenses: `lenses=`
+
+`lenses=auto` (the default) applies every lens whose globs match.
+`lenses=none` applies none. `lenses=a,b` applies only `a` and `b`;
+`lenses=+a,-b` is `auto` without `b` (`+a` only checks that `a` can
+apply). An item of a legacy instruction file is named by its `name`. A
+lens left out is reported `skipped "not in lenses="`. Naming a lens never
+bypasses its globs, its dimension or the budget: a named lens that
+matches no changed file is still `no changed file matches`. A name the
+run cannot apply stops it (`lenses.mjs select` exits 2):
+
+- `lenses=zz: no such lens (available: a, b)`;
+- `lenses=a: no valid source (repo: changed in this diff)`, also for
+  `not committed`, a modified file and a rejected one.
+
+A repository profile may only add: `lenses: +a` is allowed, while `none`,
+a set or `-a` stops the run with `profile <name>: lenses may only add
+(+name) in a repository profile`, since the change under review must not
+remove the reviewer's lenses. A `lenses=` flag replaces the profile's
+value whole. The dimension commands and `/loop-review` always use `auto`.
+
 `/loop-review` reads lenses the same way (all four dimensions); see
 [loop-review.md](loop-review.md#project-lenses).
 
@@ -493,9 +515,10 @@ out: none
 lines. Each line in between is `key: value` (no quotes), a blank line or
 a `#` comment; anything else stops the run (`malformed line <n>`), as do a
 duplicate key and an empty value. The keys are the settings above
-(`depth`, `dims`, `sceptic`, `lang`, `out`, `archive`, `consultant`,
+(`depth`, `dims`, `lenses`, `sceptic`, `lang`, `out`, `archive`, `consultant`,
 `extra`, `pi-model`, `timeout`, `models`, `effort`), with the same values and messages;
-`target` and `profile` are not profile keys. The body after the closing
+`target`, `profile` and `base` are not profile keys, and `lenses` may only add
+(`+name`; see [Selecting lenses](#selecting-lenses-lenses)). The body after the closing
 `---` is ignored and never passed to the review agents or consultants. The name is the file stem,
 `[a-z0-9][a-z0-9_-]*` up to 64 characters, matched exactly; the file is
 at most 4096 bytes.
@@ -565,6 +588,7 @@ Not applied until committed: git add -- .consensus-review/profiles/quick.md && g
 (`Update review profile <name>` when the file already existed.)
 
 - Only `key=value` pairs, with the keys and values of `/consensus-review`; `deep`, `minimal` and `no-file` are refused (`deep: expected key=value`). `key=` removes the key.
+- `lenses` may only add (`lenses=+a`); `none`, a set or `-a` is refused, since the profile is a repository profile.
 - Every value is checked as a flag would be and stored in its canonical form (`sceptic=BASIC` → `basic`, `timeout=5000` → `1800`). The keys are rewritten in settings order; comments in the front matter are dropped (the output says so); the body is kept byte for byte.
 - An existing file that does not parse is never overwritten: `profile <name>: <error>; fix or delete the file`. A symlink anywhere on the path stops it too.
 - The file is replaced atomically and keeps its mode; a new file is created `0644`, less your umask.
