@@ -452,7 +452,7 @@ duplicate key and an empty value. The keys are the settings above
 (`depth`, `dims`, `sceptic`, `lang`, `out`, `archive`, `consultant`,
 `extra`, `pi-model`, `timeout`, `models`, `effort`), with the same values and messages;
 `target` and `profile` are not profile keys. The body after the closing
-`---` is ignored and never passed to a model. The name is the file stem,
+`---` is ignored and never passed to the review agents or consultants. The name is the file stem,
 `[a-z0-9][a-z0-9_-]*` up to 64 characters, matched exactly; the file is
 at most 4096 bytes.
 
@@ -473,7 +473,7 @@ diff exists, and only when it is tracked by git, unchanged against
 stops the run with the file and the reason; it never falls back to the
 defaults:
 
-- a profile the diff touches, or one modified in the working tree: `changed in this diff`;
+- a profile the diff touches, or one whose bytes differ from its `HEAD` blob (an index flag such as `skip-worktree` or `assume-unchanged` does not hide the edit): `changed in this diff`;
 - an untracked profile, an ignored one included: `not tracked`;
 - a symlink anywhere on the path, or a file that is not a regular file;
 - a malformed file, a bad value, an unknown name (the message lists the available profiles);
@@ -523,7 +523,7 @@ Not applied until committed: git add -- .consensus-review/profiles/quick.md && g
 - Only `key=value` pairs, with the keys and values of `/consensus-review`; `deep`, `minimal` and `no-file` are refused (`deep: expected key=value`). `key=` removes the key.
 - Every value is checked as a flag would be and stored in its canonical form (`sceptic=BASIC` → `basic`, `timeout=5000` → `1800`). The keys are rewritten in settings order; comments in the front matter are dropped (the output says so); the body is kept byte for byte.
 - An existing file that does not parse is never overwritten: `profile <name>: <error>; fix or delete the file`. A symlink anywhere on the path stops it too.
-- The file is replaced atomically and keeps its mode; a new file is `0644`.
+- The file is replaced atomically and keeps its mode; a new file is created `0644`, less your umask.
 - `/consensus-review:profile <name>` prints a profile; with no arguments it lists the built-in defaults on the first line, then each profile with its keys (an invalid one as `<name>: invalid (<error>)`). To delete a profile, use `git rm`.
 
 The defaults are shown in two places: the `Settings:` line of a report

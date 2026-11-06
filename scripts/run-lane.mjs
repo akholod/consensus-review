@@ -205,7 +205,7 @@ function select(v) {
     process.stderr.write(`${blocked}\n`)
     return 2
   }
-  const has ={ codex: installed("codex"), pi: installed("pi"), claude: installed("claude") }
+  const has = { codex: installed("codex"), pi: installed("pi"), claude: installed("claude") }
   const forced = v.consultant && v.consultant !== "auto" ? v.consultant : null
   const pinned = v["pi-model"] && v["pi-model"] !== "auto"
   // The catalog is read only when pi may run and no model is pinned.

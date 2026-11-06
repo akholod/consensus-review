@@ -14,13 +14,13 @@ Examples: `/consensus-review:profile quick depth=minimal dims=+quality sceptic=b
 
 ## Steps
 
-1. `REPO=$(git rev-parse --show-toplevel)`. If it fails, print `not a git repository` and **stop**. Keep `REPO` as a literal from here on.
+1. Run `git rev-parse --show-toplevel`. If it fails, print `not a git repository` and **stop**. Never paste the path it prints into a command; step 4 sets it again in the same call.
 2. `D=$(mktemp -d)` (outside the repository). Keep `D` as a literal.
 3. Write `$ARGUMENTS` **verbatim** (no paraphrase, no reordering, no quoting) with the Write tool to `$D/args.txt`. Never paste the arguments into a shell command.
-4. Run, in one foreground call, with each path in single quotes:
+4. Run, in one foreground call, with `D` in single quotes (a `'` in it is written as `'\''`):
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" profile-edit --repo '<literal REPO>' --args-file '<literal D>/args.txt'
+   REPO=$(git rev-parse --show-toplevel) && node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" profile-edit --repo "$REPO" --args-file '<literal D>/args.txt'
    ```
 
 5. Print its stdout as is. On exit 2, print its stderr message and stop; nothing was written.

@@ -82,10 +82,11 @@ is `FAIL`.
   (`WARN`): an older Claude Code may ignore the per-invocation `effort`
   and the agents' effort pins, so the lanes run at the session's effort.
   Update Claude Code.
-- **`models override dropped (<role>)`** in a report's Source
-  availability: Claude Code rejected the requested model or effort, and
-  the Task was re-run once without its overrides on the agent's
-  frontmatter defaults. Pick a model your plan offers, or drop the key.
+- **`models override dropped (<role>)`** or **`effort override dropped
+  (<role>)`** in a report's Source availability: Claude Code rejected the
+  requested model or effort, and the Task was re-run once without its
+  overrides on the agent's frontmatter defaults. Pick a model or effort
+  your plan and Claude Code version offer, or drop the key.
 
 ## workspace
 
@@ -124,7 +125,7 @@ stop messages:
 - **`profile=<name>: needs the repository (diff-only mode)`**: a
   diff-only review has no checkout to read a profile from; pass the
   settings as flags.
-- **`profile <name>: git check failed (git diff exit 128)`**: git could
+- **`profile <name>: git check failed (git ls-tree exit 128)`**: git could
   not answer whether the profile is committed, for example in a
   repository with no commits. The run stops rather than guess.
 - **`profile <name> was not applied (run settings.mjs profile first)`**:

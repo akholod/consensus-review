@@ -621,8 +621,25 @@ test("L18: a bad value in a committed profile names the profile", () => {
 test("L19: an unborn HEAD fails closed as a git error, never as changed", () => {
   const ws = profileRepo({ [PROFILE_FILE]: RELEASE }, { commit: false })
   git(ws.repo, "add", "-A")
-  assertStops(applyProfile(ws), "profile release: git check failed (git diff exit 128)")
+  assertStops(applyProfile(ws), "profile release: git check failed (git ls-tree exit 128)")
 })
+
+for (const flag of ["--skip-worktree", "--assume-unchanged"]) {
+  test(`L20: a profile marked ${flag} and edited on disk still stops`, () => {
+    const ws = profileRepo()
+    git(ws.repo, "update-index", flag, "--", PROFILE_FILE)
+    put(ws.repo, PROFILE_FILE, "---\nsceptic: off\n---\n")
+    assert.equal(git(ws.repo, "diff", "HEAD", "--", PROFILE_FILE), "", "the index flag hides the edit from git diff")
+    assertStops(applyProfile(ws), CHANGED)
+  })
+}
+
+for (const key of ["constructor", "__proto__", "toString"]) {
+  test(`L21: a profile key ${key} is an unknown key`, () => {
+    const ws = profileRepo({ [PROFILE_FILE]: `---\n${key}: 123\n---\n` })
+    assertStops(applyProfile(ws), `profile release: unknown key ${key}`)
+  })
+}
 
 test("CLI: profile with no profile= in args.txt exits 2", () => {
   const ws = profileRepo()

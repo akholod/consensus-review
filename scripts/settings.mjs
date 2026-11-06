@@ -165,13 +165,21 @@ const renderLines = (settings, ignored, clamped, profileName) => {
   }
 }
 
+/** The lower-cased settings key a profile may hold, or `{ error }` without the `profile <name>: ` prefix. */
+const profileKey = (rawKey) => {
+  const key = rawKey.toLowerCase()
+  if (key === "target" || key === "profile") return { error: `${key} is not a profile key` }
+  if (!Object.hasOwn(SETTINGS, key)) return { error: `unknown key ${rawKey}` }
+  return { key }
+}
+
 /** A profile's raw values as parsed settings, or `{ error }` without the `profile <name>: ` prefix. */
 const parseProfileValues = (values) => {
   const parsed = []
   for (const [rawKey, raw] of Object.entries(values)) {
-    const key = rawKey.toLowerCase()
-    if (key === "target" || key === "profile") return { error: `${key} is not a profile key` }
-    if (!SETTINGS[key]) return { error: `unknown key ${rawKey}` }
+    const named = profileKey(rawKey)
+    if (named.error) return named
+    const { key } = named
     const result = parseValue(key, raw)
     if (result.error) return { error: result.error }
     parsed.push({ key, value: result.value, clamped: Boolean(result.clamped) })
@@ -230,7 +238,7 @@ export function resolveSettings(tokens, { profile = null } = {}) {
       profileName = raw
       continue
     }
-    if (!SETTINGS[key]) {
+    if (!Object.hasOwn(SETTINGS, key)) {
       ignored.push({ token, reason: "unknown" })
       continue
     }
@@ -266,7 +274,7 @@ export function parseProfileFile(text) {
   const lines = String(text).replace(/\r\n?/g, "\n").split("\n")
   const close = lines.indexOf("---", 1)
   if (lines[0] !== "---" || close < 0 || close >= MAX_FRONT_MATTER_LINES) return { error: "no front matter" }
-  const values = {}
+  const entries = []
   const seen = new Set()
   for (let i = 1; i < close; i++) {
     const line = lines[i]
@@ -278,22 +286,29 @@ export function parseProfileFile(text) {
     if (seen.has(key.toLowerCase())) return { error: `duplicate key ${key}` }
     if (!value) return { error: `empty value for ${key}` }
     seen.add(key.toLowerCase())
-    values[key] = value
+    entries.push([key, value])
   }
-  return { values }
+  // fromEntries defines own properties, so `__proto__` is a key, not the prototype.
+  return { values: Object.fromEntries(entries) }
 }
 
-/** Fails closed: a spawn failure or an unexpected exit is an error, never "modified" or "untracked". */
-const gitState = (repo, file) => {
-  const run = (args) => spawnSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+/**
+ * Fails closed: a spawn failure or an unexpected exit is an error, never "modified" or "untracked".
+ * `raw` (the bytes read from the worktree, when there are any) is compared with the HEAD blob, so
+ * index flags such as skip-worktree or assume-unchanged cannot hide an edit.
+ */
+const gitState = (repo, file, raw) => {
+  const run = (args, options = {}) =>
+    spawnSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], ...options })
   const failure = (name, result) =>
     `git check failed (${result.error ? result.error.code ?? result.error.message : `git ${name} exit ${result.status ?? result.signal}`})`
-  const diff = run(["diff", "--quiet", "--no-ext-diff", "HEAD", "--", file])
-  if (diff.error || (diff.status !== 0 && diff.status !== 1)) return { error: failure("diff", diff) }
-  if (diff.status === 1) return { status: "modified" }
-  const listed = run(["ls-files", "-z", "--", file])
-  if (listed.error || listed.status !== 0) return { error: failure("ls-files", listed) }
-  return { status: listed.stdout ? "ok" : "not committed" }
+  const listed = run(["ls-tree", "-z", "HEAD", "--", file])
+  if (listed.error || listed.status !== 0) return { error: failure("ls-tree", listed) }
+  if (!listed.stdout) return { status: "not committed" }
+  if (!raw) return { status: "ok" }
+  const blob = run(["cat-file", "blob", `HEAD:./${file}`], { encoding: "buffer", maxBuffer: MAX_PROFILE_BYTES })
+  if (blob.error || blob.status !== 0) return { error: failure("cat-file", blob) }
+  return { status: blob.stdout.equals(raw) ? "ok" : "modified" }
 }
 
 const readProfile = (repo, file) => {
@@ -342,11 +357,15 @@ export function loadProfile({ repo, name, changed = [] }) {
   if (problem) return fail(`${problem} (${file})`)
   const changedMessage = fail(`changed in this diff (${file}); commit it first or pass its settings as flags`)
   if (changed.includes(file)) return changedMessage
-  const git = gitState(repo, file)
-  if (git.error) return fail(git.error)
-  if (git.status === "modified") return changedMessage
-  if (git.status === "not committed") return fail(`not tracked (${file}); commit it first or pass its settings as flags`)
+  const tracked = gitState(repo, file)
+  if (tracked.error) return fail(tracked.error)
+  if (tracked.status === "not committed") return fail(`not tracked (${file}); commit it first or pass its settings as flags`)
   const parsed = readProfile(repo, file)
+  if (parsed.raw) {
+    const git = gitState(repo, file, parsed.raw)
+    if (git.error) return fail(git.error)
+    if (git.status === "modified") return changedMessage
+  }
   if (parsed.error) return fail(parsed.error)
   return { name, file, values: parsed.values }
 }
@@ -368,9 +387,9 @@ export function listProfiles(repo) {
     if (!LENS_NAME.test(name)) return result(null, "invalid name")
     const problem = checkSourcePath(repo, file)
     if (problem) return result(null, `${problem} (${file})`)
-    const git = gitState(repo, file)
-    if (git.error) return result(null, git.error)
     const parsed = readProfile(repo, file)
+    const git = gitState(repo, file, parsed.raw)
+    if (git.error) return result(null, git.error)
     if (parsed.error) return result(git.status, parsed.error)
     const checked = parseProfileValues(parsed.values)
     return result(git.status, checked.error ?? null, parsed.values)
@@ -461,9 +480,9 @@ const parseUpdates = (tokens) => {
     if (eq <= 0) return { error: `${token}: expected key=value` }
     const rawKey = token.slice(0, eq)
     const raw = token.slice(eq + 1)
-    const key = rawKey.toLowerCase()
-    if (key === "target" || key === "profile") return { error: `${key} is not a profile key` }
-    if (!SETTINGS[key]) return { error: `unknown key ${rawKey}` }
+    const named = profileKey(rawKey)
+    if (named.error) return named
+    const { key } = named
     if (!raw) {
       updates.push({ key, value: null })
       continue
