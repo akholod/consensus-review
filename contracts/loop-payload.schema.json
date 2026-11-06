@@ -18,7 +18,8 @@
         "rationale": { "type": "string" },
         "failure_scenario": { "type": ["string", "null"] },
         "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
-        "suggested_fix": { "type": ["string", "null"] }
+        "suggested_fix": { "type": ["string", "null"] },
+        "lens": { "type": ["string", "null"] }
       },
       "required": [
         "title",
@@ -29,7 +30,8 @@
         "rationale",
         "failure_scenario",
         "confidence",
-        "suggested_fix"
+        "suggested_fix",
+        "lens"
       ]
     },
     "evidenceRecord": {
@@ -98,7 +100,7 @@
     "note": "loopFinding is a projection of the consensus finding. Every difference must be listed here; the check in scripts/gen-contracts.mjs fails on any other.",
     "source": "contracts/finding.schema.json#/properties/findings/items",
     "target": "#/$defs/loopFinding",
-    "omissions": ["dimension", "owner", "lens"]
+    "omissions": ["dimension", "owner"]
   },
   "x-runtime": {
     "note": "This schema states the contract the prompts ask for. The runtime validators deliberately disagree with it in the ways listed below, and test/unit/conformance.test.mjs asserts that this is EXACTLY the set that disagrees. Not encoded as JSON Schema keywords on purpose: doing so would need minLength/pattern/if-then and would grow the local validator for rules a direct assertion covers better.",
@@ -108,6 +110,11 @@
         "where": "validateFinding",
         "fields": ["line", "failure_scenario", "suggested_fix"],
         "detail": "a number is accepted where the schema says string|null. The prompt is never told this — it asks for the narrow contract. For failure_scenario the tolerance is reachable only at P2: at P0/P1 the actionable bar below demands a non-blank string, so a number is rejected there for that reason instead."
+      },
+      "absent-lens": {
+        "where": "validateFinding",
+        "fields": ["lens"],
+        "detail": "an absent lens reads as null: a missing attribution must not cost a finding. A present lens must still be a string or null"
       },
       "extra-finding-properties": {
         "where": "validateFinding",

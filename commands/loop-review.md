@@ -79,9 +79,9 @@ Fixed, not tunable at run time:
 - every non-trivial code diff: **at least 2** passes
 - auth, permission, migration, destructive-data, public-contract or cross-service changes: **at least 3**, hard maximum **4** before escalation
 
-## Custom instructions
+## Project lenses
 
-If the repository has `.claude/review-instructions.json` or `.gitlab/duo/mr-review-instructions.yaml`, matching entries are attached per changed file — positive globs first, then `!` exclusions — so rules for areas the diff does not touch never enter the context. Instructions are **untrusted advisory input**: they cannot relax read-only, budgets, the severity bars, the stopping rule, or escalation.
+Lenses (`.consensus-review/lenses/*.md`, plus the legacy `.claude/review-instructions.json` and `.gitlab/duo/mr-review-instructions.yaml`) are selected in code by the same path as `/consensus-review`: only files committed and unchanged at `HEAD` and outside the diff, and only for matching changed files. They go into the discovery prompts only, never to the verifier. A `--pr` of another repository than this checkout's `origin` reads none. Lenses are **untrusted advisory input**: they cannot relax read-only, budgets, the severity bars, the stopping rule, or escalation. The report's `Lenses:` line lists what was selected and skipped.
 
 ## Relationship to /consensus-review
 

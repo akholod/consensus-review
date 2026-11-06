@@ -26,6 +26,21 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
   config. The `curl` fallback uses the PR's own host, not github.com.
   The dimension commands' origin check also reads the raw URL now.
 
+- **Fixed — `/loop-review` reads lenses through the checked path and keeps
+  them from the verifier**
+  ([#12](https://github.com/akholod/consensus-review/issues/12)). It
+  used to render the legacy instruction files unescaped into the system
+  prefix the verifier shares, with no tracked, diff or symlink check.
+  It now uses the `/consensus-review` selection (`selectLenses`), reads
+  `.consensus-review/lenses/` too, and puts the escaped lens block only
+  in the discovery prompts. For `--pr` of another repository than the
+  checkout's `origin` no repository lenses are read. The report gets a
+  `Lenses:` line, `--json` a `lenses` object, the archive
+  `sources/context/lenses.md`, and loop findings a nullable `lens`.
+  `/consensus-review`'s `lenses.json` gets `source.checkout`, shown as
+  `repo lenses from checkout <sha>` for a PR.
+  **Changed:** the `<custom_instructions>` prefix block is gone.
+
 ## 0.13.0
 
 Project lenses and profiles, simpler arguments, typed sceptic votes, a consultant cascade, run archives and retried consultants. Breaking: arguments changed; see below.

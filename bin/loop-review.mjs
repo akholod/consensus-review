@@ -6,12 +6,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, dirname, resolve, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import { buildContext, resolveTarget, diffHash } from "../src/loop-review/context.mjs"
+import { buildContext, resolveTarget, diffHash, parseScope } from "../src/loop-review/context.mjs"
 import { runLoop } from "../src/loop-review/loop.mjs"
 import { run as runClaude } from "../src/loop-review/adapter.mjs"
 import { renderReport, summaryLine } from "../src/loop-review/report.mjs"
 import { TERMINAL, evaluateTerminal } from "../src/loop-review/schema.mjs"
 import { runId, canArchive, writeArchive } from "../scripts/lib/archive.mjs"
+import { sameRepository, selectLenses } from "../scripts/lenses.mjs"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const argv = process.argv.slice(2)
@@ -70,7 +71,21 @@ if (!resolved.diffText.trim()) {
 const ctx = buildContext({ repo, target: resolved.describe, diffText: resolved.diffText, base: resolved.base })
 log(`target: ${ctx.target} | files: ${ctx.files.length} | cells: ${ctx.cells.length} | trivial: ${ctx.trivial} | high-risk: ${ctx.highRisk}`)
 
-const discovery = readFileSync(join(ROOT, "prompts/loop-review/discovery.md"), "utf8")
+// Lenses go through the same checked path as /consensus-review, and only into the discovery
+// prompt: the static prefix is the verifier's too. A PR from another repository (or a target whose
+// repository cannot be told) reads no lenses from this checkout.
+const scope = mode === "pr" ? parseScope(String(prTarget)) : null
+const lensRepo = mode !== "pr" || (scope?.pr && sameRepository(repo, scope)) ? repo : null
+let lenses
+try {
+  lenses = selectLenses({ repo: lensRepo, diffText: resolved.diffText, mode: mode === "uncommitted" ? "uncommitted" : null, dims: ["architecture", "quality", "impact", "tests"] })
+} catch (error) {
+  log(String(error?.message ?? error).split("\n")[0])
+  process.exit(2)
+}
+if (!lensRepo) lenses.plan.note = "repo lenses: checkout is not the PR's repository"
+
+const discovery = [readFileSync(join(ROOT, "prompts/loop-review/discovery.md"), "utf8"), lenses.texts.consultant].filter(Boolean).join("\n\n")
 const verifyPrompt = readFileSync(join(ROOT, "prompts/loop-review/verify.md"), "utf8")
 
 // Every call and every findings stage, kept in memory for the run archive (only when one can be
@@ -170,6 +185,7 @@ const archiveRun = () => {
     { to: "findings/final.json", content: json(run.findings) },
     ...calls.map((c) => ({ to: `${src(c)}/prompt.md`, content: c.prompt })),
     { to: "sources/context/system-prefix.md", content: ctx.staticPrefix },
+    ...(lenses.texts.consultant ? [{ to: "sources/context/lenses.md", content: lenses.texts.consultant }] : []),
     ...calls.flatMap((c) => [
       { to: `${src(c)}/stdout.json`, content: c.raw.stdout },
       { to: `${src(c)}/stderr.txt`, content: c.raw.stderr },
@@ -182,10 +198,10 @@ const archiveRun = () => {
 const archive = archiveRun()
 log(archive.dir ? `archive: ${archive.dir}` : `archive: not written (${archive.skipped})`)
 
-const report = renderReport(run, { target: ctx.target, archive: archive.dir ? { dir: relative(repo, archive.dir) } : archive })
+const report = renderReport(run, { target: ctx.target, archive: archive.dir ? { dir: relative(repo, archive.dir) } : archive, lenses: lenses.plan, pr: mode === "pr" })
 
 if (jsonOut) {
-  process.stdout.write(JSON.stringify({ terminal: run.terminal, reasons: run.terminalReasons, findings: run.findings, cells: run.cells, passes: run.passes, spent: run.spent, archive }, null, 2) + "\n")
+  process.stdout.write(JSON.stringify({ terminal: run.terminal, reasons: run.terminalReasons, findings: run.findings, cells: run.cells, passes: run.passes, spent: run.spent, lenses: lenses.plan, archive }, null, 2) + "\n")
 } else {
   process.stdout.write(report + "\n")
 }

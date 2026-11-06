@@ -14,7 +14,7 @@ const bad = (value, entry, match) => {
 
 const finding = (over = {}) => ({
   title: "t", file: "f.js", line: "1", severity: "P1", category: "correctness",
-  rationale: "r", failure_scenario: "s", confidence: "high", suggested_fix: null, ...over,
+  rationale: "r", failure_scenario: "s", confidence: "high", suggested_fix: null, lens: null, ...over,
 })
 
 test("accepts a well-formed finding", () => ok(finding(), "#/$defs/loopFinding"))

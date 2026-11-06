@@ -14,7 +14,7 @@
 // fresh temp WD, runs the same select, and prints `{"wd":…,"lensFile":…|null,"note":…}`. It
 // fails open: every outcome, a thrown error included, exits 0 with `lensFile: null` and a note.
 
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -162,37 +162,60 @@ export function loadRecords(repo, run) {
   }
 }
 
-/** Run one selection for $WD and write its files. Exported for an in-process caller. Throws on a git failure. */
-export function select({ wd, repo = null, dims, mode = null, run }) {
-  const sections = parseDiff(readFileSync(join(wd, "diff.patch"), "utf8"))
+/**
+ * The one selection path for /consensus-review, the dimension commands and /loop-review: the plan
+ * (what lenses.json holds) and the rendered texts per target. No repo means no repository sources.
+ * Throws on a git failure.
+ */
+export function selectLenses({ repo = null, diffText, mode = null, dims, run = spawnSync }) {
+  const sections = parseDiff(diffText)
   const root = repo ? resolve(repo) : null
   let plan = planLenses({ records: [], d5Paths: [], matchPaths: [], dims })
+  let source = null
   if (root) {
-    const untracked = mode === "uncommitted" ? untrackedPaths(root) : []
     // Unfiltered on purpose: the working tree's .gitattributes could otherwise mark a lens the
     // change adds as generated and so hide it from this check. Untracked files need no entry
     // here: tracked-only skips them, which a .gitignore the diff adds cannot hide.
     const d5Paths = sections.flatMap((s) => [s.path, s.oldPath]).filter(Boolean)
-    const changed = [...sections.map((s) => s.path).filter(Boolean), ...untracked]
+    const untracked = mode === "uncommitted" ? untrackedPaths(root) : []
     // Unfiltered too: a lens matching a generated file is harmless, and the checkout's
     // .gitattributes is the change's own and could otherwise mark the changed code generated.
-    const matchPaths = [...new Set(changed)]
+    const matchPaths = [...new Set([...sections.map((s) => s.path).filter(Boolean), ...untracked])]
     plan = planLenses({ ...loadRecords(root, run), d5Paths, matchPaths, dims })
+    // Report only: repository lenses come from whatever this checkout has committed.
+    const head = run("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+    source = { checkout: head.status === 0 ? head.stdout.trim() : null }
   }
   const { texts, ...result } = plan
-  const lenses = {
-    repo: root,
-    dims,
-    ...result,
-    note: root ? null : "diff-only: no repository to read lenses from",
+  return {
+    plan: { repo: root, source, dims, ...result, note: root ? null : "diff-only: no repository to read lenses from" },
+    texts,
   }
-  writeFileSync(join(wd, "lenses.json"), `${JSON.stringify(lenses, null, 2)}\n`)
-  for (const [target, text] of Object.entries(texts)) writeFileSync(join(wd, lenses.outputs[target]), text)
-  return lenses
+}
+
+/** Run one selection for $WD and write its files. Exported for an in-process caller. Throws on a git failure. */
+export function select({ wd, repo = null, dims, mode = null, run }) {
+  const { plan, texts } = selectLenses({ repo, diffText: readFileSync(join(wd, "diff.patch"), "utf8"), mode, dims, run })
+  writeFileSync(join(wd, "lenses.json"), `${JSON.stringify(plan, null, 2)}\n`)
+  for (const [target, text] of Object.entries(texts)) writeFileSync(join(wd, plan.outputs[target]), text)
+  return plan
+}
+
+/**
+ * Whether a PR scope names the repository checked out at `repo`, by origin's raw URL (`remote
+ * get-url` expands insteadOf, which is the user's routing, not identity). `#N` is always this one.
+ */
+export function sameRepository(repo, scope) {
+  if (!scope.repo) return true
+  let origin = null
+  try {
+    origin = originRepo(execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))
+  } catch {}
+  return (scope.ref ? origin : origin?.replace(/^[^/]+\//, "")) === scope.repo
 }
 
 /** The four dimension commands' one helper call. Never throws; the caller prints the result. */
-export function standalone({ dim, target = null, cwd = process.cwd() }) {
+export function standalone({ dim, target = null, cwd = process.cwd(), run }) {
   let repo
   try {
     repo = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()
@@ -203,21 +226,13 @@ export function standalone({ dim, target = null, cwd = process.cwd() }) {
   try {
     const scope = parseScope(target)
     if (!scope) return { lensFile: null, note: "scope not supported for lenses" }
-    if (scope.repo) {
-      let origin = null
-      try {
-        // The raw URL: `remote get-url` expands insteadOf, which is the user's routing, not identity.
-        origin = originRepo(execFileSync("git", ["config", "--get", "remote.origin.url"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))
-      } catch {}
-      const own = scope.ref ? origin : origin?.replace(/^[^/]+\//, "")
-      if (own !== scope.repo) return { lensFile: null, note: "PR from another repository" }
-    }
+    if (!sameRepository(repo, scope)) return { lensFile: null, note: "PR from another repository" }
     wd = mkdtempSync(join(tmpdir(), "lenses-"))
     const { diffText } = scope.pr
       ? resolveTarget({ repo, mode: "pr", prTarget: scope.ref ?? scope.pr, workDir: wd })
       : resolveTarget({ repo, mode: "uncommitted" })
     writeFileSync(join(wd, "diff.patch"), diffText)
-    const lenses = select({ wd, repo, dims: [dim], mode: scope.pr ? null : "uncommitted" })
+    const lenses = select({ wd, repo, dims: [dim], mode: scope.pr ? null : "uncommitted", run })
     const lensFile = lenses.outputs[dim] ? join(wd, lenses.outputs[dim]) : null
     return { wd, lensFile, note: null }
   } catch (error) {
@@ -239,7 +254,7 @@ export function main(argv, { run } = {}) {
       process.stderr.write(`${USAGE}\n`)
       return 2
     }
-    process.stdout.write(`${JSON.stringify(standalone({ dim: values.dim, target: values.target ?? null }))}\n`)
+    process.stdout.write(`${JSON.stringify(standalone({ dim: values.dim, target: values.target ?? null, run }))}\n`)
     return 0
   }
   const dims = String(values.dims ?? "").split(",").map((d) => d.trim()).filter(Boolean)

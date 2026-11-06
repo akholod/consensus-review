@@ -24,7 +24,7 @@ const DECLARED = ROOT["x-runtime"]
 
 const finding = (over = {}) => ({
   title: "t", file: "src/a.js", line: "1", severity: "P1", category: "correctness",
-  rationale: "r", failure_scenario: "s", confidence: "high", suggested_fix: null, ...over,
+  rationale: "r", failure_scenario: "s", confidence: "high", suggested_fix: null, lens: null, ...over,
 })
 
 const schemaAccepts = (value, entry) => validate(ROOT, value, entry).length === 0
@@ -47,6 +47,8 @@ const FINDING_CASES = [
   { why: "agree", accept: false, record: (() => { const f = finding(); delete f.severity; return f })() },
   { why: "agree", accept: false, record: finding({ title: 42 }) },
   { why: "agree", accept: false, record: finding({ line: true }) },
+  { why: "agree", accept: true, record: finding({ lens: "payments" }) },
+  { why: "agree", accept: false, record: finding({ lens: 7 }) },
 
   // --- declared: runtime accepts MORE ---------------------------------------------------------
   { why: "numeric-nullable-fields", schema: false, runtime: true, record: finding({ line: 12 }) },
@@ -54,6 +56,7 @@ const FINDING_CASES = [
   // different reason. That interaction is recorded in the schema's declaration.
   { why: "numeric-nullable-fields", schema: false, runtime: true, record: finding({ severity: "P2", failure_scenario: 7 }) },
   { why: "numeric-nullable-fields", schema: false, runtime: true, record: finding({ suggested_fix: 7 }) },
+  { why: "absent-lens", schema: false, runtime: true, record: (() => { const f = finding(); delete f.lens; return f })() },
   { why: "extra-finding-properties", schema: false, runtime: true, record: finding({ dimension: "impact" }) },
   { why: "extra-finding-properties", schema: false, runtime: true, record: finding({ owner: "tests" }) },
 
@@ -112,7 +115,8 @@ test("no undeclared disagreement hides in the enum and required surface", () => 
       )
     }
   }
-  for (const key of Object.keys(finding())) {
+  // lens is the declared absent-lens tolerance, exercised above.
+  for (const key of Object.keys(finding()).filter((k) => k !== "lens")) {
     const record = finding()
     delete record[key]
     assert.equal(

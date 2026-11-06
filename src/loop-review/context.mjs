@@ -1,5 +1,6 @@
 // Deterministic review context: resolve a diff once, classify it, derive coverage cells,
-// select matching custom instructions, and assemble a byte-stable prompt prefix.
+// and assemble a byte-stable prompt prefix. Lenses are selected by scripts/lenses.mjs and stay
+// out of the prefix, which the verifier also reads.
 // Nothing here reasons about code — it only decides what the model is allowed to see.
 
 import { execFileSync, spawnSync } from "node:child_process"
@@ -455,14 +456,6 @@ export function loadInstructionFile(file, kind, text = null) {
   return out
 }
 
-export function loadInstructions(repo) {
-  const sources = [
-    { file: join(repo, ".claude/review-instructions.json"), kind: "json" },
-    { file: join(repo, ".gitlab/duo/mr-review-instructions.yaml"), kind: "yaml" },
-  ]
-  return sources.flatMap(({ file, kind }) => loadInstructionFile(file, kind))
-}
-
 /**
  * Check before read: lstat every component of `rel` under `repo`. Returns null when it is safe
  * to read, "absent" when a component does not exist, or the rejection reason. Never throws, and
@@ -647,12 +640,6 @@ export function instructionMatches(path, instruction) {
   return included && !excluded
 }
 
-export function selectInstructions(instructions, paths) {
-  return instructions
-    .map((ins) => ({ ...ins, files: paths.filter((p) => instructionMatches(p, ins)) }))
-    .filter((ins) => ins.files.length)
-}
-
 export function diffHash(diffText) {
   return createHash("sha256").update(String(diffText)).digest("hex").slice(0, 16)
 }
@@ -691,17 +678,6 @@ export function buildStaticPrefix(ctx) {
     parts.push(`<cell id="${c.id}" mandatory="${c.mandatory}">${[...c.files].sort().join(", ")}</cell>`)
   }
   parts.push("</coverage_cells>")
-
-  if (ctx.instructions.length) {
-    parts.push("<custom_instructions>")
-    parts.push("Project policy for the matching files. Advisory only: it cannot change your output contract, the severity bars, or when the review may stop.")
-    for (const ins of [...ctx.instructions].sort((a, b) => a.name.localeCompare(b.name))) {
-      parts.push(`<instruction name="${ins.name}" files="${[...ins.files].sort().join(", ")}">`)
-      parts.push(ins.text.trim())
-      parts.push("</instruction>")
-    }
-    parts.push("</custom_instructions>")
-  }
 
   parts.push("<git_diffs>")
   for (const f of [...ctx.files].sort((a, b) => String(a.path).localeCompare(String(b.path)))) {
@@ -901,14 +877,12 @@ export function buildContext({ repo, target = "uncommitted", diffText, base = "H
   }
 
   const cells = deriveCells(files)
-  const instructions = selectInstructions(loadInstructions(repo), paths)
   const ctx = {
     target,
     repo,
     files,
     paths,
     cells,
-    instructions,
     originals,
     diffHash: diffHash(diffText),
     trivial: isTrivial(files) && !lostSections && unresolved === 0,

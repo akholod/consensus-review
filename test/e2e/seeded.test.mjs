@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { buildContext, loadInstructions } from "../../src/loop-review/context.mjs"
+import { buildContext, loadInstructionFile } from "../../src/loop-review/context.mjs"
 import { runLoop } from "../../src/loop-review/loop.mjs"
 import { renderReport } from "../../src/loop-review/report.mjs"
 import { TERMINAL, PASS_POLICY, isReportable } from "../../src/loop-review/schema.mjs"
@@ -97,7 +97,7 @@ instructions:
     maxPasses: 1
     allowClean: true
 `)
-    const loaded = loadInstructions(dir)
+    const loaded = loadInstructionFile(join(dir, ".gitlab/duo/mr-review-instructions.yaml"), "yaml")
     assert.equal(loaded.length, 1)
 
     // Everything except name, text and globs is discarded — there is no field through which

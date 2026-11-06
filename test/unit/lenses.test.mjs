@@ -210,6 +210,7 @@ test("select: a matching lens is written for its lane and the consultant", () =>
     const { stdout, lenses } = select(ws)
     assert.equal(stdout, '{"outputs":{"consultant":"lenses-consultant.md","impact":"lenses-impact.md"},"selected":1,"skipped":0,"rejected":0}\n')
     assert.equal(lenses.repo, ws.repo)
+    assert.deepEqual(lenses.source, { checkout: git(ws.repo, "rev-parse", "--short", "HEAD").trim() })
     assert.equal(lenses.note, null)
     assert.equal(readFileSync(join(ws.wd, "lenses-consultant.md"), "utf8").split("\n").at(-1), TRAILER)
     assert.match(readFileSync(join(ws.wd, "lenses-impact.md"), "utf8"), /<instruction name="payments" dimension="impact" files="src\/payments\/charge\.js">/)
@@ -579,6 +580,30 @@ test("standalone: a failing gh fails open with a note naming the failure", () =>
     assert.equal(code, 0)
     assert.equal(out.lensFile, null)
     assert.match(out.note, /^helper error: Command failed: gh pr diff 3/)
+  })
+})
+
+test("standalone: a git check that fails is a helper-error note and a lens-less review, exit 0 (intended fail-open)", () => {
+  withLens(({ repo }) => {
+    write(repo, "src/payments/charge.js", "export const charge = 2\n")
+    const run = (cmd, args, options) => (args[0] === "ls-tree" ? { status: 128, stdout: "" } : spawnSync(cmd, args, options))
+    const lines = []
+    const stdoutWrite = process.stdout.write
+    const cwd = process.cwd()
+    let code
+    try {
+      process.chdir(repo)
+      process.stdout.write = (chunk) => lines.push(String(chunk))
+      code = main(["standalone", "--dim", "impact"], { run })
+    } finally {
+      process.stdout.write = stdoutWrite
+      process.chdir(cwd)
+    }
+    const out = JSON.parse(lines.join(""))
+    standaloneWds.push(out.wd)
+    assert.equal(code, 0)
+    assert.equal(out.lensFile, null)
+    assert.equal(out.note, "helper error: git check failed (git ls-tree exit 128): .consensus-review/lenses/payments.md")
   })
 })
 

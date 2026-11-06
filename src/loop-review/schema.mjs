@@ -200,6 +200,8 @@ export function validateFinding(finding) {
       problems.push(`${key} must be a string, a number, or null`)
     }
   }
+  // Absent reads as null (declared in the contract's x-runtime): attribution never costs a finding.
+  if (finding.lens != null && typeof finding.lens !== "string") problems.push("lens must be a string or null")
   if (ACTIONABLE.includes(finding.severity)) {
     const scenario = finding.failure_scenario
     if (typeof scenario !== "string" || !scenario.trim()) {

@@ -428,7 +428,8 @@ verifier and refuters never see them.
 
 **In the report.** The header has a `Lenses:` line (selected, skipped
 and rejected lenses with reasons, and any lane they were not delivered
-to). A finding that exists because of a lens shows `lens: <name>`; the
+to; for a PR, `repo lenses from checkout <sha>`, the short `HEAD` of the
+checkout they were read from, which is not the PR's own revision). A finding that exists because of a lens shows `lens: <name>`; the
 finding schema carries it as `lens`.
 
 **Legacy files.** `.claude/review-instructions.json` and
@@ -444,15 +445,19 @@ dropped that lens file, `meta.json` lists it as omitted and the prompt cannot be
 The standalone dimension commands apply the lenses of their own dimension
 for uncommitted changes or a PR (a URL, `#N`, `N` or `owner/repo#N`) of
 the current repository, same host included. Any other scope (a range, a
-path, a glob) runs without lenses.
+path, a glob) runs without lenses. They fail open: an error in the lens
+helper, a failed git check included, is a `helper error: …` note and a
+review without lenses, since these commands are advisory.
+
+`/loop-review` reads lenses the same way (all four dimensions); see
+[loop-review.md](loop-review.md#project-lenses).
 
 `/consensus-review:doctor` lists the lenses it finds and warns about
 rejected files, files `not committed` or `modified` against `HEAD`,
 ignored keys and globs that match no tracked file.
 
 Not supported yet: lenses in `~/.config`, built-in lenses, an
-`init-lenses` command, a severity hint. `/loop-review` does not read lens
-files.
+`init-lenses` command, a severity hint.
 
 ## Profiles
 

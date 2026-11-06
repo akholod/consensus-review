@@ -103,16 +103,33 @@ The intended cycle: review, then a person or another agent applies the
 fixes, then review the new diff. Each run hashes the diff, so a review of
 old code cannot pass for a review of the current one.
 
-## Custom instructions
+## Project lenses
 
-If the repository has `.claude/review-instructions.json` or
-`.gitlab/duo/mr-review-instructions.yaml`, the entries whose globs match
-a changed file are added for that file (positive globs first, then `!`
-exclusions). Rules for code the diff does not touch never enter the
-context.
+`/loop-review` selects project lenses (`.consensus-review/lenses/*.md`)
+and the legacy `.claude/review-instructions.json` and
+`.gitlab/duo/mr-review-instructions.yaml` through the same code as
+`/consensus-review` ([Project lenses](consensus-review.md#project-lenses)):
+only files tracked and unchanged at `HEAD` and outside the diff, the
+symlink and size checks, the shared 24576-byte budget and the escaping.
+A lens of any dimension applies when its globs match a changed file. If
+git cannot run the tracked check, the run stops with exit 2.
 
-They are treated as untrusted advice: they cannot relax read-only mode,
-the budgets, the severity bars, when the review may stop, or escalation.
+The selected lenses go only into each discovery pass's prompt, after the
+output contract, and are re-sent on every pass. They are not in the
+shared system prefix, and the verifier never sees them. A finding that
+exists because of a lens sets `lens` to its name (otherwise `null`).
+
+For `--pr`, lenses are read from this checkout only when its `origin`
+(the raw configured URL) is the PR's repository; otherwise none are
+read and the report says `repo lenses: checkout is not the PR's
+repository`. They come from the checkout's committed files, not the PR's
+revision: the `Lenses:` line names that checkout as `repo lenses from
+checkout <sha>`.
+
+They are untrusted advice: they cannot relax read-only mode, the
+budgets, the severity bars, when the review may stop, or escalation.
+The report has a `Lenses:` line (selected, then skipped with reasons and
+the rejected count) and `--json` output a `lenses` object.
 
 ## Cost
 
@@ -135,6 +152,8 @@ timestamp. It holds:
 
 - `diff.patch`, the diff reviewed, never truncated;
 - `sources/context/system-prefix.md`, the shared system prefix;
+- `sources/context/lenses.md`, the lens block added to each discovery
+  prompt (only when a lens was selected);
 - for each pass and verification, the prompt, stdout, stderr and
   `process.json` (status, signal, error, time), which are the raw
   `claude -p` result and can include any repo file the model read;

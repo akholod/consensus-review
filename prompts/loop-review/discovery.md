@@ -28,6 +28,8 @@ If an `<already_covered>` or `<refuted>` block is present, those claims are sett
 restate them. Spend this pass on what is listed under `<uncovered_cells>`, and on anything else
 the diff genuinely warrants.
 
+Set a finding's `lens` to the name of the project lens it exists because of, if any; otherwise `null`.
+
 Respond with ONLY a JSON object, no prose before or after:
 
 <!-- BEGIN GENERATED: contracts/loop-payload.schema.json#/$defs/discoveryPayload -->
@@ -37,7 +39,7 @@ Respond with ONLY a JSON object, no prose before or after:
     {"title": str, "file": str, "line": str|null, "severity": "P0"|"P1"|"P2",
      "category": "security"|"correctness"|"perf"|"maintainability"|"tests"|"style",
      "rationale": str, "failure_scenario": str|null, "confidence": "low"|"medium"|"high",
-     "suggested_fix": str|null}
+     "suggested_fix": str|null, "lens": str|null}
   ],
   "cells": [
     {"cell": str, "status": "covered"|"uncovered", "anchors": [str], "checks": [str],
