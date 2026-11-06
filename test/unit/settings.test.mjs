@@ -1068,3 +1068,106 @@ test("layers: the profile listing tags user profiles and the repo one they shado
     "",
   ].join("\n"))
 })
+
+// ---------------------------------------------------------------------------------------------
+// settings.mjs init, the /consensus-review:init-lenses writer (integration: temp repo, real fs and
+// git). Expected values come from "#3 init-lenses" and the stage 6 row of
+// .omc/plans/issue-12-followups.md: copies byte-equal to presets/, never overwrites, never commits.
+// ---------------------------------------------------------------------------------------------
+
+const PRESET_FILES = [
+  ".consensus-review/lenses/migrations.md",
+  ".consensus-review/lenses/public-api.md",
+  ".consensus-review/profiles/quick.md",
+  ".consensus-review/profiles/release.md",
+]
+const presetBytes = (file) => readFileSync(new URL(`../../presets/${file.slice(".consensus-review/".length)}`, import.meta.url))
+const reminder = (files) => `Not applied until committed: git add -- ${files.join(" ")} && git commit -m 'Add review lenses and profiles' -- ${files.join(" ")}`
+
+function init(repo, args = "") {
+  const argsFile = join(repo, "..", "init-args.txt")
+  writeFileSync(argsFile, args)
+  return spawnSync(process.execPath, [SCRIPT, "init", "--repo", repo, "--args-file", argsFile], { encoding: "utf8", timeout: 10_000 })
+}
+
+test("I1: init in an empty repo copies every preset byte-equal, untracked, uncommitted, with the reminder", () => {
+  const { repo } = profileRepo({})
+  const head = git(repo, "rev-parse", "HEAD")
+  const run = init(repo)
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(run.stdout, `${PRESET_FILES.map((f) => `${f}: created\n`).join("")}${reminder(PRESET_FILES)}\n`)
+  for (const file of PRESET_FILES) assert.deepEqual(readFileSync(join(repo, file)), presetBytes(file), file)
+  assert.equal(git(repo, "rev-parse", "HEAD"), head)
+  assert.equal(git(repo, "diff", "--cached", "--name-only"), "")
+  assert.equal(git(repo, "status", "--porcelain", "-uall"), PRESET_FILES.map((f) => `?? ${f}\n`).join(""))
+  assert.deepEqual(readdirSync(join(repo, ".consensus-review/lenses")), ["migrations.md", "public-api.md"])
+})
+
+test("I2: a re-run keeps every file (exists, kept) and prints no reminder; other bytes stay", () => {
+  const { repo } = profileRepo({ ".consensus-review/lenses/migrations.md": "mine\n" })
+  assert.equal(init(repo).status, 0)
+  const run = init(repo)
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(run.stdout, PRESET_FILES.map((f) => `${f}: exists, kept\n`).join(""))
+  assert.equal(readFileSync(join(repo, PRESET_FILES[0]), "utf8"), "mine\n")
+  for (const file of PRESET_FILES.slice(1)) assert.deepEqual(readFileSync(join(repo, file)), presetBytes(file), file)
+})
+
+test("I3: named presets copy only those, lens or profile", () => {
+  const { repo } = profileRepo({})
+  const run = init(repo, "quick migrations\n")
+  assert.equal(run.status, 0, run.stderr)
+  const files = [".consensus-review/lenses/migrations.md", ".consensus-review/profiles/quick.md"]
+  assert.equal(run.stdout, `${files.map((f) => `${f}: created\n`).join("")}${reminder(files)}\n`)
+  assert.deepEqual(readdirSync(join(repo, ".consensus-review/lenses")), ["migrations.md"])
+  assert.deepEqual(readdirSync(join(repo, ".consensus-review/profiles")), ["quick.md"])
+})
+
+test("I4: an unknown name exits 2 listing the available names and writes nothing", () => {
+  const { repo } = profileRepo({})
+  assertEditStops(init(repo, "quick zz"), "init: no such lens or profile zz (available: migrations, public-api, quick, release)")
+  assert.equal(existsSync(join(repo, ".consensus-review")), false)
+})
+
+test("I5: a symlink at a target is kept, not followed; its target is untouched", () => {
+  const { repo } = profileRepo({})
+  const outside = join(repo, "..", "outside.md")
+  writeFileSync(outside, "outside\n")
+  mkdirSync(join(repo, ".consensus-review/profiles"), { recursive: true })
+  symlinkSync(outside, join(repo, ".consensus-review/profiles/quick.md"))
+  const run = init(repo, "quick")
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(run.stdout, ".consensus-review/profiles/quick.md: exists, kept\n")
+  assert.equal(readlinkSync(join(repo, ".consensus-review/profiles/quick.md")), outside)
+  assert.equal(readFileSync(outside, "utf8"), "outside\n")
+})
+
+test("I6: a FIFO or a directory at a target is kept without hanging", () => {
+  const { repo } = profileRepo({})
+  mkdirSync(join(repo, ".consensus-review/lenses/public-api.md"), { recursive: true })
+  execFileSync("mkfifo", [join(repo, ".consensus-review/lenses/migrations.md")])
+  const run = init(repo, "migrations public-api")
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(run.stdout, ".consensus-review/lenses/migrations.md: exists, kept\n.consensus-review/lenses/public-api.md: exists, kept\n")
+  assert.ok(statSync(join(repo, ".consensus-review/lenses/migrations.md")).isFIFO())
+  assert.deepEqual(readdirSync(join(repo, ".consensus-review/lenses")).sort(), ["migrations.md", "public-api.md"])
+})
+
+test("I7: a symlinked .consensus-review exits 2 and nothing is written through it", () => {
+  const { repo } = profileRepo({})
+  const elsewhere = mkdtempSync(join(tmpdir(), "init-elsewhere-"))
+  dirs.push(elsewhere)
+  symlinkSync(elsewhere, join(repo, ".consensus-review"))
+  assertEditStops(init(repo), "init: symlink (.consensus-review)")
+  assert.deepEqual(readdirSync(elsewhere), [])
+})
+
+test("I8: outside a git repository init exits 2", () => {
+  const dir = mkdtempSync(join(tmpdir(), "init-nogit-"))
+  dirs.push(dir)
+  mkdirSync(join(dir, "repo"))
+  const run = init(join(dir, "repo"))
+  assert.equal(run.status, 2)
+  assert.match(run.stderr, /^not a git repository/)
+  assert.equal(existsSync(join(dir, "repo", ".consensus-review")), false)
+})

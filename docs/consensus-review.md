@@ -539,7 +539,11 @@ has one row per user and built-in layer with the resolved root (which a
 direnv-set `XDG_CONFIG_HOME` changes), whether it is used or ignored and
 why, and the names reserved or shadowed.
 
-Not supported yet: an `init-lenses` command, a severity hint.
+`/consensus-review:init-lenses` copies the built-in lenses and profiles
+into the repository; see [Copying the built-ins](#copying-the-built-ins-consensus-reviewinit-lenses).
+
+Not planned: a lens severity ceiling, because the model sets `lens`
+attribution, so lens text could cap any finding.
 
 ## Profiles
 
@@ -629,9 +633,10 @@ their keys and warns about one that would stop a run.
 
 ### Writing profiles: `/consensus-review:profile`
 
-`/consensus-review:profile` is the only command that writes, and it
+`/consensus-review:profile` and `/consensus-review:init-lenses` are the
+only commands that write, and neither commits. `/consensus-review:profile`
 writes only `.consensus-review/profiles/<name>.md`, a repository profile.
-It never commits. User profiles are files you edit yourself.
+User profiles are files you edit yourself.
 
 ```text
 /consensus-review:profile quick depth=minimal dims=+quality sceptic=basic effort=verifier:medium,impact:medium
@@ -666,6 +671,23 @@ Not applied until committed: git add -- .consensus-review/profiles/quick.md && g
 - An existing file that does not parse is never overwritten: `profile <name>: <error>; fix or delete the file`. A symlink anywhere on the path stops it too.
 - The file is replaced atomically and keeps its mode; a new file is created `0644`, less your umask.
 - `/consensus-review:profile <name>` prints a profile; with no arguments it lists the built-in defaults on the first line, then each profile of every layer, user, repo, then built-in, with its keys, as `<name> (<layer>): …` (`<name> (builtin, shadowed by repo): …` when a higher layer holds the name; an invalid one as `<name> (<layer>): invalid (<error>)`). To delete a profile, use `git rm`.
+
+### Copying the built-ins: `/consensus-review:init-lenses`
+
+`/consensus-review:init-lenses [name…]` copies the built-in lenses
+(`presets/lenses/`) and profiles (`presets/profiles/`), all or the ones
+named, into `.consensus-review/lenses/` and `.consensus-review/profiles/`
+as a starting point to edit. It never overwrites: a file that exists (or
+a symlink, FIFO or directory in its place) is reported `exists, kept` and
+left alone. A symlinked `.consensus-review/` or subdirectory stops it, and
+an unknown name stops it with the available names; nothing is written.
+It never commits. The copies apply only once committed; until then a run
+that names a copied profile stops with `not tracked`. The output ends with
+the commit to run, limited to the files it created:
+
+```text
+Not applied until committed: git add -- <paths> && git commit -m 'Add review lenses and profiles' -- <paths>
+```
 
 The defaults are shown in two places: the `Settings:` line of a report
 and the first line of the `/consensus-review:profile` listing. No default

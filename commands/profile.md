@@ -1,5 +1,5 @@
 ---
-description: Create, update or list the review profiles in .consensus-review/profiles/ (the only command that writes; it never commits)
+description: Create, update or list the review profiles in .consensus-review/profiles/ (it and /consensus-review:init-lenses are the only writers; neither commits)
 argument-hint: "[<name> [key=value…]]"
 ---
 

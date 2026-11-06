@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "consensus-review",
   "version": "0.13.0",
-  "description": "Two code-review strategies sharing one contract: /consensus-review (parallel multi-source panel with an Opus arbiter, codex consultant and strict sceptic) and /loop-review (sequential coverage-directed passes with evidence-backed cells and a CLEAN verdict enforced in code). Reviews are strictly read-only; /consensus-review:profile writes only the profile you name.",
+  "description": "Two code-review strategies sharing one contract: /consensus-review (parallel multi-source panel with an Opus arbiter, codex consultant and strict sceptic) and /loop-review (sequential coverage-directed passes with evidence-backed cells and a CLEAN verdict enforced in code). Reviews are strictly read-only; only /consensus-review:profile and /consensus-review:init-lenses write, under .consensus-review/, and neither commits.",
   "author": {
     "name": "Andrii Kokhanevich",
     "email": "andrey.kokhanevich@gmail.com"

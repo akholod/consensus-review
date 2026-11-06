@@ -5,6 +5,7 @@
 //   resolve --wd <WD> --args-file <file>
 //   profile --wd <WD> [--repo <REPO>] [--mode uncommitted]
 //   profile-edit --repo <REPO> --args-file <file>
+//   init --repo <REPO> --args-file <file>
 //
 // `resolve` splits the file on whitespace, writes <WD>/settings.json atomically and prints it, exit
 // 0. A `profile=<name>` token leaves the profile pending: `profile`, run once the diff exists,
@@ -13,13 +14,14 @@
 // unchanged at HEAD, and outside the diff. Any error prints the message to stderr and exits 2 with settings.json untouched.
 // Precedence is flag > profile > default. `profile-edit`, the writer behind /consensus-review:profile,
 // lists the profiles (no args), prints one (`<name>`) or writes one (`<name> key=value…`); it never
-// commits.
+// commits. `init`, the writer behind /consensus-review:init-lenses, copies the built-in lenses and
+// profiles (all, or the names given) into .consensus-review/; it never overwrites and never commits.
 
 import { spawnSync } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import {
-  closeSync, existsSync, fchmodSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync,
-  writeFileSync,
+  closeSync, existsSync, fchmodSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync,
+  statSync, writeFileSync,
 } from "node:fs"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -33,6 +35,7 @@ const USAGE = [
   "usage: settings.mjs resolve --wd <WD> --args-file <file>",
   "       settings.mjs profile --wd <WD> [--repo <REPO>] [--mode uncommitted]",
   "       settings.mjs profile-edit --repo <REPO> --args-file <file>",
+  "       settings.mjs init --repo <REPO> --args-file <file>",
 ].join("\n")
 const DIMS = ["architecture", "quality", "impact", "tests"]
 const TIMEOUT_MIN = 30
@@ -669,6 +672,83 @@ const editProfile = ({ repo, argsFile, sources }) => {
   return 0
 }
 
+const PRESETS = new URL("../presets/", import.meta.url).pathname
+
+/**
+ * Creates `target` with `content` only if nothing is there: an exclusive temp file in the same
+ * directory, then `link`, which never follows or replaces whatever holds the name. Returns `null`,
+ * `"exists"` or the error code.
+ */
+const createFile = (dir, target, content) => {
+  const tmp = join(dir, `.init.${randomBytes(6).toString("hex")}.tmp`)
+  let fd = null
+  let created = false
+  try {
+    fd = openSync(tmp, "wx", 0o644)
+    created = true
+    writeFileSync(fd, content)
+    closeSync(fd)
+    fd = null
+    try {
+      linkSync(tmp, target)
+    } catch (error) {
+      if (error.code === "EEXIST") return "exists"
+      throw error
+    }
+    return null
+  } catch (error) {
+    return String(error.code ?? error.message)
+  } finally {
+    if (fd !== null) closeSync(fd)
+    if (created) rmSync(tmp, { force: true })
+  }
+}
+
+/** /consensus-review:init-lenses: copies presets/{lenses,profiles}/*.md (all, or the names given). Never commits. */
+const initPresets = ({ repo, argsFile }) => {
+  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  if (inside.error || inside.status !== 0) return fail(`not a git repository (${repo})`)
+  const presets = ["lenses", "profiles"].flatMap((kind) => readdirSync(join(PRESETS, kind))
+    .filter((entry) => entry.endsWith(".md")).sort().map((entry) => ({ kind, name: entry.slice(0, -3), entry })))
+  const names = readTokens(argsFile)
+  const available = [...new Set(presets.map((p) => p.name))].sort()
+  const unknown = names.filter((name) => !available.includes(name))
+  if (unknown.length) return fail(`init: no such lens or profile ${unknown.join(", ")} (available: ${available.join(", ")})`)
+  const chosen = names.length ? presets.filter((p) => names.includes(p.name)) : presets
+  const dirs = [PROFILE_PARENT, ...new Set(chosen.map((p) => `${PROFILE_PARENT}/${p.kind}`))]
+  const missing = []
+  for (const dir of dirs) {
+    const problem = checkSourcePath(repo, dir, "dir")
+    if (problem === "absent") missing.push(dir)
+    else if (problem) return fail(`init: ${problem} (${dir})`)
+  }
+  try {
+    for (const dir of missing) mkdirSync(join(repo, dir))
+  } catch (error) {
+    return fail(`init: cannot create the directory (${String(error.code ?? error.message)})`)
+  }
+  const out = []
+  const created = []
+  for (const { kind, entry } of chosen) {
+    const file = `${PROFILE_PARENT}/${kind}/${entry}`
+    const result = createFile(join(repo, PROFILE_PARENT, kind), join(repo, file), readFileSync(join(PRESETS, kind, entry)))
+    if (result === "exists") out.push(`${file}: exists, kept`)
+    else if (result) {
+      process.stdout.write(out.map((line) => `${line}\n`).join(""))
+      return fail(`init: write failed (${result}) (${file})`)
+    } else {
+      out.push(`${file}: created`)
+      created.push(file)
+    }
+  }
+  if (created.length) {
+    const paths = created.join(" ")
+    out.push(`Not applied until committed: git add -- ${paths} && git commit -m 'Add review lenses and profiles' -- ${paths}`)
+  }
+  process.stdout.write(`${out.join("\n")}\n`)
+  return 0
+}
+
 /** `run` (spawnSync's shape) and `sources` (see `sourceRoots`) are injectable for tests. */
 export function main(argv, { run, sources } = {}) {
   let values
@@ -690,6 +770,10 @@ export function main(argv, { run, sources } = {}) {
   if (positionals[0] === "profile-edit") {
     if (!values.repo || !existsSync(values.repo) || !file || !existsSync(file)) return fail(USAGE)
     return editProfile({ repo: values.repo, argsFile: file, sources })
+  }
+  if (positionals[0] === "init") {
+    if (!values.repo || !existsSync(values.repo) || !file || !existsSync(file)) return fail(USAGE)
+    return initPresets({ repo: values.repo, argsFile: file })
   }
   if (!values.wd || !existsSync(values.wd)) return fail(USAGE)
   if (positionals[0] === "profile") {

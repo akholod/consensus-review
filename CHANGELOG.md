@@ -74,6 +74,20 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
   such repository file now apply the built-in instead of stopping with
   `no such profile`.
 
+- **Added — `/consensus-review:init-lenses [name…]`**
+  ([#12](https://github.com/akholod/consensus-review/issues/12)). Copies
+  the built-in lenses and profiles (all, or the ones named) into
+  `.consensus-review/{lenses,profiles}/` through `settings.mjs init`. It
+  never overwrites (an existing file, symlink, FIFO or directory is
+  `exists, kept`), stops on a symlinked `.consensus-review/` or an unknown
+  name, and never commits; it prints the path-limited commit. The writers
+  are now `/consensus-review:profile` and `/consensus-review:init-lenses`.
+
+- **Dropped — the lens severity hint**
+  ([#12](https://github.com/akholod/consensus-review/issues/12)). Not
+  planned: the model sets `lens` attribution, so a lens severity ceiling
+  would let lens text cap any finding.
+
 ## 0.13.0
 
 Project lenses and profiles, simpler arguments, typed sceptic votes, a consultant cascade, run archives and retried consultants. Breaking: arguments changed; see below.
