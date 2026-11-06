@@ -1,6 +1,6 @@
 ---
 description: Consensus code review (Opus arbiter + a consultant — codex, else pi, else claude-cli — optional `extra=pi`) across 4 dimensions (architecture/quality/impact/tests) for a PR or uncommitted changes; P0–P2 findings; strict sceptic by default; every flag also accepted with a leading --
-argument-hint: "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [<key>=<value>…]"
+argument-hint: "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]"
 ---
 
 You are the **Opus arbiter** of a consensus review. Review runs by **dimensions** (what
@@ -20,7 +20,7 @@ Write `$ARGUMENTS` **verbatim** (no paraphrase, no reordering, no quoting) with 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" resolve --wd '<literal WD>' --args-file '<literal WD>/args.txt'
 ```
-Exit 2 → print its stderr message and **stop**: a known setting with a bad value never falls back to a default. Exit 0 → read `$WD/settings.json` and use **only** its values from here on — `target`, `settings.<key>.value`, `ignored`, and the two report lines `lines.settings` / `lines.ignored` (§9). Never re-derive a setting from `$ARGUMENTS`; unknown and overridden tokens are already in `ignored`.
+Exit 2 → print its stderr message and **stop**: a known setting with a bad value never falls back to a default. Exit 0 → read `$WD/settings.json` and use **only** its values; when `profile.pending` is set, re-read `settings.json` after §1.5 before using any setting — `target`, `settings.<key>.value`, `ignored`, and the two report lines `lines.settings` / `lines.ignored` (§9). Never re-derive a setting from `$ARGUMENTS`; unknown and overridden tokens are already in `ignored`.
 
 **Quoting rule:** every value from `settings.json` or a path you paste into a Bash command — the target `ref`, `owner/repo`, `N`, `pi-model`, `consultant`, a lane's `model` and `skipReason`, and every path (`WD`, `INVOKE`, `REPO`, the report path) — goes in **single quotes** (`'<value>'`), as in every command line below; never unquoted, never in double quotes. A value containing `'` is written with the `'\''` escape (`'it'\''s'`). Only a shell variable already set from such a literal (`"$WD"`, `"$REPO"`) stays in double quotes.
 
@@ -42,6 +42,7 @@ What each setting means (`settings.<key>.value`):
 - `out` — where the report file goes. `default` → `<INVOKE>/.reviews/review-<slug>-<YYYY-MM-DD>.md`. A path ending in `/`, or naming an existing directory, is a directory and the default filename is used inside it; anything else is the exact file path. `none` (`no-file`) → terminal output only: the review performs **zero** writes anywhere on disk (`$WD` under `/tmp` aside) — no run archive either.
 - `archive` — `on` (default): §9 copies a bounded, private snapshot of `$WD` (diff, each source's prompt and raw output, an event log) to `<INVOKE>/.reviews/<run-id>/`, and only when git confirms `.reviews/` is ignored. `archive=off` → no run archive. `out` moves the report, never the archive.
 - `lang` — output language for the review, a code or a name. Code identifiers, paths, and technical terms always stay in their original form. Pass the chosen language to the dimension agents and into the consultant brief.
+- `profile` (top-level, not under `settings`) — `null` without a `profile=<name>` argument. With one, it is `{"name", "pending": true}` and `lines.settings` reads `Settings: profile <name> NOT APPLIED (pending)`: the repository profile `.consensus-review/profiles/<name>.md` is applied in code by §1.5, once the diff exists, and §2 refuses to start while it is pending. After §1.5 it is `{"name", "file"}`, and every value the profile set shows `(profile <name>)` on the `Settings:` line. A flag still beats the profile.
 
 ## 1. Resolve diff and context
 `WD` and `INVOKE` come from §0, as literals.
@@ -64,12 +65,19 @@ What each setting means (`settings.<key>.value`):
 
 **`HEAD_SHA`** (keep it as a literal) tells the sceptic `decide` (§8) where a quote from a file outside the diff may be read: `--repo "$REPO" --head-sha <HEAD_SHA>`. Diff-only mode has no `REPO` and no `HEAD_SHA`: pass neither, so only the diff is checked. An empty `HEAD_SHA` means pass no `--head-sha`.
 
+## 1.5. Apply the profile
+Only when `profile.pending` is set in `$WD/settings.json`. In **one** foreground call:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" profile --wd '<literal WD>' [--repo '<literal REPO>'] [--mode uncommitted]
+```
+`--repo` only when `REPO` exists (diff-only mode has none, and the call then stops with `needs the repository (diff-only mode)`); `--mode uncommitted` only in uncommitted mode. It re-resolves `$WD/args.txt` with the profile and rewrites `$WD/settings.json`. Exit 2 → print its stderr message and **stop**: a profile that is untracked, ignored, modified against `HEAD`, in the diff, a symlink, malformed or holds a bad value is never applied, and the run never falls back to the defaults. Exit 0 → re-read `$WD/settings.json` and use only its values from here on.
+
 ## 2. Pre-flight health-check
 Select the consultants in **one** foreground call:
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/run-lane.mjs" select --wd '<literal WD>' [--consultant '<x>'] [--extra] [--pi-model '<m>']
 ```
-`--consultant '<consultant>'` when `consultant` is not `auto`, `--extra` when `extra` is `pi`, `--pi-model '<pi-model>'` when `pi-model` is not `auto` (values from `settings.json`). It writes `$WD/consultants.json`: `{"lanes":[{"name","brief","refuterBrief","model","skip","skipReason"}],"extraNote","reason"}`. Read it; §4, §5 and §8 copy its values **literally**. A lane with `skip` is not started (don't wait for the timeout); it keeps its line with `--skip`. With `extra=off` there is no extra lane.
+`--consultant '<consultant>'` when `consultant` is not `auto`, `--extra` when `extra` is `pi`, `--pi-model '<pi-model>'` when `pi-model` is not `auto` (values from `settings.json`). Exit 2 → print its stderr message and **stop**: it refuses a pending profile (§1.5 did not run) and a `settings.json` it cannot read. It writes `$WD/consultants.json`: `{"lanes":[{"name","brief","refuterBrief","model","skip","skipReason"}],"extraNote","reason"}`. Read it; §4, §5 and §8 copy its values **literally**. A lane with `skip` is not started (don't wait for the timeout); it keeps its line with `--skip`. With `extra=off` there is no extra lane.
 
 **Code graph (if the review runs in the project dir).** Check for a prebuilt code graph: `.codegraph/codegraph.db` (codegraph) or `graphify-out/graph.json` (graphify). If present — set `CODE_GRAPH=codegraph|graphify` and use it downstream (triage blast-radius + consultant brief + the dimension agents pick it up themselves). **Detect-and-use only; do NOT build the graph** (building graphify costs tokens). No graph → plain grep, that's fine.
 
@@ -394,7 +402,7 @@ cd '<literal INVOKE>' && node "${CLAUDE_PLUGIN_ROOT}/scripts/archive-run.mjs" fi
 It reads `$WD/settings.json` and `$WD/triage.json` itself.
 It prints one JSON line and exits 0 either way: `{"dir":"…"}` → `Archive: <dir relative to INVOKE>`; `{"skipped":"…"}` → `Archive: not written (<reason>)`. A failed or unparseable call is `Archive: not written (<what happened>)`; the report is still written and the review's outcome is unchanged. Put that `Archive:` line in the header block and append it to the last terminal line. With `out=none` there is no `Archive:` line.
 
-Format (`<lines.settings>` and `<lines.ignored>` are the `Settings:` and `Ignored args:` lines copied **verbatim** from `$WD/settings.json`; the extra lane's model shows in `Sources` / `Source availability`):
+Format (`<lines.settings>` and `<lines.ignored>` are the `Settings:` and `Ignored args:` lines copied **verbatim** from `$WD/settings.json` (as re-read after §1.5 when a profile is used, so a value a profile set reads `(profile <name>)`); the extra lane's model shows in `Sources` / `Source availability`):
 ```
 # Consensus Review — <target: PR #N url | uncommitted in <repo>>
 <only when review.decision.json has allExternalDown: true (never at T0, where no consultant runs):>
@@ -454,4 +462,5 @@ Totals: P0=<n> P1=<n> P2=<n>
 - **Read-only:** do not edit code, commit, push, comment on the PR, or run fixes. The only writes are the report file (`.reviews/` by default, or `out=<path>`) and its private run archive (`<INVOKE>/.reviews/<run-id>/`, unless `archive=off`) — and with `out=none` (`no-file`) there is no write at all.
 - Working files only in `$WD` (mktemp outside the repo).
 - Lenses never change a severity, a bar, the sceptic or the write surface.
+- A profile changes only settings; its body is ignored and never passed to a model. Never read a profile file yourself or copy its values: §1.5 applies it in code.
 - Never "lose" a source or dimension silently — skips and unavailability always appear in the report ("Dimension summary" and "Source availability" sections).

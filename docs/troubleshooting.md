@@ -89,6 +89,41 @@ is `FAIL`.
 - **`report output — directory is not writable`** (`WARN`): use
   `no-file`, or `out=<path>` somewhere writable.
 
+## profiles
+
+The doctor lists each profile in `.consensus-review/profiles/` with its
+keys. A `WARN` row is a profile that stops any run naming it. The run's
+stop messages:
+
+- **`profile=<name>: no such profile (available: …)`**: no file
+  `<name>.md` with that exact name. Names are `[a-z0-9][a-z0-9_-]*`, so
+  `Release.md` is never found.
+- **`profile <name>: changed in this diff (<file>); …`**: the diff
+  touches the profile, or it is modified in the working tree. A change
+  cannot configure its own review; commit it first, or pass its
+  settings as flags. In PR mode the local checkout counts too: the
+  profile must match your local `HEAD`.
+- **`profile <name>: not tracked (<file>); …`**: the profile is not
+  committed. An ignored profile is never applied either; that is the
+  price of closing the `.gitignore` bypass.
+- **`profile <name>: symlink (…)`** / **`not a regular file (…)`**: a
+  symlink anywhere on the path, or a FIFO or device.
+- **`profile <name>: too large (over 4096 bytes)`**, **`no front matter`**,
+  **`malformed line <n>`**, **`duplicate key <key>`**, **`empty value for <key>`**,
+  or a bad value such as `sceptic=strct: expected off|basic|strict`: fix
+  the file and commit it.
+- **`profile=<name>: needs the repository (diff-only mode)`**: a
+  diff-only review has no checkout to read a profile from; pass the
+  settings as flags.
+- **`profile <name>: git check failed (git diff exit 128)`**: git could
+  not answer whether the profile is committed, for example in a
+  repository with no commits. The run stops rather than guess.
+- **`profile <name> was not applied (run settings.mjs profile first)`**:
+  the review skipped the step that applies the profile; the consultants
+  are not started. Report it as a bug.
+- **`settings.json unreadable`**: the run's resolved settings are
+  missing or corrupt, so the review stops instead of running on defaults.
+
 ## plugin and live
 
 - **`version — installed X, latest Y`** (`WARN`): you are reviewing with

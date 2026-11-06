@@ -4,11 +4,11 @@
 
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { execFileSync, spawnSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { SETTINGS, parseValue, resolveSettings } from "../../scripts/settings.mjs"
+import { SETTINGS, parseProfileFile, parseValue, resolveSettings } from "../../scripts/settings.mjs"
 
 const SCRIPT = new URL("../../scripts/settings.mjs", import.meta.url).pathname
 
@@ -36,6 +36,7 @@ test("1: no tokens resolve every key to its default", () => {
     target: { kind: "uncommitted", ref: null },
     settings: DEFAULTS,
     ignored: [],
+    profile: null,
     lines: { settings: DEFAULT_LINE, ignored: "Ignored args: none" },
   })
 })
@@ -294,4 +295,261 @@ test("CLI: a missing --args-file is a usage error", () => {
   assert.equal(run.status, 2)
   assert.match(run.stderr, /^usage:/)
   assert.equal(existsSync(join(wd, "settings.json")), false)
+})
+
+// ---------------------------------------------------------------------------------------------
+// profiles: parseProfileFile and profile= (unit). Expected values come from the "Data format",
+// "Stop messages" and "Test plan" sections of .omc/plans/issue-7-profiles.md.
+// ---------------------------------------------------------------------------------------------
+
+const PROFILE_FILES = [
+  ["F1", "---\ndepth: deep\nextra: pi\n---\nnotes\n", { values: { depth: "deep", extra: "pi" } }],
+  ["F2", "---\n# c\n\nsceptic: basic\n---\n", { values: { sceptic: "basic" } }],
+  ["F3", "depth: deep\n", { error: "no front matter" }],
+  ["F4", "---\ndepth deep\n---\n", { error: "malformed line 2" }],
+  ["F5", "---\nsceptic: off\nsceptic: basic\n---\n", { error: "duplicate key sceptic" }],
+  ["F6", "---\ntimeout:\n---\n", { error: "empty value for timeout" }],
+  ["F7", "---\n" + "# x\n".repeat(50) + "---\n", { error: "no front matter" }],
+]
+for (const [id, text, expected] of PROFILE_FILES) {
+  test(`${id}: parseProfileFile ${JSON.stringify(text).slice(0, 40)}`, () => {
+    assert.deepEqual(parseProfileFile(text), expected)
+  })
+}
+
+test("R1: profile= without a layer is pending and says NOT APPLIED", () => {
+  const r = resolveSettings(["profile=release"])
+  assert.deepEqual(r.profile, { name: "release", pending: true })
+  assert.equal(r.lines.settings, "Settings: profile release NOT APPLIED (pending)")
+  assert.deepEqual(r.ignored, [])
+})
+
+test("R2: a profile name outside the lens name rule stops", () => {
+  assert.deepEqual(resolveSettings(["profile=Release"]), {
+    error: "profile=Release: expected a profile name ([a-z0-9][a-z0-9_-], up to 64)",
+  })
+})
+
+test("R3: the last profile= wins and the earlier one is listed", () => {
+  const r = resolveSettings(["profile=a", "profile=b"])
+  assert.equal(r.profile.name, "b")
+  assert.deepEqual(r.ignored, [{ token: "profile=a", reason: "overridden by profile=b" }])
+})
+
+test("R4: the Settings line names the profile and a flag still wins", () => {
+  const { lines } = resolveSettings(["deep"], { profile: { name: "ci", values: { depth: "minimal", sceptic: "off" } } })
+  assert.ok(lines.settings.includes("depth=deep (flag)"), lines.settings)
+  assert.ok(lines.settings.includes("sceptic=off (profile ci)"), lines.settings)
+})
+
+test("R5: no profile= gives profile null and the default line", () => {
+  const r = resolveSettings([])
+  assert.equal(r.profile, null)
+  assert.equal(r.lines.settings, DEFAULT_LINE)
+})
+
+// ---------------------------------------------------------------------------------------------
+// settings.mjs profile (integration: a real temp repo and git)
+// ---------------------------------------------------------------------------------------------
+
+const RELEASE = "---\ndepth: deep\nextra: pi\n---\nnotes\n"
+const PROFILE_FILE = ".consensus-review/profiles/release.md"
+const CHANGED = `profile release: changed in this diff (${PROFILE_FILE}); commit it first or pass its settings as flags`
+const NOT_TRACKED = `profile release: not tracked (${PROFILE_FILE}); commit it first or pass its settings as flags`
+
+const git = (repo, ...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" })
+
+/** A repo with one commit; `files` maps paths to contents (all committed unless `commit` is false). */
+function profileRepo(files = { [PROFILE_FILE]: RELEASE }, { commit = true } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "profile-"))
+  dirs.push(dir)
+  const repo = join(dir, "repo")
+  const wd = join(dir, "wd")
+  mkdirSync(repo)
+  mkdirSync(wd)
+  git(repo, "init", "-q")
+  git(repo, "config", "user.email", "t@example.com")
+  git(repo, "config", "user.name", "t")
+  writeFileSync(join(repo, "a.txt"), "a\n")
+  for (const [path, text] of Object.entries(files)) put(repo, path, text)
+  if (commit) {
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "init")
+  }
+  return { repo, wd }
+}
+
+const put = (root, path, text) => {
+  mkdirSync(join(root, path, ".."), { recursive: true })
+  writeFileSync(join(root, path), text)
+}
+
+/** `resolve` then `profile`, as §0 and §1.5 run them; returns the second run and settings.json before it. */
+function applyProfile({ repo, wd }, { args = "profile=release", diff = "", extra = ["--repo", repo] } = {}) {
+  writeFileSync(join(wd, "args.txt"), args)
+  writeFileSync(join(wd, "diff.patch"), diff)
+  const first = spawnSync(process.execPath, [SCRIPT, "resolve", "--wd", wd, "--args-file", join(wd, "args.txt")], { encoding: "utf8" })
+  assert.equal(first.status, 0, first.stderr)
+  const before = readFileSync(join(wd, "settings.json"), "utf8")
+  const run = spawnSync(process.execPath, [SCRIPT, "profile", "--wd", wd, ...extra], { encoding: "utf8", timeout: 10_000 })
+  const after = readFileSync(join(wd, "settings.json"), "utf8")
+  return { ...run, before, after, saved: JSON.parse(after) }
+}
+
+/** Exit 2 with exactly `message` on stderr, and settings.json left as `resolve` wrote it. */
+const assertStops = (run, message) => {
+  assert.equal(run.status, 2, run.stderr)
+  assert.equal(run.stderr, `${message}\n`)
+  assert.equal(run.after, run.before)
+}
+
+test("L1: a committed profile applies its values with source profile", () => {
+  const run = applyProfile(profileRepo())
+  assert.equal(run.status, 0, run.stderr)
+  assert.deepEqual(run.saved.settings.depth, { value: "deep", source: "profile" })
+  assert.deepEqual(run.saved.profile, { name: "release", file: PROFILE_FILE })
+  assert.match(run.saved.lines.settings, /^Settings: depth=deep \(profile release\) \| /)
+  assert.deepEqual(JSON.parse(run.stdout), run.saved)
+})
+
+test("L2: flags beat the profile, the profile beats the default", () => {
+  const run = applyProfile(profileRepo(), { args: "deep sceptic=basic profile=release" })
+  assert.equal(run.status, 0, run.stderr)
+  assert.deepEqual(run.saved.settings.sceptic, { value: "basic", source: "flag" })
+  assert.deepEqual(run.saved.settings.extra, { value: "pi", source: "profile" })
+  assert.deepEqual(run.saved.settings.depth, { value: "deep", source: "flag" })
+})
+
+test("L3: a profile modified in the worktree and in the uncommitted diff stops", () => {
+  const ws = profileRepo()
+  put(ws.repo, PROFILE_FILE, "---\nsceptic: off\n---\n")
+  const diff = git(ws.repo, "diff", "HEAD")
+  assertStops(applyProfile(ws, { diff, extra: ["--repo", ws.repo, "--mode", "uncommitted"] }), CHANGED)
+})
+
+test("L4: PR mode, a locally modified profile the PR diff does not touch still stops", () => {
+  const ws = profileRepo()
+  put(ws.repo, PROFILE_FILE, "---\nsceptic: off\n---\n")
+  const diff = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+  assertStops(applyProfile(ws, { diff }), CHANGED)
+})
+
+test("L5: a diff that renames the profile away (oldPath) stops", () => {
+  const ws = profileRepo()
+  const diff = `diff --git a/${PROFILE_FILE} b/.consensus-review/profiles/old.md\nsimilarity index 100%\nrename from ${PROFILE_FILE}\nrename to .consensus-review/profiles/old.md\n`
+  assertStops(applyProfile(ws, { diff }), CHANGED)
+})
+
+test("L6: an untracked profile stops", () => {
+  const ws = profileRepo({})
+  put(ws.repo, PROFILE_FILE, RELEASE)
+  assertStops(applyProfile(ws), NOT_TRACKED)
+})
+
+test("L7: a diff adding a .gitignore rule plus an ignored untracked profile stops", () => {
+  const ws = profileRepo({})
+  put(ws.repo, ".gitignore", ".consensus-review/profiles/\n")
+  put(ws.repo, PROFILE_FILE, RELEASE)
+  const diff = "diff --git a/.gitignore b/.gitignore\nnew file mode 100644\n--- /dev/null\n+++ b/.gitignore\n@@ -0,0 +1 @@\n+.consensus-review/profiles/\n"
+  assertStops(applyProfile(ws, { diff, extra: ["--repo", ws.repo, "--mode", "uncommitted"] }), NOT_TRACKED)
+})
+
+test("L8: an ignored untracked profile with no diff stops (the accepted cost)", () => {
+  const ws = profileRepo({ ".gitignore": ".consensus-review/profiles/\n" })
+  put(ws.repo, PROFILE_FILE, RELEASE)
+  assertStops(applyProfile(ws), NOT_TRACKED)
+})
+
+test("L9: a profile that is a symlink to a committed file stops", () => {
+  const ws = profileRepo({ "real.md": RELEASE, ".consensus-review/profiles/other.md": RELEASE })
+  symlinkSync("../../real.md", join(ws.repo, PROFILE_FILE))
+  git(ws.repo, "add", "-A")
+  git(ws.repo, "commit", "-q", "-m", "link")
+  assertStops(applyProfile(ws), `profile release: symlink (${PROFILE_FILE})`)
+})
+
+test("L10: a symlinked .consensus-review directory stops", () => {
+  const ws = profileRepo({ "elsewhere/profiles/release.md": RELEASE })
+  symlinkSync("elsewhere", join(ws.repo, ".consensus-review"))
+  git(ws.repo, "add", "-A")
+  git(ws.repo, "commit", "-q", "-m", "link")
+  assertStops(applyProfile(ws), "profile release: symlink (.consensus-review)")
+})
+
+test("L11: a FIFO profile stops without hanging", () => {
+  const ws = profileRepo({ ".consensus-review/profiles/ci.md": "---\ndepth: minimal\n---\n" })
+  execFileSync("mkfifo", [join(ws.repo, PROFILE_FILE)])
+  const run = applyProfile(ws)
+  assert.equal(run.error, undefined, "the child must exit before its timeout")
+  assertStops(run, `profile release: not a regular file (${PROFILE_FILE})`)
+})
+
+test("L12: a committed profile over 4096 bytes stops", () => {
+  const ws = profileRepo({ [PROFILE_FILE]: `---\ndepth: deep\n---\n${"x".repeat(4097 - 20)}` })
+  assert.equal(readFileSync(join(ws.repo, PROFILE_FILE)).length, 4097)
+  assertStops(applyProfile(ws), "profile release: too large (over 4096 bytes)")
+})
+
+test("L13: only Release.md committed: profile=release finds nothing", () => {
+  const ws = profileRepo({ ".consensus-review/profiles/Release.md": RELEASE })
+  assertStops(applyProfile(ws), "profile=release: no such profile (available: none)")
+})
+
+/** Whether `dir`'s filesystem folds case: write `x`, look for `X`. */
+const foldsCase = (dir) => {
+  writeFileSync(join(dir, "case-probe-x"), "")
+  return existsSync(join(dir, "case-probe-X"))
+}
+
+test("L14: a diff adding a case alias of the profile", () => {
+  const ws = profileRepo()
+  const alias = ".consensus-review/profiles/Release.md"
+  put(ws.repo, alias, "---\nsceptic: off\n---\n")
+  const diff = `diff --git a/${alias} b/${alias}\nnew file mode 100644\n--- /dev/null\n+++ b/${alias}\n@@ -0,0 +1,3 @@\n+---\n+sceptic: off\n+---\n`
+  const run = applyProfile(ws, { diff, extra: ["--repo", ws.repo, "--mode", "uncommitted"] })
+  if (foldsCase(ws.wd)) {
+    assertStops(run, CHANGED)
+  } else {
+    assert.equal(run.status, 0, run.stderr)
+    assert.equal(run.saved.profile.file, PROFILE_FILE)
+    assert.deepEqual(run.saved.settings.sceptic, { value: "strict", source: "default" })
+  }
+})
+
+test("L15: an unknown name lists the valid available profiles", () => {
+  const ws = profileRepo({
+    ".consensus-review/profiles/ci.md": RELEASE,
+    ".consensus-review/profiles/quick.md": RELEASE,
+    ".consensus-review/profiles/Bad.md": RELEASE,
+  })
+  assertStops(applyProfile(ws, { args: "profile=nope" }), "profile=nope: no such profile (available: ci, quick)")
+})
+
+test("L16: no profiles directory", () => {
+  assertStops(applyProfile(profileRepo({}), { args: "profile=nope" }), "profile=nope: no such profile (available: none)")
+})
+
+test("L17: no --repo is the diff-only stop", () => {
+  assertStops(applyProfile(profileRepo(), { extra: [] }), "profile=release: needs the repository (diff-only mode)")
+})
+
+test("L18: a bad value in a committed profile names the profile", () => {
+  const ws = profileRepo({ [PROFILE_FILE]: "---\nsceptic: strct\n---\n" })
+  assertStops(applyProfile(ws), "profile release: sceptic=strct: expected off|basic|strict")
+})
+
+test("L19: an unborn HEAD fails closed as a git error, never as changed", () => {
+  const ws = profileRepo({ [PROFILE_FILE]: RELEASE }, { commit: false })
+  git(ws.repo, "add", "-A")
+  assertStops(applyProfile(ws), "profile release: git check failed (git diff exit 128)")
+})
+
+test("CLI: profile with no profile= in args.txt exits 2", () => {
+  const ws = profileRepo()
+  writeFileSync(join(ws.wd, "args.txt"), "deep")
+  writeFileSync(join(ws.wd, "diff.patch"), "")
+  const run = spawnSync(process.execPath, [SCRIPT, "profile", "--wd", ws.wd, "--repo", ws.repo], { encoding: "utf8" })
+  assert.equal(run.status, 2)
+  assert.equal(run.stderr, "no profile=<name> in args.txt\n")
+  assert.equal(existsSync(join(ws.wd, "settings.json")), false)
 })

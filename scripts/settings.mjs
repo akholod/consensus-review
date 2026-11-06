@@ -3,18 +3,27 @@
 // settings.json instead of interpreting flags in prose.
 //
 //   resolve --wd <WD> --args-file <file>
+//   profile --wd <WD> [--repo <REPO>] [--mode uncommitted]
 //
-// Splits the file on whitespace, writes <WD>/settings.json atomically and prints it, exit 0. A
-// known key with a bad value prints the message to stderr and exits 2 with nothing written; a
-// usage error exits 2 too. Precedence is flag > profile > default.
+// `resolve` splits the file on whitespace, writes <WD>/settings.json atomically and prints it, exit
+// 0. A `profile=<name>` token leaves the profile pending: `profile`, run once the diff exists,
+// re-resolves <WD>/args.txt with the repository profile .consensus-review/profiles/<name>.md and
+// rewrites settings.json. Only a profile tracked and unchanged at HEAD, and outside the diff, is
+// applied. Any error prints the message to stderr and exits 2 with settings.json untouched.
+// Precedence is flag > profile > default.
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
+import { LENS_NAME, checkSourcePath, parseDiff } from "../src/loop-review/context.mjs"
 import { PI_MODEL_ID } from "./lib/lanes.mjs"
 
-const USAGE = "usage: settings.mjs resolve --wd <WD> --args-file <file>"
+const USAGE = [
+  "usage: settings.mjs resolve --wd <WD> --args-file <file>",
+  "       settings.mjs profile --wd <WD> [--repo <REPO>] [--mode uncommitted]",
+].join("\n")
 const DIMS = ["architecture", "quality", "impact", "tests"]
 const TIMEOUT_MIN = 30
 const TIMEOUT_MAX = 1800
@@ -103,9 +112,10 @@ const renderValue = (key, value) => {
   return [...value.add.map((d) => `+${d}`), ...value.remove.map((d) => `-${d}`)].join(",")
 }
 
-const renderLines = (settings, ignored, clamped) => {
+const renderLines = (settings, ignored, clamped, profileName) => {
   const parts = Object.entries(settings).map(([key, { value, source }]) => {
-    const note = clamped.has(key) ? `${source}, clamped` : source
+    const origin = source === "profile" ? `profile ${profileName}` : source
+    const note = clamped.has(key) ? `${origin}, clamped` : origin
     return `${key}=${renderValue(key, value)} (${note})`
   })
   const skipped = ignored.map(({ token, reason }) => `${token} (${reason})`)
@@ -115,9 +125,26 @@ const renderLines = (settings, ignored, clamped) => {
   }
 }
 
+/** A profile's raw values as parsed settings, or `{ error }` without the `profile <name>: ` prefix. */
+const parseProfileValues = (values) => {
+  const parsed = []
+  for (const [rawKey, raw] of Object.entries(values)) {
+    const key = rawKey.toLowerCase()
+    if (key === "target" || key === "profile") return { error: `${key} is not a profile key` }
+    if (!SETTINGS[key]) return { error: `unknown key ${rawKey}` }
+    const result = parseValue(key, raw)
+    if (result.error) return { error: result.error }
+    parsed.push({ key, value: result.value, clamped: Boolean(result.clamped) })
+  }
+  return { parsed }
+}
+
+const nameError = (raw) => `profile=${raw}: expected a profile name ([a-z0-9][a-z0-9_-], up to 64)`
+
 /**
- * Tokens are the whitespace-split arguments; `profile` is `{ name, values: { key: raw } }` or
- * null. Returns the resolved object or `{ error }`. The last token for a key wins.
+ * Tokens are the whitespace-split arguments; `profile` is the loaded layer `{ name, file, values:
+ * { key: raw } }` or null. Returns the resolved object or `{ error }`. The last token for a key
+ * wins. A `profile=<name>` token without a layer returns the profile as pending.
  */
 export function resolveSettings(tokens, { profile = null } = {}) {
   const settings = {}
@@ -125,19 +152,17 @@ export function resolveSettings(tokens, { profile = null } = {}) {
   const clamped = new Set()
 
   if (profile) {
-    for (const [rawKey, raw] of Object.entries(profile.values)) {
-      const key = rawKey.toLowerCase()
-      if (key === "target" || key === "profile") return { error: `profile ${profile.name}: ${key} is not a profile key` }
-      if (!SETTINGS[key]) return { error: `profile ${profile.name}: unknown key ${rawKey}` }
-      const result = parseValue(key, raw)
-      if (result.error) return { error: `profile ${profile.name}: ${result.error}` }
-      settings[key] = { value: result.value, source: "profile" }
-      if (result.clamped) clamped.add(key)
+    const layer = parseProfileValues(profile.values)
+    if (layer.error) return { error: `profile ${profile.name}: ${layer.error}` }
+    for (const { key, value, clamped: isClamped } of layer.parsed) {
+      settings[key] = { value, source: "profile" }
+      if (isClamped) clamped.add(key)
     }
   }
 
   let target = { kind: "uncommitted", ref: null }
   let targetToken = null
+  let profileName = null
   const tokenOf = {}
   const ignored = []
   for (const token of tokens) {
@@ -158,6 +183,13 @@ export function resolveSettings(tokens, { profile = null } = {}) {
     } else if (SHORTHANDS[word.toLowerCase()]) {
       [key, raw] = SHORTHANDS[word.toLowerCase()]
     }
+    if (key === "profile") {
+      if (!LENS_NAME.test(raw)) return { error: nameError(raw) }
+      if (tokenOf.profile) ignored.push({ token: tokenOf.profile, reason: `overridden by ${token}` })
+      tokenOf.profile = token
+      profileName = raw
+      continue
+    }
     if (!SETTINGS[key]) {
       ignored.push({ token, reason: "unknown" })
       continue
@@ -177,7 +209,167 @@ export function resolveSettings(tokens, { profile = null } = {}) {
     settings["pi-model"] = { value: SETTINGS["pi-model"].default, source: "default" }
   }
 
-  return { schema: 1, target, settings, ignored, lines: renderLines(settings, ignored, clamped) }
+  const lines = renderLines(settings, ignored, clamped, profile?.name)
+  if (profile) return { schema: 1, target, settings, ignored, profile: { name: profile.name, file: profile.file ?? null }, lines }
+  if (!profileName) return { schema: 1, target, settings, ignored, profile: null, lines }
+  lines.settings = `Settings: profile ${profileName} NOT APPLIED (pending)`
+  return { schema: 1, target, settings, ignored, profile: { name: profileName, pending: true }, lines }
+}
+
+const PROFILE_PARENT = ".consensus-review"
+const PROFILE_DIR = ".consensus-review/profiles"
+const MAX_PROFILE_BYTES = 4096
+const MAX_FRONT_MATTER_LINES = 50
+
+/** `---` front matter of `key: value` lines, blank lines and `#` comments; the body is ignored. */
+export function parseProfileFile(text) {
+  const lines = String(text).replace(/\r\n?/g, "\n").split("\n")
+  const close = lines.indexOf("---", 1)
+  if (lines[0] !== "---" || close < 0 || close >= MAX_FRONT_MATTER_LINES) return { error: "no front matter" }
+  const values = {}
+  const seen = new Set()
+  for (let i = 1; i < close; i++) {
+    const line = lines[i]
+    if (!line.trim() || /^\s*#/.test(line)) continue
+    const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/)
+    if (!kv) return { error: `malformed line ${i + 1}` }
+    const key = kv[1]
+    const value = kv[2].trim()
+    if (seen.has(key.toLowerCase())) return { error: `duplicate key ${key}` }
+    if (!value) return { error: `empty value for ${key}` }
+    seen.add(key.toLowerCase())
+    values[key] = value
+  }
+  return { values }
+}
+
+/** Fails closed: a spawn failure or an unexpected exit is an error, never "modified" or "untracked". */
+const gitState = (repo, file) => {
+  const run = (args) => spawnSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  const failure = (name, result) =>
+    `git check failed (${result.error ? result.error.code ?? result.error.message : `git ${name} exit ${result.status ?? result.signal}`})`
+  const diff = run(["diff", "--quiet", "--no-ext-diff", "HEAD", "--", file])
+  if (diff.error || (diff.status !== 0 && diff.status !== 1)) return { error: failure("diff", diff) }
+  if (diff.status === 1) return { status: "modified" }
+  const listed = run(["ls-files", "-z", "--", file])
+  if (listed.error || listed.status !== 0) return { error: failure("ls-files", listed) }
+  return { status: listed.stdout ? "ok" : "not committed" }
+}
+
+const readProfile = (repo, file) => {
+  let raw
+  try {
+    if (statSync(join(repo, file)).size > MAX_PROFILE_BYTES) return { error: `too large (over ${MAX_PROFILE_BYTES} bytes)` }
+    raw = readFileSync(join(repo, file))
+  } catch (error) {
+    return { error: String(error.code ?? error.message) }
+  }
+  if (raw.length > MAX_PROFILE_BYTES) return { error: `too large (over ${MAX_PROFILE_BYTES} bytes)` }
+  return parseProfileFile(raw.toString("utf8"))
+}
+
+/** D15 on both directories, then one readdir: `{ entries }` (sorted `*.md`), `{ absent }` or `{ error }`. */
+const readProfileDir = (repo) => {
+  for (const dir of [PROFILE_PARENT, PROFILE_DIR]) {
+    const problem = checkSourcePath(repo, dir, "dir")
+    if (problem === "absent") return { absent: true }
+    if (problem) return { error: `${problem} (${dir})` }
+  }
+  try {
+    return { entries: readdirSync(join(repo, PROFILE_DIR)).filter((entry) => entry.endsWith(".md")).sort() }
+  } catch (error) {
+    return { error: `${String(error.code ?? error.message)} (${PROFILE_DIR})` }
+  }
+}
+
+const profileNames = (entries) => entries.map((entry) => entry.slice(0, -3)).filter((name) => LENS_NAME.test(name))
+
+/**
+ * The profile a run names, or `{ error }` with the literal stop message. `changed` is the diff's
+ * path/oldPath set. Applied only when tracked, unchanged against HEAD and outside the diff.
+ */
+export function loadProfile({ repo, name, changed = [] }) {
+  if (!LENS_NAME.test(name)) return { error: nameError(name) }
+  const fail = (reason) => ({ error: `profile ${name}: ${reason}` })
+  const notFound = (names) => ({ error: `profile=${name}: no such profile (available: ${names.length ? names.join(", ") : "none"})` })
+  const dir = readProfileDir(repo)
+  if (dir.absent) return notFound([])
+  if (dir.error) return fail(dir.error)
+  // The exact readdir entry, so a case-insensitive filesystem never answers for another spelling.
+  if (!dir.entries.includes(`${name}.md`)) return notFound(profileNames(dir.entries))
+  const file = `${PROFILE_DIR}/${name}.md`
+  const problem = checkSourcePath(repo, file)
+  if (problem) return fail(`${problem} (${file})`)
+  const changedMessage = fail(`changed in this diff (${file}); commit it first or pass its settings as flags`)
+  if (changed.includes(file)) return changedMessage
+  const git = gitState(repo, file)
+  if (git.error) return fail(git.error)
+  if (git.status === "modified") return changedMessage
+  if (git.status === "not committed") return fail(`not tracked (${file}); commit it first or pass its settings as flags`)
+  const parsed = readProfile(repo, file)
+  if (parsed.error) return fail(parsed.error)
+  return { name, file, values: parsed.values }
+}
+
+/**
+ * Every `*.md` in the profiles directory, for doctor and the profile listing:
+ * `{ name, file, values, status, error }`. `status` is `ok`, `not committed` or `modified` (there is
+ * no diff here); `error` (D15, git, size, format or a value, unprefixed) is null when it loads.
+ * A directory problem is one entry with `name: null`.
+ */
+export function listProfiles(repo) {
+  const dir = readProfileDir(repo)
+  if (dir.absent) return []
+  if (dir.error) return [{ name: null, file: PROFILE_DIR, values: null, status: null, error: dir.error }]
+  return dir.entries.map((entry) => {
+    const name = entry.slice(0, -3)
+    const file = `${PROFILE_DIR}/${entry}`
+    const result = (status, error, values = null) => ({ name, file, values, status, error })
+    if (!LENS_NAME.test(name)) return result(null, "invalid name")
+    const problem = checkSourcePath(repo, file)
+    if (problem) return result(null, `${problem} (${file})`)
+    const git = gitState(repo, file)
+    if (git.error) return result(null, git.error)
+    const parsed = readProfile(repo, file)
+    if (parsed.error) return result(git.status, parsed.error)
+    const checked = parseProfileValues(parsed.values)
+    return result(git.status, checked.error ?? null, parsed.values)
+  })
+}
+
+const writeSettings = (wd, resolved) => {
+  const text = `${JSON.stringify(resolved, null, 2)}\n`
+  const path = join(wd, "settings.json")
+  writeFileSync(`${path}.tmp`, text)
+  renameSync(`${path}.tmp`, path)
+  return text
+}
+
+const readTokens = (file) => readFileSync(file, "utf8").split(/\s+/).filter(Boolean)
+
+const fail = (message) => {
+  process.stderr.write(`${message}\n`)
+  return 2
+}
+
+const applyProfile = ({ wd, repo, mode }) => {
+  const argsFile = join(wd, "args.txt")
+  const diffFile = join(wd, "diff.patch")
+  if ((mode && mode !== "uncommitted") || !existsSync(argsFile)) return fail(USAGE)
+  const tokens = readTokens(argsFile)
+  const pending = resolveSettings(tokens)
+  if (pending.error) return fail(pending.error)
+  if (!pending.profile) return fail("no profile=<name> in args.txt")
+  const { name } = pending.profile
+  if (!repo) return fail(`profile=${name}: needs the repository (diff-only mode)`)
+  if (!existsSync(diffFile)) return fail(USAGE)
+  const changed = parseDiff(readFileSync(diffFile, "utf8")).flatMap((s) => [s.path, s.oldPath]).filter(Boolean)
+  const profile = loadProfile({ repo, name, changed })
+  if (profile.error) return fail(profile.error)
+  const resolved = resolveSettings(tokens, { profile })
+  if (resolved.error) return fail(resolved.error)
+  process.stdout.write(writeSettings(wd, resolved))
+  return 0
 }
 
 export function main(argv) {
@@ -185,29 +377,23 @@ export function main(argv) {
   let positionals
   try {
     ({ values, positionals } = parseArgs({
-      args: argv, options: { wd: { type: "string" }, "args-file": { type: "string" } }, allowPositionals: true,
+      args: argv,
+      options: {
+        wd: { type: "string" }, "args-file": { type: "string" }, repo: { type: "string" }, mode: { type: "string" },
+      },
+      allowPositionals: true,
     }))
   } catch (error) {
     process.stderr.write(`${USAGE}\n${error.message}\n`)
     return 2
   }
+  if (positionals.length !== 1 || !values.wd || !existsSync(values.wd)) return fail(USAGE)
+  if (positionals[0] === "profile") return applyProfile({ wd: values.wd, repo: values.repo ?? null, mode: values.mode ?? null })
   const file = values["args-file"]
-  const usable = positionals[0] === "resolve" && positionals.length === 1 && values.wd && file
-  if (!usable || !existsSync(values.wd) || !existsSync(file)) {
-    process.stderr.write(`${USAGE}\n`)
-    return 2
-  }
-  const tokens = readFileSync(file, "utf8").split(/\s+/).filter(Boolean)
-  const resolved = resolveSettings(tokens)
-  if (resolved.error) {
-    process.stderr.write(`${resolved.error}\n`)
-    return 2
-  }
-  const text = `${JSON.stringify(resolved, null, 2)}\n`
-  const path = join(values.wd, "settings.json")
-  writeFileSync(`${path}.tmp`, text)
-  renameSync(`${path}.tmp`, path)
-  process.stdout.write(text)
+  if (positionals[0] !== "resolve" || !file || !existsSync(file)) return fail(USAGE)
+  const resolved = resolveSettings(readTokens(file))
+  if (resolved.error) return fail(resolved.error)
+  process.stdout.write(writeSettings(values.wd, resolved))
   return 0
 }
 

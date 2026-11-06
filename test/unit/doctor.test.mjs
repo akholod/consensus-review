@@ -364,3 +364,43 @@ test("T9.7 only lens warnings: the command still exits 0", () => {
     assert.equal(JSON.parse(out).ok, true)
   })
 })
+
+// ── profiles (plan issue-7-profiles, Doctor) ─────────────────────────────────────────────────
+const profileRows = (report) => report.results.filter((r) => r.section === "profiles")
+
+function addProfile(dir, name, text) {
+  mkdirSync(join(dir, ".consensus-review/profiles"), { recursive: true })
+  writeFileSync(join(dir, ".consensus-review/profiles", `${name}.md`), text)
+  execFileSync("git", ["add", "-A"], { cwd: dir })
+  execFileSync("git", ["commit", "-q", "-m", name], { cwd: dir })
+}
+
+test("profiles: a committed profile is ok with its keys in SETTINGS order", () => {
+  withRepo((dir) => {
+    addProfile(dir, "ci", "---\ndepth: minimal\nsceptic: basic\ndims: impact,tests\nout: none\n---\n")
+    assert.deepEqual(profileRows(doctor(dir)).map((r) => [r.status, r.label, r.detail]),
+      [["ok", "profile ci", "4 keys: depth, dims, sceptic, out"]])
+  })
+})
+
+test("profiles: a bad value warns that it stops any run naming it", () => {
+  withRepo((dir) => {
+    addProfile(dir, "bad", "---\nsceptic: strct\n---\n")
+    assert.deepEqual(profileRows(doctor(dir)).map((r) => [r.status, r.detail, r.consequence]),
+      [["warn", "profile bad: sceptic=strct: expected off|basic|strict", "this profile stops any run that names it"]])
+  })
+})
+
+test("profiles: an uncommitted profile warns", () => {
+  withRepo((dir) => {
+    mkdirSync(join(dir, ".consensus-review/profiles"), { recursive: true })
+    writeFileSync(join(dir, ".consensus-review/profiles/ci.md"), "---\ndepth: minimal\n---\n")
+    assert.deepEqual(profileRows(doctor(dir)).map((r) => [r.status, r.detail]), [["warn", "profile ci: not committed"]])
+  })
+})
+
+test("profiles: no profiles directory is skip, none found", () => {
+  withRepo((dir) => {
+    assert.deepEqual(profileRows(doctor(dir)).map((r) => [r.status, r.detail]), [["skip", "none found"]])
+  })
+})

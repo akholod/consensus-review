@@ -4,7 +4,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { spawn, spawnSync } from "node:child_process"
+import { execFileSync, spawn, spawnSync } from "node:child_process"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -620,6 +620,67 @@ test("select --wd writes consultants.json as printed; an unknown consultant is a
     ws.cleanup()
   }
 })
+
+// ── §2 gate: settings.json (plan issue-7-profiles, tests G1–G4; G3 is the case above) ──────────
+const SETTINGS_SCRIPT = join(ROOT, "scripts/settings.mjs")
+const settingsCli = (...args) => spawnSync(process.execPath, [SETTINGS_SCRIPT, ...args], { encoding: "utf8" })
+
+/** ws.repo as a git repo with a committed release profile; $WD gets args.txt and an empty diff. */
+function profiledWorkspace() {
+  const ws = workspace()
+  const git = (...args) => execFileSync("git", args, { cwd: ws.repo })
+  git("init", "-q")
+  git("config", "user.email", "t@example.com")
+  git("config", "user.name", "t")
+  mkdirSync(join(ws.repo, ".consensus-review/profiles"), { recursive: true })
+  writeFileSync(join(ws.repo, ".consensus-review/profiles/release.md"), "---\nsceptic: basic\n---\n")
+  git("add", "-A")
+  git("commit", "-q", "-m", "init")
+  writeFileSync(join(ws.dir, "args.txt"), "profile=release")
+  writeFileSync(join(ws.dir, "diff.patch"), "")
+  assert.equal(settingsCli("resolve", "--wd", ws.dir, "--args-file", join(ws.dir, "args.txt")).status, 0)
+  return ws
+}
+
+test("G1: select refuses a pending profile and writes no consultants.json", () => {
+  const ws = profiledWorkspace()
+  try {
+    const r = select(ws, ["--wd", ws.dir])
+    assert.equal(r.code, 2)
+    assert.equal(r.stderr, "profile release was not applied (run settings.mjs profile first)\n")
+    assert.equal(existsSync(join(ws.dir, "consultants.json")), false)
+  } finally {
+    ws.cleanup()
+  }
+})
+
+test("G2: after settings.mjs profile, select runs and writes consultants.json", () => {
+  const ws = profiledWorkspace()
+  try {
+    const applied = settingsCli("profile", "--wd", ws.dir, "--repo", ws.repo)
+    assert.equal(applied.status, 0, applied.stderr)
+    const r = select(ws, ["--wd", ws.dir])
+    assert.equal(r.code, 0, r.stderr)
+    assert.deepEqual(JSON.parse(readFileSync(join(ws.dir, "consultants.json"), "utf8")), r.out)
+  } finally {
+    ws.cleanup()
+  }
+})
+
+for (const text of ["{not json", "[]", "null"]) {
+  test(`G4: a settings.json of ${text} fails closed`, () => {
+    const ws = workspace()
+    try {
+      writeFileSync(join(ws.dir, "settings.json"), text)
+      const r = select(ws, ["--wd", ws.dir])
+      assert.equal(r.code, 2)
+      assert.equal(r.stderr, "settings.json unreadable\n")
+      assert.equal(existsSync(join(ws.dir, "consultants.json")), false)
+    } finally {
+      ws.cleanup()
+    }
+  })
+}
 
 /** Runs every lane of consultants.json as §5 does, then decides the review. */
 async function runSelected(ws, fake) {

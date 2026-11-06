@@ -6,7 +6,7 @@ every serious finding. Back to the [README](../README.md).
 
 ```text
 /consensus-review [<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict]
-                  [lang=<language>] [no-file] [<key>=<value>…]
+                  [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]
 ```
 
 `<PR>` is a PR URL (it may end in `/files`, `?diff=split` or `#…`), `owner/repo#N` or
@@ -21,7 +21,7 @@ looks like a target but is not one (any other URL, a `/pull/` path, or
 The arguments are `key=value` pairs, plus a target and three shorthands.
 A resolver script (`scripts/settings.mjs`) parses them before the review
 starts and prints them in the report as one `Settings:` line, each value
-with its source (`flag` or `default`).
+with its source (`flag`, `profile <name>` or `default`).
 
 **Rules**
 
@@ -49,6 +49,7 @@ with its source (`flag` or `default`).
 | `sceptic=off`             | no sceptic pass                                                                                                                              |
 | `lang=<language>`         | report language, default `en`: a code or a name (`uk`, `pt-BR`, `Українська`); code, paths and terms stay as they are                        |
 | `no-file`                 | terminal only; the run writes nothing to disk, the archive included                                                                          |
+| `profile=<name>`          | apply the repository profile `.consensus-review/profiles/<name>.md` (see [Profiles](#profiles)); flags still win. A profile the run cannot apply stops it |
 
 ### Advanced
 
@@ -387,9 +388,80 @@ path, a glob) runs without lenses.
 `/consensus-review:doctor` lists the lenses it finds and warns about
 rejected files, ignored keys and globs that match no tracked file.
 
-Not supported yet: profiles, lenses in `~/.config`, built-in lenses, an
+Not supported yet: lenses in `~/.config`, built-in lenses, an
 `init-lenses` command, a severity hint. `/loop-review` does not read lens
 files.
+
+## Profiles
+
+A profile is a named set of settings kept in the repository, one
+Markdown file each, chosen with `profile=<name>`:
+
+```text
+.consensus-review/profiles/release.md
+```
+
+```markdown
+---
+# Pre-release review: full panel, a second consultant, longer lanes.
+depth: deep
+extra: pi
+timeout: 1200
+---
+Optional notes for humans; ignored by the plugin.
+```
+
+```markdown
+---
+depth: minimal
+sceptic: basic
+dims: impact,tests
+out: none
+---
+```
+
+**Format.** Line 1 is `---`; the closing `---` is within the first 50
+lines. Each line in between is `key: value` (no quotes), a blank line or
+a `#` comment; anything else stops the run (`malformed line <n>`), as do a
+duplicate key and an empty value. The keys are the settings above
+(`depth`, `dims`, `sceptic`, `lang`, `out`, `archive`, `consultant`,
+`extra`, `pi-model`, `timeout`), with the same values and messages;
+`target` and `profile` are not profile keys. The body after the closing
+`---` is ignored and never passed to a model. The name is the file stem,
+`[a-z0-9][a-z0-9_-]*` up to 64 characters, matched exactly; the file is
+at most 4096 bytes.
+
+**Precedence.** flag > profile > default. A flag replaces a profile's
+value whole (`dims=-quality` replaces the profile's `dims`). One profile
+per run; a second `profile=` wins and the first goes to `Ignored args`.
+There is no implicit default profile.
+
+**Visible.** Every value a profile sets shows `(profile <name>)` on the
+`Settings:` line, for example `sceptic=off (profile ci)`. A profile may
+weaken a review (fewer lanes, `sceptic=off`); it can change only what
+flags can change, and the severity bars stay.
+
+**Only a committed profile is applied.** The change under review must not
+configure its own review, so the profile is applied in code once the
+diff exists, and only when it is tracked by git, unchanged against
+`HEAD` and not in the diff (as a path or a rename source). Anything else
+stops the run with the file and the reason; it never falls back to the
+defaults:
+
+- a profile the diff touches, or one modified in the working tree: `changed in this diff`;
+- an untracked profile, an ignored one included: `not tracked`;
+- a symlink anywhere on the path, or a file that is not a regular file;
+- a malformed file, a bad value, an unknown name (the message lists the available profiles);
+- diff-only mode, which has no checkout to read a profile from;
+- a git error during the check: `git check failed`.
+
+To use an edited profile, commit it first, or pass its settings as flags.
+In PR mode the profile is read from your local checkout and must match
+its `HEAD`: a profile you edited locally stops the run, even when the PR
+does not touch it.
+
+`/consensus-review:doctor` lists the profiles with their keys and warns
+about one that would stop a run.
 
 ## Code graphs
 

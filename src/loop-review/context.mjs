@@ -539,7 +539,7 @@ export function parseLensFile(text) {
 }
 
 const LENS_DIR = ".consensus-review/lenses"
-const LENS_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/
+export const LENS_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const MAX_LENS_BYTES = 8192
 
 /** Repository lenses, `.consensus-review/lenses/*.md`, each checked before it is read. */

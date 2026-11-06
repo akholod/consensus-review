@@ -4,6 +4,19 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
 
 ## Unreleased
 
+- **Added — review profiles**
+  ([#7](https://github.com/akholod/consensus-review/issues/7), `Refs #7`).
+  `.consensus-review/profiles/<name>.md` holds `key: value` settings in
+  front matter; `profile=<name>` applies it, flags still win, and each
+  value it sets shows `(profile <name>)`. Only a profile tracked and
+  unchanged at `HEAD`, and outside the diff, is applied; anything else
+  (untracked, ignored, modified, a symlink, malformed, a git error) stops
+  the run. It is applied in code by `settings.mjs profile` after the diff
+  exists, and `run-lane.mjs select` refuses a pending profile and an
+  unreadable `settings.json`. The doctor lists the profiles.
+  **Changed:** a `Settings:` value from a profile reads `profile <name>`;
+  `settings.json` gains `profile` (`null` without one).
+
 - **Breaking: arguments simplified.** Arguments are `key=value` pairs
   resolved in code by `scripts/settings.mjs` (one `SETTINGS` table); the
   arbiter reads `settings.json` instead of interpreting flags. There is

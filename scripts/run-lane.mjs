@@ -186,8 +186,26 @@ async function runLane(lane, v, { onSpawned }) {
 /** Present = `<bin> --version` exits 0. Presence only: a broken login still counts as installed. */
 const installed = (bin) => spawnSync(bin, ["--version"], { stdio: "ignore", timeout: 10_000 }).status === 0
 
+/** §2 gate: a pending profile, or a settings.json that cannot be read, stops before any review work. */
+const settingsGate = (wd) => {
+  const path = join(wd, "settings.json")
+  if (!existsSync(path)) return null
+  let settings = null
+  try {
+    settings = JSON.parse(readFileSync(path, "utf8"))
+  } catch {}
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return "settings.json unreadable"
+  if (settings.profile?.pending) return `profile ${settings.profile.name} was not applied (run settings.mjs profile first)`
+  return null
+}
+
 function select(v) {
-  const has = { codex: installed("codex"), pi: installed("pi"), claude: installed("claude") }
+  const blocked = v.wd ? settingsGate(v.wd) : null
+  if (blocked) {
+    process.stderr.write(`${blocked}\n`)
+    return 2
+  }
+  const has ={ codex: installed("codex"), pi: installed("pi"), claude: installed("claude") }
   const forced = v.consultant && v.consultant !== "auto" ? v.consultant : null
   const pinned = v["pi-model"] && v["pi-model"] !== "auto"
   // The catalog is read only when pi may run and no model is pinned.

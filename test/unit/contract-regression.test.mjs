@@ -177,11 +177,24 @@ test("the command no longer mentions a retired argument", () => {
 test("SETTINGS, the argument-hint and the docs tables name the same keys", () => {
   assert.deepEqual(Object.keys(SETTINGS), ["depth", "dims", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout"])
   const hint = command().match(/^argument-hint: "(.*)"$/m)?.[1]
-  assert.equal(hint, "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [<key>=<value>…]")
+  assert.equal(hint, "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]")
   const docs = readFileSync(new URL("../../docs/consensus-review.md", import.meta.url), "utf8")
   const tables = docs.split(/^### Everyday$/m)[1].split(/^P2 findings/m)[0]
   const keys = new Set([...tables.matchAll(/^\| `([^`=]+)[=`]/gm)].map((m) => m[1]).filter((key) => key !== "Argument"))
-  assert.deepEqual([...keys].sort(), [...Object.keys(SETTINGS), "<PR>", "no-file"].sort())
+  assert.deepEqual([...keys].sort(), [...Object.keys(SETTINGS), "<PR>", "no-file", "profile"].sort())
+})
+
+test("§1.5 applies the profile in code and stops on exit 2; §0 re-reads settings.json after it", () => {
+  const md = command()
+  const s15 = section(md, "1.5")
+  assert.ok(s15.includes(`settings.mjs" profile --wd '<literal WD>' [--repo '<literal REPO>'] [--mode uncommitted]`), s15)
+  assert.match(s15, /\*\*stop\*\*/)
+  assert.match(s15, /Exit 0 → re-read `\$WD\/settings\.json`/)
+  const s0 = section(md, 0)
+  assert.match(s0, /re-read `settings\.json` after §1\.5/)
+  assert.doesNotMatch(s0, /its values from here on/)
+  assert.ok(md.indexOf("\n## 1. ") < md.indexOf("\n## 1.5. ") && md.indexOf("\n## 1.5. ") < md.indexOf("\n## 2. "), "§1.5 sits between §1 and §2")
+  assert.match(md.split("\n## Hard rules")[1], /its body is ignored and never passed to a model/)
 })
 
 test("§0 states the single-quote rule and the PR commands quote every pasted value", () => {

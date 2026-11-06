@@ -35,6 +35,7 @@ you see them.
 
 Project rules live in the repository as review lenses in
 `.consensus-review/lenses/`; see [Project lenses](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md#project-lenses).
+Named presets of settings live in `.consensus-review/profiles/` and apply with `profile=<name>`; see [Profiles](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md#profiles).
 
 It never changes your code. It writes only the report and its private run archive in the ignored
 `.reviews/`. `archive=off` drops the archive (`--no-archive` does the same for `/loop-review`); `no-file` writes nothing at all.

@@ -27,6 +27,7 @@ import { listPiModels, probeClaude, probeClaudeCli, probeCodex, toolVersion } fr
 import { selectConsultants } from "./lib/lanes.mjs"
 import { instructionMatches } from "../src/loop-review/context.mjs"
 import { loadRecords } from "./lenses.mjs"
+import { SETTINGS, listProfiles } from "./settings.mjs"
 
 const SELF = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -227,6 +228,26 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
     }
     for (const { file, reason } of rejected) {
       add("lenses", file, "warn", reason, "this lens is never applied")
+    }
+  }
+
+  // ── Profiles (offline: the same checks as `settings.mjs profile`, minus the diff) ───────────
+  {
+    const profiles = listProfiles(REPO)
+    if (!profiles.length) {
+      add("profiles", "review profiles", "skip", "none found", "a run that names `profile=<name>` stops: no such profile")
+    }
+    const stops = "this profile stops any run that names it"
+    for (const { name, file, values, status, error } of profiles) {
+      const label = name ? `profile ${name}` : file
+      if (error) {
+        add("profiles", label, "warn", name ? `profile ${name}: ${error}` : error, stops)
+      } else if (status !== "ok") {
+        add("profiles", label, "warn", `profile ${name}: ${status}`, `${stops} until it is committed`)
+      } else {
+        const keys = Object.keys(SETTINGS).filter((key) => Object.keys(values).some((k) => k.toLowerCase() === key))
+        add("profiles", label, "ok", `${keys.length} keys: ${keys.join(", ")}`)
+      }
     }
   }
 
