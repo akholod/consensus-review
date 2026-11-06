@@ -2,7 +2,9 @@
 
 Full notes for each release: [GitHub releases](https://github.com/akholod/consensus-review/releases).
 
-## Unreleased
+## 0.13.0
+
+Project lenses and profiles, simpler arguments, typed sceptic votes, a consultant cascade, run archives and retried consultants. Breaking: arguments changed; see below.
 
 - **Added — review profiles**
   ([#7](https://github.com/akholod/consensus-review/issues/7), `Refs #7`).
