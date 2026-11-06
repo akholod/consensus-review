@@ -463,6 +463,44 @@ does not touch it.
 `/consensus-review:doctor` lists the profiles with their keys and warns
 about one that would stop a run.
 
+### Writing profiles: `/consensus-review:profile`
+
+`/consensus-review:profile` is the only command that writes, and it
+writes only `.consensus-review/profiles/<name>.md`. It never commits.
+
+```text
+/consensus-review:profile quick depth=minimal dims=+quality sceptic=basic
+/consensus-review:profile release depth=deep extra=pi timeout=1200
+```
+
+The first creates `.consensus-review/profiles/quick.md`:
+
+```markdown
+---
+depth: minimal
+dims: +quality
+sceptic: basic
+---
+```
+
+and ends with the commit to run, limited to that one file:
+
+```text
+Not applied until committed: git add -- .consensus-review/profiles/quick.md && git commit -m 'Add review profile quick' -- .consensus-review/profiles/quick.md
+```
+
+(`Update review profile <name>` when the file already existed.)
+
+- Only `key=value` pairs, with the keys and values of `/consensus-review`; `deep`, `minimal` and `no-file` are refused (`deep: expected key=value`). `key=` removes the key.
+- Every value is checked as a flag would be and stored in its canonical form (`sceptic=BASIC` → `basic`, `timeout=5000` → `1800`). The keys are rewritten in settings order; comments in the front matter are dropped (the output says so); the body is kept byte for byte.
+- An existing file that does not parse is never overwritten: `profile <name>: <error>; fix or delete the file`. A symlink anywhere on the path stops it too.
+- The file is replaced atomically and keeps its mode; a new file is `0644`.
+- `/consensus-review:profile <name>` prints a profile; with no arguments it lists the built-in defaults on the first line, then each profile with its keys (an invalid one as `<name>: invalid (<error>)`). To delete a profile, use `git rm`.
+
+The defaults are shown in two places: the `Settings:` line of a report
+and the first line of the `/consensus-review:profile` listing. No default
+profile file is ever created.
+
 ## Code graphs
 
 Agents use a code graph when the repository has one

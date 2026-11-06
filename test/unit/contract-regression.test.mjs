@@ -323,3 +323,18 @@ test("no text still says a tie needs both voters", () => {
   }
   assert.match(docs, /a lone\s+refuter can neither confirm nor refute/)
 })
+
+test("commands/profile.md is the writer: frontmatter, the helper call, verbatim args, never commits", () => {
+  const md = readFileSync(new URL("../../commands/profile.md", import.meta.url), "utf8")
+  const fm = md.match(/^---\n([\s\S]*?)\n---\n/)
+  assert.ok(fm, "terminated frontmatter")
+  assert.match(fm[1], /^description: \S/m)
+  assert.match(fm[1], /^argument-hint: "\[<name> \[key=value…\]\]"$/m)
+  assert.ok(md.includes(`settings.mjs" profile-edit --repo '<literal REPO>' --args-file`))
+  assert.match(md, /verbatim/)
+  assert.match(md, /never commits/)
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8")
+  assert.match(readme, /^\| `\/consensus-review:profile` +\| create, update or list review profiles +\|$/m)
+  const manifest = readFileSync(new URL("../../.claude-plugin/plugin.json", import.meta.url), "utf8")
+  assert.doesNotMatch(manifest, /Strictly read-only/)
+})

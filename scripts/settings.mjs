@@ -4,16 +4,23 @@
 //
 //   resolve --wd <WD> --args-file <file>
 //   profile --wd <WD> [--repo <REPO>] [--mode uncommitted]
+//   profile-edit --repo <REPO> --args-file <file>
 //
 // `resolve` splits the file on whitespace, writes <WD>/settings.json atomically and prints it, exit
 // 0. A `profile=<name>` token leaves the profile pending: `profile`, run once the diff exists,
 // re-resolves <WD>/args.txt with the repository profile .consensus-review/profiles/<name>.md and
 // rewrites settings.json. Only a profile tracked and unchanged at HEAD, and outside the diff, is
 // applied. Any error prints the message to stderr and exits 2 with settings.json untouched.
-// Precedence is flag > profile > default.
+// Precedence is flag > profile > default. `profile-edit`, the writer behind /consensus-review:profile,
+// lists the profiles (no args), prints one (`<name>`) or writes one (`<name> key=value…`); it never
+// commits.
 
 import { spawnSync } from "node:child_process"
-import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
+import { randomBytes } from "node:crypto"
+import {
+  closeSync, existsSync, fchmodSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync,
+  writeFileSync,
+} from "node:fs"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
@@ -23,6 +30,7 @@ import { PI_MODEL_ID } from "./lib/lanes.mjs"
 const USAGE = [
   "usage: settings.mjs resolve --wd <WD> --args-file <file>",
   "       settings.mjs profile --wd <WD> [--repo <REPO>] [--mode uncommitted]",
+  "       settings.mjs profile-edit --repo <REPO> --args-file <file>",
 ].join("\n")
 const DIMS = ["architecture", "quality", "impact", "tests"]
 const TIMEOUT_MIN = 30
@@ -265,7 +273,7 @@ const readProfile = (repo, file) => {
     return { error: String(error.code ?? error.message) }
   }
   if (raw.length > MAX_PROFILE_BYTES) return { error: `too large (over ${MAX_PROFILE_BYTES} bytes)` }
-  return parseProfileFile(raw.toString("utf8"))
+  return { ...parseProfileFile(raw.toString("utf8")), raw }
 }
 
 /** D15 on both directories, then one readdir: `{ entries }` (sorted `*.md`), `{ absent }` or `{ error }`. */
@@ -372,6 +380,165 @@ const applyProfile = ({ wd, repo, mode }) => {
   return 0
 }
 
+/** `[key, rendered]` pairs of a parsed-values Map, in SETTINGS order. */
+const orderedPairs = (values) =>
+  Object.keys(SETTINGS).filter((key) => values.has(key)).map((key) => [key, renderValue(key, values.get(key))])
+
+/** The raw bytes after the closing `---` line (CRLF kept), and whether the front matter had comments. */
+const splitFrontMatter = (raw) => {
+  const text = raw.toString("latin1")
+  const lineRe = /([^\r\n]*)(\r\n|\r|\n|$)/y
+  let offset = 0
+  let index = 0
+  let hasComments = false
+  while (offset < text.length) {
+    lineRe.lastIndex = offset
+    const line = lineRe.exec(text)[1]
+    offset = lineRe.lastIndex
+    if (index > 0 && line === "---") return { body: raw.subarray(offset), hasComments }
+    if (index > 0 && /^\s*#/.test(line)) hasComments = true
+    index++
+  }
+  return { body: Buffer.alloc(0), hasComments }
+}
+
+const listProfileLines = (repo) => {
+  const defaults = Object.entries(SETTINGS).map(([key, { default: value }]) => `${key}=${value}`)
+  const lines = [`defaults (built-in): ${defaults.join(" | ")}`]
+  const entries = listProfiles(repo)
+  if (!entries.length) lines.push(`no profiles in ${PROFILE_DIR}/`)
+  for (const entry of entries) {
+    const label = entry.name ?? entry.file
+    if (entry.error) {
+      lines.push(`${label}: invalid (${entry.error})`)
+      continue
+    }
+    const values = new Map(parseProfileValues(entry.values).parsed.map(({ key, value }) => [key, value]))
+    const pairs = orderedPairs(values).map(([key, value]) => `${key}=${value}`)
+    lines.push(`${label}: ${pairs.length ? pairs.join(" ") : "(no keys)"}`)
+  }
+  process.stdout.write(`${lines.join("\n")}\n`)
+  return 0
+}
+
+/** `key=value` tokens as `{ key, value }` (null removes the key), or `{ error }`. */
+const parseUpdates = (tokens) => {
+  const updates = []
+  for (const token of tokens) {
+    const eq = token.indexOf("=")
+    if (eq <= 0) return { error: `${token}: expected key=value` }
+    const rawKey = token.slice(0, eq)
+    const raw = token.slice(eq + 1)
+    const key = rawKey.toLowerCase()
+    if (key === "target" || key === "profile") return { error: `${key} is not a profile key` }
+    if (!SETTINGS[key]) return { error: `unknown key ${rawKey}` }
+    if (!raw) {
+      updates.push({ key, value: null })
+      continue
+    }
+    const result = parseValue(key, raw)
+    if (result.error) return { error: result.error }
+    updates.push({ key, value: result.value })
+  }
+  return { updates }
+}
+
+/** Writes `content` to `target` through an exclusive temp file in the same directory, then renames it. */
+const replaceFile = (dir, name, target, content, mode) => {
+  const tmp = join(dir, `.${name}.md.${randomBytes(6).toString("hex")}.tmp`)
+  let fd = null
+  let created = false
+  try {
+    fd = openSync(tmp, "wx", 0o644)
+    created = true
+    writeFileSync(fd, content)
+    if (mode !== null) fchmodSync(fd, mode)
+    closeSync(fd)
+    fd = null
+    renameSync(tmp, target)
+    return null
+  } catch (error) {
+    if (fd !== null) closeSync(fd)
+    if (created) rmSync(tmp, { force: true })
+    return String(error.code ?? error.message)
+  }
+}
+
+/** /consensus-review:profile: list (no args), print (`<name>`) or write (`<name> key=value…`). Never commits. */
+const editProfile = ({ repo, argsFile }) => {
+  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  if (inside.error || inside.status !== 0) return fail(`not a git repository (${repo})`)
+  const tokens = readTokens(argsFile)
+  if (!tokens.length) return listProfileLines(repo)
+  const name = tokens[0]
+  if (!LENS_NAME.test(name)) return fail(nameError(name))
+  const parsedUpdates = parseUpdates(tokens.slice(1))
+  if (parsedUpdates.error) return fail(parsedUpdates.error)
+  const { updates } = parsedUpdates
+  const prefix = `profile ${name}: `
+  const file = `${PROFILE_DIR}/${name}.md`
+  const levels = [[PROFILE_PARENT, "dir"], [PROFILE_DIR, "dir"], [file, "file"]]
+  let missing = null
+  for (const [path, kind] of levels) {
+    const problem = checkSourcePath(repo, path, kind)
+    if (problem === "absent") {
+      missing = path
+      break
+    }
+    if (problem) return fail(`${prefix}${problem} (${path})`)
+  }
+  const exists = missing === null
+  const target = join(repo, file)
+
+  if (!updates.length) {
+    if (!exists) return fail(`${prefix}nothing to write (give key=value)`)
+    const shown = readProfile(repo, file)
+    if (!shown.raw) return fail(`${prefix}${shown.error}`)
+    process.stdout.write(shown.raw)
+    return 0
+  }
+
+  const values = new Map()
+  let body = Buffer.alloc(0)
+  let hasComments = false
+  let mode = null
+  if (exists) {
+    const current = readProfile(repo, file)
+    const checked = current.error ? current : parseProfileValues(current.values)
+    if (checked.error) return fail(`${prefix}${checked.error}; fix or delete the file`)
+    for (const { key, value } of checked.parsed) values.set(key, value)
+    const split = splitFrontMatter(current.raw)
+    body = split.body
+    hasComments = split.hasComments
+    mode = statSync(target).mode & 0o777
+  }
+  for (const { key, value } of updates) {
+    if (value === null) values.delete(key)
+    else values.set(key, value)
+  }
+  const front = orderedPairs(values).map(([key, value]) => `${key}: ${value}\n`).join("")
+  const content = Buffer.concat([Buffer.from(`---\n${front}---\n`), body])
+  if (content.length > MAX_PROFILE_BYTES) return fail(`${prefix}too large (over ${MAX_PROFILE_BYTES} bytes)`)
+
+  const dirs = [PROFILE_PARENT, PROFILE_DIR]
+  const first = dirs.indexOf(missing)
+  try {
+    if (first >= 0) for (const dir of dirs.slice(first)) mkdirSync(join(repo, dir))
+  } catch (error) {
+    return fail(`${prefix}cannot create the directory (${String(error.code ?? error.message)})`)
+  }
+  const writeError = replaceFile(join(repo, PROFILE_DIR), name, target, content, mode)
+  if (writeError) return fail(`${prefix}write failed (${writeError})`)
+
+  const verb = exists ? "Update" : "Add"
+  const text = content.toString("utf8")
+  const out = [`${exists ? "Updated" : "Created"} ${file}:`, text.endsWith("\n") ? text.slice(0, -1) : text]
+  if (hasComments) out.push("The comments in the front matter were dropped.")
+  out.push(`Not applied until committed: git add -- ${file} && git commit -m '${verb} review profile ${name}' -- ${file}`)
+  process.stdout.write(`${out.join("\n")}\n`)
+  return 0
+}
+
 export function main(argv) {
   let values
   let positionals
@@ -387,9 +554,14 @@ export function main(argv) {
     process.stderr.write(`${USAGE}\n${error.message}\n`)
     return 2
   }
-  if (positionals.length !== 1 || !values.wd || !existsSync(values.wd)) return fail(USAGE)
-  if (positionals[0] === "profile") return applyProfile({ wd: values.wd, repo: values.repo ?? null, mode: values.mode ?? null })
+  if (positionals.length !== 1) return fail(USAGE)
   const file = values["args-file"]
+  if (positionals[0] === "profile-edit") {
+    if (!values.repo || !existsSync(values.repo) || !file || !existsSync(file)) return fail(USAGE)
+    return editProfile({ repo: values.repo, argsFile: file })
+  }
+  if (!values.wd || !existsSync(values.wd)) return fail(USAGE)
+  if (positionals[0] === "profile") return applyProfile({ wd: values.wd, repo: values.repo ?? null, mode: values.mode ?? null })
   if (positionals[0] !== "resolve" || !file || !existsSync(file)) return fail(USAGE)
   const resolved = resolveSettings(readTokens(file))
   if (resolved.error) return fail(resolved.error)

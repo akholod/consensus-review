@@ -5,7 +5,10 @@
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SETTINGS, parseProfileFile, parseValue, resolveSettings } from "../../scripts/settings.mjs"
@@ -552,4 +555,199 @@ test("CLI: profile with no profile= in args.txt exits 2", () => {
   assert.equal(run.status, 2)
   assert.equal(run.stderr, "no profile=<name> in args.txt\n")
   assert.equal(existsSync(join(ws.wd, "settings.json")), false)
+})
+
+// ---------------------------------------------------------------------------------------------
+// settings.mjs profile-edit, the /consensus-review:profile writer (integration: temp repo, real fs
+// and git). Expected values come from step 5 and the W/P table of .omc/plans/issue-7-profiles.md.
+// ---------------------------------------------------------------------------------------------
+
+const PROFILE_DIR = ".consensus-review/profiles"
+const W1_TEXT = "---\ndepth: deep\nextra: pi\ntimeout: 1200\n---\n"
+const ADD_REMINDER = `Not applied until committed: git add -- ${PROFILE_FILE} && git commit -m 'Add review profile release' -- ${PROFILE_FILE}`
+const DEFAULTS_LISTING = "defaults (built-in): depth=auto | dims=tier | sceptic=strict | lang=en | out=default | archive=on | consultant=auto | extra=off | pi-model=auto | timeout=900"
+const CI_TEXT = "---\ndepth: minimal\nsceptic: basic\ndims: impact,tests\nout: none\n---\n"
+
+/** Runs profile-edit with `args` written to a file outside the repo; `umask` wraps it in `sh -c`. */
+function edit(repo, args, { timeout = 10_000, umask = null } = {}) {
+  const argsFile = join(repo, "..", "edit-args.txt")
+  writeFileSync(argsFile, args)
+  const argv = [SCRIPT, "profile-edit", "--repo", repo, "--args-file", argsFile]
+  if (umask) return spawnSync("sh", ["-c", `umask ${umask} && exec "$0" "$@"`, process.execPath, ...argv], { encoding: "utf8", timeout })
+  return spawnSync(process.execPath, argv, { encoding: "utf8", timeout })
+}
+
+const profileText = (repo) => readFileSync(join(repo, PROFILE_FILE), "utf8")
+
+const assertEditStops = (run, message) => {
+  assert.equal(run.status, 2, run.stderr)
+  assert.equal(run.stderr, `${message}\n`)
+}
+
+test("W1: a new profile is written in SETTINGS order with the Add reminder and no temp left", () => {
+  const { repo } = profileRepo({})
+  const run = edit(repo, "release depth=deep extra=pi timeout=1200")
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(profileText(repo), W1_TEXT)
+  assert.ok(run.stdout.includes(ADD_REMINDER), run.stdout)
+  assert.deepEqual(readdirSync(join(repo, PROFILE_DIR)), ["release.md"])
+})
+
+test("W1b: an update keeps the existing file mode and says Update", () => {
+  const { repo } = profileRepo({ [PROFILE_FILE]: W1_TEXT })
+  chmodSync(join(repo, PROFILE_FILE), 0o600)
+  const run = edit(repo, "release sceptic=basic")
+  assert.equal(run.status, 0, run.stderr)
+  assert.ok(run.stdout.includes(`git commit -m 'Update review profile release' -- ${PROFILE_FILE}`), run.stdout)
+  assert.equal(statSync(join(repo, PROFILE_FILE)).mode & 0o777, 0o600)
+})
+
+test("W1c: a new file is 0644 under umask 022", () => {
+  const { repo } = profileRepo({})
+  const run = edit(repo, "release depth=deep extra=pi timeout=1200", { umask: "022" })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(statSync(join(repo, PROFILE_FILE)).mode & 0o777, 0o644)
+  assert.ok(run.stdout.includes("'Add review profile release'"), run.stdout)
+})
+
+const WRITES = [
+  ["W2: keys go in SETTINGS order", {}, "quick sceptic=basic dims=+quality depth=minimal", ".consensus-review/profiles/quick.md", "---\ndepth: minimal\ndims: +quality\nsceptic: basic\n---\n"],
+  ["W3: the body is kept and the comment dropped", { [PROFILE_FILE]: "---\ndepth: deep\n# note\n---\nNotes.\n" }, "release sceptic=basic", PROFILE_FILE, "---\ndepth: deep\nsceptic: basic\n---\nNotes.\n"],
+  ["W3b: CRLF body bytes are unchanged", { [PROFILE_FILE]: "---\r\ndepth: deep\r\n---\r\nNotes.\r\nMore.\r\n" }, "release sceptic=basic", PROFILE_FILE, "---\ndepth: deep\nsceptic: basic\n---\nNotes.\r\nMore.\r\n"],
+  ["W4: key= removes the key", { [PROFILE_FILE]: W1_TEXT }, "release extra=", PROFILE_FILE, "---\ndepth: deep\ntimeout: 1200\n---\n"],
+  ["W5: values are stored canonical", {}, "release sceptic=BASIC timeout=5000", PROFILE_FILE, "---\nsceptic: basic\ntimeout: 1800\n---\n"],
+]
+for (const [title, files, args, path, expected] of WRITES) {
+  test(title, () => {
+    const { repo } = profileRepo(files)
+    const run = edit(repo, args)
+    assert.equal(run.status, 0, run.stderr)
+    assert.equal(readFileSync(join(repo, path), "utf8"), expected)
+  })
+}
+
+test("W3: the output says the front matter comments were dropped", () => {
+  const { repo } = profileRepo({ [PROFILE_FILE]: "---\ndepth: deep\n# note\n---\nNotes.\n" })
+  assert.match(edit(repo, "release sceptic=basic").stdout, /comments in the front matter were dropped/)
+})
+
+const REJECTED = [
+  ["W6", "release sceptic=strct", "sceptic=strct: expected off|basic|strict"],
+  ["W7", "release colour=red", "unknown key colour"],
+  ["W7", "release target=#1", "target is not a profile key"],
+  ["W7", "release profile=x", "profile is not a profile key"],
+  ["W8", "Release depth=deep", "profile=Release: expected a profile name ([a-z0-9][a-z0-9_-], up to 64)"],
+  ["W9", "release deep", "deep: expected key=value"],
+  ["W13", "release", "profile release: nothing to write (give key=value)"],
+]
+for (const [id, args, message] of REJECTED) {
+  test(`${id}: ${args} exits 2 and creates nothing`, () => {
+    const { repo } = profileRepo({})
+    assertEditStops(edit(repo, args), message)
+    assert.equal(existsSync(join(repo, ".consensus-review")), false)
+  })
+}
+
+test("W10: a symlinked profile is refused and its target is untouched", () => {
+  const { repo } = profileRepo({ ".consensus-review/profiles/other.md": RELEASE })
+  symlinkSync("other.md", join(repo, PROFILE_FILE))
+  assertEditStops(edit(repo, "release depth=deep"), `profile release: symlink (${PROFILE_FILE})`)
+  assert.equal(readFileSync(join(repo, PROFILE_DIR, "other.md"), "utf8"), RELEASE)
+  assert.equal(readlinkSync(join(repo, PROFILE_FILE)), "other.md")
+})
+
+test("W11: a symlinked .consensus-review is refused and nothing is written under its target", () => {
+  const { repo } = profileRepo({})
+  mkdirSync(join(repo, "elsewhere"))
+  symlinkSync("elsewhere", join(repo, ".consensus-review"))
+  assertEditStops(edit(repo, "release depth=deep"), "profile release: symlink (.consensus-review)")
+  assert.deepEqual(readdirSync(join(repo, "elsewhere")), [])
+})
+
+test("W12: an invalid existing file is never overwritten", () => {
+  const { repo } = profileRepo({ [PROFILE_FILE]: "---\ndepth deep\n---\n" })
+  assertEditStops(edit(repo, "release sceptic=basic"), "profile release: malformed line 2; fix or delete the file")
+  assert.equal(profileText(repo), "---\ndepth deep\n---\n")
+})
+
+test("W14: a --repo that is not a git repository stops", () => {
+  const dir = mkdtempSync(join(tmpdir(), "not-git-"))
+  dirs.push(dir)
+  mkdirSync(join(dir, "repo"))
+  const run = edit(join(dir, "repo"), "release depth=deep")
+  assert.equal(run.status, 2)
+  assert.ok(run.stderr.includes("not a git repository"), run.stderr)
+  assert.equal(existsSync(join(dir, "repo", ".consensus-review")), false)
+})
+
+test("W15: round trip: write, run the printed commit, then apply with profile=release", () => {
+  const ws = profileRepo({})
+  const run = edit(ws.repo, "release depth=deep extra=pi timeout=1200")
+  assert.equal(run.status, 0, run.stderr)
+  const command = run.stdout.split("Not applied until committed: ")[1].trim()
+  execFileSync("sh", ["-c", command], { cwd: ws.repo, stdio: "ignore" })
+  assert.equal(git(ws.repo, "status", "--porcelain"), "")
+  const applied = applyProfile(ws)
+  assert.equal(applied.status, 0, applied.stderr)
+  assert.deepEqual(applied.saved.settings.extra, { value: "pi", source: "profile" })
+})
+
+test("W18: pre-planted temp-name symlinks are never followed or replaced", () => {
+  const { repo } = profileRepo({ "victim.txt": "victim\n" })
+  mkdirSync(join(repo, PROFILE_DIR), { recursive: true })
+  const links = ["release.md.tmp", ".release.md.x.tmp"]
+  for (const link of links) symlinkSync("../../victim.txt", join(repo, PROFILE_DIR, link))
+  const run = edit(repo, "release depth=deep")
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(profileText(repo), "---\ndepth: deep\n---\n")
+  assert.equal(readFileSync(join(repo, "victim.txt"), "utf8"), "victim\n")
+  for (const link of links) assert.equal(readlinkSync(join(repo, PROFILE_DIR, link)), "../../victim.txt")
+  assert.deepEqual(readdirSync(join(repo, PROFILE_DIR)).sort(), [".release.md.x.tmp", "release.md", "release.md.tmp"])
+})
+
+test("W19: printing a FIFO profile stops before the timeout", () => {
+  const { repo } = profileRepo({})
+  mkdirSync(join(repo, PROFILE_DIR), { recursive: true })
+  execFileSync("mkfifo", [join(repo, PROFILE_FILE)])
+  const run = edit(repo, "release", { timeout: 5_000 })
+  assert.equal(run.error, undefined, "the child must exit before its timeout")
+  assertEditStops(run, `profile release: not a regular file (${PROFILE_FILE})`)
+})
+
+test("W: <name> alone prints the existing file", () => {
+  const { repo } = profileRepo({ [PROFILE_FILE]: RELEASE })
+  const run = edit(repo, "release")
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(run.stdout, RELEASE)
+})
+
+test("list P1: no profiles directory lists the defaults and no profiles", () => {
+  const { repo } = profileRepo({})
+  const run = edit(repo, "")
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(run.stdout, `${DEFAULTS_LISTING}\nno profiles in .consensus-review/profiles/\n`)
+})
+
+test("list P0: the defaults line is built from SETTINGS", () => {
+  const { repo } = profileRepo({ ".consensus-review/profiles/ci.md": CI_TEXT })
+  const first = edit(repo, "").stdout.split("\n")[0]
+  assert.equal(first, `defaults (built-in): ${Object.entries(SETTINGS).map(([k, s]) => `${k}=${s.default}`).join(" | ")}`)
+  assert.equal(first, DEFAULTS_LISTING)
+})
+
+test("list P2: one line per profile in name order, SETTINGS key order, no status", () => {
+  const { repo } = profileRepo({
+    ".consensus-review/profiles/ci.md": CI_TEXT,
+    ".consensus-review/profiles/bad.md": "---\nsceptic: strct\n---\n",
+  })
+  assert.equal(edit(repo, "release depth=deep extra=pi timeout=1200").status, 0)
+  const run = edit(repo, "")
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(run.stdout, [
+    DEFAULTS_LISTING,
+    "bad: invalid (sceptic=strct: expected off|basic|strict)",
+    "ci: depth=minimal dims=impact,tests sceptic=basic out=none",
+    "release: depth=deep extra=pi timeout=1200",
+    "",
+  ].join("\n"))
 })

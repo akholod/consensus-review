@@ -16,6 +16,13 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
   unreadable `settings.json`. The doctor lists the profiles.
   **Changed:** a `Settings:` value from a profile reads `profile <name>`;
   `settings.json` gains `profile` (`null` without one).
+- **Added — `/consensus-review:profile`** (`Refs #7`), the only command
+  that writes: it lists the defaults and the profiles, prints one, or
+  creates or updates `.consensus-review/profiles/<name>.md` through
+  `settings.mjs profile-edit` (every value checked, canonical keys in
+  settings order, body kept, atomic, never through a symlink, never over
+  an invalid file). It never commits; it prints the path-limited commit to
+  run. Reviews stay read-only.
 
 - **Breaking: arguments simplified.** Arguments are `key=value` pairs
   resolved in code by `scripts/settings.mjs` (one `SETTINGS` table); the

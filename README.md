@@ -37,8 +37,8 @@ Project rules live in the repository as review lenses in
 `.consensus-review/lenses/`; see [Project lenses](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md#project-lenses).
 Named presets of settings live in `.consensus-review/profiles/` and apply with `profile=<name>`; see [Profiles](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md#profiles).
 
-It never changes your code. It writes only the report and its private run archive in the ignored
-`.reviews/`. `archive=off` drops the archive (`--no-archive` does the same for `/loop-review`); `no-file` writes nothing at all.
+Reviews never change your code. They write only the report and its private run archive in the ignored
+`.reviews/`; `/consensus-review:profile` writes only the profile you name. `archive=off` drops the archive (`--no-archive` does the same for `/loop-review`); `no-file` writes nothing at all.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/akholod/consensus-review/main/assets/demo.gif" alt="/consensus-review on a small change: impact, quality and tests agents plus codex run in parallel, a sceptic pass verifies the findings, and the report lists P0, P1 and P2 with failure scenarios" width="100%">
@@ -99,16 +99,17 @@ radius first, and a docs-only diff skips the panel entirely.
 
 ## Commands
 
-| Command                    | Does                                                         |
-| -------------------------- | ------------------------------------------------------------ |
-| `/consensus-review`        | panel, arbiter, consultant (codex→pi→claude-cli), sceptic    |
-| `/loop-review`             | sequential passes with evidence per risk cell                |
-| `/impact-review`           | correctness, regressions, security, the code around the diff |
-| `/quality-review`          | conventions, duplication, AI slop, contracts                 |
-| `/test-review`             | whether the tests catch realistic regressions                |
-| `/arch-review`             | architectural impact of the change                           |
-| `/architecture-audit`      | the whole project's architecture, not just a diff            |
-| `/consensus-review:doctor` | what a broken setup would silently do to a review            |
+| Command                     | Does                                                         |
+| --------------------------- | ------------------------------------------------------------ |
+| `/consensus-review`         | panel, arbiter, consultant (codex→pi→claude-cli), sceptic    |
+| `/loop-review`              | sequential passes with evidence per risk cell                |
+| `/impact-review`            | correctness, regressions, security, the code around the diff |
+| `/quality-review`           | conventions, duplication, AI slop, contracts                 |
+| `/test-review`              | whether the tests catch realistic regressions                |
+| `/arch-review`              | architectural impact of the change                           |
+| `/architecture-audit`       | the whole project's architecture, not just a diff            |
+| `/consensus-review:doctor`  | what a broken setup would silently do to a review            |
+| `/consensus-review:profile` | create, update or list review profiles                       |
 
 The diff reviews take an empty scope (your working tree) or a pull
 request: a URL, `owner/repo#N` or `#N` (`--pr=<n>` for `/loop-review`).
