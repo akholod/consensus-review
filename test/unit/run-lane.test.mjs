@@ -126,7 +126,7 @@ test("1c: pi-refuter fail then votes → ok (retried: failed), verdicts written"
       "--ids-file", join(ws.dir, "ids.json")]), { fake: "fail,votes" })
     assert.equal(status(ws, "pi-refuter").display, "ok (retried: failed)")
     const out = JSON.parse(readFileSync(join(ws.dir, "pi-refuter.json"), "utf8"))
-    assert.deepEqual(out.verdicts.map((v) => [v.id, v.verdict]), [["F1", "refuted"]])
+    assert.deepEqual(out.verdicts.map((v) => [v.id, v.verdict]), [["F1", "DISAGREE_CONCERN"]])
   } finally {
     ws.cleanup()
   }
@@ -388,7 +388,7 @@ test("5: §5 → §8 handoff launches a refuter only where the decision says run
       await decide(ws, "sceptic", "codex-refuter")
       const d = decision(ws, "sceptic")
       assert.equal(d.voteMode, "strict")
-      // the fake refuter's uncited legacy `refuted` is a concern, so V AGREE + R CONCERN survives
+      // the fake refuter votes DISAGREE_CONCERN, so V AGREE + R CONCERN survives
       assert.deepEqual(core(d.perFinding.F1), { decision: "confirmed", voters: "2 of 2", noVote: [] })
       assert.equal(d.perFinding.F1.label, "verifier: AGREE, codex: CONCERN")
       // the refuter's attempt record keeps the ids it was not asked about
@@ -419,7 +419,7 @@ test("basic: decide --phase sceptic --lanes \"\" tallies the verifier alone, vot
 test("MAJOR 1: sceptic decide covers every sent id when the verifier is missing or partial", async () => {
   const ws = workspace()
   try {
-    await handoff(ws, "ok,votes") // codex-refuter votes refuted on F1 only; ids.json = F1, F2
+    await handoff(ws, "ok,votes") // codex-refuter votes DISAGREE_CONCERN on F1 only; ids.json = F1, F2
     await decide(ws, "sceptic", "codex-refuter")
     const missing = decision(ws, "sceptic")
     assert.equal(missing.verifier, "missing")
@@ -429,7 +429,7 @@ test("MAJOR 1: sceptic decide covers every sent id when the verifier is missing 
     await decide(ws, "sceptic", "codex-refuter")
     const partial = decision(ws, "sceptic")
     assert.equal(partial.verifier, "ok")
-    // both votes are uncited legacy `refuted`, so both are concerns: no quote, no refutation
+    // the verifier's uncited legacy `refuted` and the refuter's concern are both concerns: no quote, no refutation
     assert.deepEqual(core(partial.perFinding.F1), { decision: "unconfirmed", voters: "2 of 2", noVote: [] })
     assert.deepEqual(core(partial.perFinding.F2), { decision: "unconfirmed", voters: "0 of 2", noVote: ["verifier", "codex-refuter"] })
     rmSync(join(ws.dir, "ids.json"))

@@ -42,7 +42,7 @@ const LENS_FINDING = {
   lens: "payments",
 }
 const payload = mode === "votes"
-  ? { verdicts: [{ id: "F1", verdict: "refuted", evidence: "guarded at a.js:1" }] }
+  ? { verdicts: [{ id: "F1", verdict: "DISAGREE_CONCERN", evidence: "guarded at a.js:1", citation: null, suggested_severity: null }] }
   : { findings: mode === "lens" ? [LENS_FINDING] : [] }
 const answer = () => {
   if (name === "codex") return writeFileSync(args[args.indexOf("-o") + 1], JSON.stringify(payload))

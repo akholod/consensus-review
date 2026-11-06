@@ -220,29 +220,31 @@ asks and what the runtime enforces is recorded here rather than asserted away.
 |---|---|---|
 | L1 | `agents/*.md` frontmatter carries `name`, `description`, `model`; `name` equals the filename stem | parse frontmatter |
 | L2 | every review agent still carries `disallowedTools: Write, Edit` | parse frontmatter |
-| L5a | each agent's backticked vocabulary **contains** every severity **and every verdict** it is contracted to emit | presence — catches deletion |
-| L5b | no backticked severity or verdict token **outside** `contracts/severity-bars.md`'s vocabulary | subset — catches addition |
+| L5a | each agent's backticked vocabulary **contains** every severity it is contracted to emit | presence — catches deletion |
+| L5b | no backticked severity token **outside** `contracts/severity-bars.md`'s vocabulary | subset — catches addition |
+| L5c | `finding-verifier` carries the block generated from `contracts/verdict.schema.json` | presence; `gen-contracts --check` guards its content |
 | L6 | every agent named as a `subagent_type` in `commands/*.md` exists in `agents/`, and every agent is dispatched by some command | parse the declared dispatch form, not bare name occurrences |
 
 **L2** is load-bearing: read-only is the plugin's headline promise, and a dropped line silently arms
 five Opus agents with Write.
 
-**L5a covers verdicts, not only severities.** v4's split left a hole: `finding-verifier` is
-contracted to emit exactly three verdicts, and deleting every backticked `refuted` remained a valid
-subset. L5a now requires the contracted verdicts of the agent that emits them.
+**Verdicts are generated, not linted as vocabulary.** Since #8 the verifier's votes
+(`AGREE`, `DISAGREE_EVIDENCE`, `DISAGREE_CONCERN`) come from `contracts/verdict.schema.json` through a
+generated block. L5c only checks that the block is present; `gen-contracts --check` fails on any hand
+edit of it, which covers both deleting and inventing a vote word.
 
 **L5 is a heuristic and its promise is scoped to its method.** Prototyped both ways: bare-token
 matching goes **red** on `agents/impact-reviewer.md:62`, where `P3` appears in the prose "(Original
 P3 collapses here.)" — a false positive; backtick-scoped is green on the tree as it stands. The
 cost is real: **drift written in bare prose is an acknowledged false negative.** `reduced` is in the
 contract but is a normalized outcome the verifier never emits, so it is permitted and never
-required. The deterministic layer is exact **except** L5.
+required. The deterministic layer is exact **except** L5a/L5b.
 
 ### 3.5 Acceptance — both directions
 
-*Must go red:* a frontmatter key removed; `disallowedTools` dropped; a contracted severity **or
-verdict** deleted from a backticked vocabulary (L5a); a backticked severity or verdict outside the
-contract (L5b); a `subagent_type` naming no agent; a prompt template out of sync with its
+*Must go red:* a frontmatter key removed; `disallowedTools` dropped; a contracted severity
+deleted from a backticked vocabulary (L5a); a backticked severity outside the contract (L5b); the
+verifier's generated vote block removed (L5c) or hand-edited (`gen-contracts --check`); a `subagent_type` naming no agent; a prompt template out of sync with its
 entrypoint; a shared field typed outside §3.2's sets; an undeclared schema↔runtime disagreement.
 
 *Must stay green:* prose rewritten around an unchanged contract; an extra unrelated fenced block;
