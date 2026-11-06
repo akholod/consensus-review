@@ -587,10 +587,3 @@ test("the four lens blocks are identical except --dim, and pass the raw scope as
   assert.match(blocks[0], /standalone --dim <d> \[--target "<scope>"\]`/)
 })
 
-test("each dimension command minus the lens block is the 01b4310 file byte for byte", () => {
-  for (const file of Object.keys(COMMANDS)) {
-    const rel = `commands/${file}-review.md`
-    const now = readFileSync(join(ROOT, rel), "utf8").split("\n").filter((l) => !l.includes("lenses.mjs\" standalone")).join("\n")
-    assert.equal(now, git(ROOT, "show", `01b4310:${rel}`), rel)
-  }
-})

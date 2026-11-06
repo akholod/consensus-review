@@ -64,7 +64,7 @@ test("E7: the dimension models line pins the frontmatter models and efforts", ()
 })
 
 /** doctor --offline --json in a child, with PATH holding node, git and a `claude` printing `version`. */
-function doctorWithClaudeVersion(version) {
+function doctorWithClaudeVersion(version, args = []) {
   const bin = mkdtempSync(join(tmpdir(), "doctor-claude-version-"))
   try {
     for (const t of ["node", "git"]) {
@@ -73,7 +73,7 @@ function doctorWithClaudeVersion(version) {
     }
     writeFileSync(join(bin, "claude"), `#!/bin/sh\necho '${version}'\n`)
     chmodSync(join(bin, "claude"), 0o755)
-    const out = execFileSync("node", [join(ROOT, "scripts/doctor.mjs"), "--offline", "--json"], {
+    const out = execFileSync("node", [join(ROOT, "scripts/doctor.mjs"), "--offline", "--json", ...args], {
       encoding: "utf8",
       env: { ...process.env, PATH: bin },
     })
@@ -251,7 +251,8 @@ test("names the consultant a review would run, and why, with the presence-only c
 })
 
 test("--consultant mirrors a forced consultant: forced claude-cli is named and reported as forced", () => {
-  const results = diagnose({ root: ROOT, repo: ROOT, offline: true, consultant: "claude-cli" })
+  // A fake `claude` on PATH: the read-only line needs claude-cli to be present, and CI has no claude.
+  const results = doctorWithClaudeVersion("2.1.319 (Claude Code)", ["--consultant", "claude-cli"])
   const line = results.find((x) => x.label.startsWith("consultant: "))
   assert.equal(line.label, "consultant: claude-cli")
   assert.match(line.detail, /forced/)
