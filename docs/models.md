@@ -17,6 +17,7 @@ without one too. `/consensus-review:doctor` prints what each agent runs on.
 | `arch-reviewer`          | `opus`                    | `medium`   | boundaries and long-term complexity                                       |
 | `quality-reviewer`       | `sonnet`                  | `high`     | conventions and duplication: matching against the repo's own precedent    |
 | `test-reviewer`          | `sonnet`                  | `high`     | the same kind of work, for tests                                          |
+| `plan-reviewer`          | `opus`                    | `high`     | `/consensus-review:plan-review`: checks a document against the code       |
 | `finding-verifier`       | `opus`                    | `high`     | see below                                                                 |
 | codex consultant         | codex's configured model  | codex's    | the plugin passes no `--model`                                            |
 | pi consultant or extra   | picked by role, or `pi-model=<model>` | pi's | see [How pi picks its model](#how-pi-picks-its-model)                  |

@@ -26,7 +26,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const OPTIONS = { wd: { type: "string" }, report: { type: "string" }, off: { type: "boolean" } }
 const USAGE = "usage: archive-run.mjs finish --wd <dir> [--report <path>] [--off]"
 const REFUTER = /-refuter$/
-const AGENTS = { architecture: "arch-reviewer", quality: "quality-reviewer", impact: "impact-reviewer", tests: "test-reviewer" }
+const AGENTS = {
+  architecture: "arch-reviewer", quality: "quality-reviewer", impact: "impact-reviewer", tests: "test-reviewer",
+  feasibility: "plan-reviewer", completeness: "plan-reviewer", ambiguity: "plan-reviewer", scope: "plan-reviewer", testability: "plan-reviewer",
+}
 const UNAVAILABLE = "host does not expose the Task prompt/transcript"
 
 const readJson = (path) => {
@@ -99,6 +102,7 @@ function finish(v) {
   const synthesis = readJson(at("synthesis.json"))
   const verdicts = readJson(at("verifier.verdicts.json"))
   const ids = readJson(at("ids.json"))
+  const command = settings?.target?.kind === "doc" ? "plan-review" : "consensus-review"
 
   const notWritten = {}
   const panel = []
@@ -126,7 +130,7 @@ function finish(v) {
   copy("verifier.verdicts.json", "sources/finding-verifier/output.json")
   for (const file of files.filter((f) => /^lenses-.+\.md$/.test(f)).sort()) copy(file, `sources/lenses/${file}`)
   for (const name of names) if (prompt(name)) copy(prompt(name), `sources/${name}/prompt.md`)
-  entries.push({ to: "sources/arbiter/command.md", from: join(ROOT, "commands/consensus-review.md") })
+  entries.push({ to: "sources/arbiter/command.md", from: join(ROOT, `commands/${command}.md`) })
   const attempts = (name, ext) => files
     .map((f) => f.match(new RegExp(`^${name}\\.a(\\d+)\\.${ext}$`)))
     .filter(Boolean)
@@ -155,8 +159,8 @@ function finish(v) {
     [name, { status: s.status ?? null, display: s.display ?? null, model: s.model ?? null, provider: s.provider ?? null, schema: s.schema ?? null }]))
   const meta = {
     createdAt: now.toISOString(),
-    command: "consensus-review",
-    target: !settings ? null : settings.target?.kind === "pr" ? settings.target.ref : "uncommitted",
+    command,
+    target: !settings ? null : ["pr", "doc"].includes(settings.target?.kind) ? settings.target.ref : "uncommitted",
     mode: triage?.mode ?? null,
     pluginVersion: readJson(join(ROOT, ".claude-plugin/plugin.json"))?.version ?? null,
     report: v.report ? resolve(v.report) : null,

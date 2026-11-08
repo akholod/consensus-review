@@ -171,7 +171,7 @@ test("a long object body wraps at property boundaries, never mid-property", () =
 
 test("--check passes on the committed tree", () => {
   const out = execFileSync("node", ["scripts/gen-contracts.mjs", "--check"], { encoding: "utf8" })
-  assert.match(out, /in sync \(5 generated blocks, projection verified\)/)
+  assert.match(out, /in sync \(7 generated blocks, projection verified\)/)
 })
 
 test("--check fails when a generated block is edited by hand", () => {
@@ -218,7 +218,7 @@ test("--check passes on an unmodified copy", () => {
   assert.equal(checkCopy(() => {}), null)
 })
 
-for (const rel of ["agents/finding-verifier.md", "commands/consensus-review.md"]) {
+for (const rel of ["agents/finding-verifier.md", "commands/consensus-review.md", "commands/plan-review.md"]) {
   test(`--check fails when the vote block in ${rel} is edited by hand`, () => {
     const err = checkCopy((path) => editCopy(path, rel, '"quote": str}|null', '"quote": str}'))
     assert.match(err ?? "", new RegExp(`${rel} is OUT OF SYNC with contracts/verdict.schema.json`))
@@ -238,4 +238,9 @@ test("a nullable object renders as its body followed by |null", () => {
   const VERDICT = JSON.parse(readFileSync("contracts/verdict.schema.json", "utf8"))
   const rendered = renderSketch(VERDICT, "#/properties/verdicts/items")
   assert.match(rendered, /^  "citation": \{"file": str, "line": str, "quote": str\}\|null,$/m)
+})
+
+test("--check fails when the plan-finding schema block in commands/plan-review.md is edited by hand", () => {
+  const err = checkCopy((path) => editCopy(path, "commands/plan-review.md", '"testability",', '"tests",'))
+  assert.match(err ?? "", /commands\/plan-review\.md is OUT OF SYNC with contracts\/plan-finding\.schema\.json/)
 })

@@ -170,6 +170,24 @@ red("L7: the §8 refuter run line is gone",
   ({ edit }) => edit("commands/consensus-review.md", (t) => t.replace(/^ *node "\$H" run <name> --wd "\$WD" --name <name>-refuter[^&]*&\n/m, "")),
   /commands\/consensus-review\.md:1: L7: the §8 refuter run line/)
 
+// L2 and L7 on /plan-review
+red("L2: plan-reviewer lost disallowedTools",
+  ({ edit }) => edit("agents/plan-reviewer.md", (t) => t.replace(/^disallowedTools: .*$/m, "")),
+  /agents\/plan-reviewer\.md:1: L2: review agent has no `disallowedTools`/)
+
+red("L7: a plan-review refuter run line gained --schema",
+  ({ edit }) => edit("commands/plan-review.md", (t) =>
+    t.replace('--require-key verdicts --ids-file "$WD/ids.json"', '--require-key verdicts --schema "${CLAUDE_PLUGIN_ROOT}/contracts/verdict.schema.json" --ids-file "$WD/ids.json"')),
+  /commands\/plan-review\.md:\d+: L7: the refuter run line passes `--schema`/)
+
+red("L7: a plan-review §5 run line lost its --schema",
+  ({ edit }) => edit("commands/plan-review.md", (t) => t.replace(' --schema "${CLAUDE_PLUGIN_ROOT}/contracts/plan-finding.schema.json"', "")),
+  /commands\/plan-review\.md:\d+: L7: the §5 run line must pass `--schema` with `plan-finding\.schema\.json`/)
+
+red("L7: a plan-review §5 run line passes --lenses-file",
+  ({ edit }) => edit("commands/plan-review.md", (t) => t.replace(" [--skip <skip>", ' [--lenses-file "$WD/<outputs.consultant>"] [--skip <skip>')),
+  /commands\/plan-review\.md:\d+: L7: a plan-review run line passes `--lenses-file`/)
+
 // -------------------------------------------------------------------------------------------
 // Unit-level behaviour of the helpers
 // -------------------------------------------------------------------------------------------

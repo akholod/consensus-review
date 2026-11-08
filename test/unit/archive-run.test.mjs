@@ -480,3 +480,55 @@ test("usage errors exit 2 and print nothing on stdout", (t) => {
   assert.equal(r.status, 2)
   assert.equal(existsSync(join(w.top, ".reviews")), false)
 })
+
+// /plan-review runs: the command and target come from settings.target (kind "doc").
+const DOC_DIMS = ["feasibility", "completeness", "ambiguity", "scope", "testability"]
+const docRun = (wd, ref) => put(wd, {
+  "settings.json": resolveSettings([ref], { mode: "doc" }),
+  "diff.patch": DIFF,
+  "triage.json": { tier: "doc", dims: DOC_DIMS, mode: "doc", basis: "document review" },
+  "claude-findings.json": { findings: [] },
+  "synthesis.json": { findings: [] },
+})
+
+test("A1/A1b: a doc run records plan-review, the path as typed, plan-reviewer once, and its own command file", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  docRun(w.wd, "docs/p.md")
+  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
+  assert.equal(r.code, 0, r.stderr)
+  const meta = readJson(r.out.dir, "meta.json")
+  assert.equal(meta.command, "plan-review")
+  assert.equal(meta.target, "docs/p.md")
+  assert.deepEqual(meta.unavailable.map((u) => u.source), ["plan-reviewer"])
+  assert.equal(readFileSync(join(r.out.dir, "sources/arbiter/command.md"), "utf8"), readFileSync(join(ROOT, "commands/plan-review.md"), "utf8"))
+})
+
+test("A2: an uncommitted run still records consensus-review and its command file", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  put(w.wd, { "settings.json": resolveSettings([]), "diff.patch": DIFF, "synthesis.json": { findings: [] } })
+  const r = finish(w.top, ["--wd", w.wd, "--report", "r.md"])
+  const meta = readJson(r.out.dir, "meta.json")
+  assert.equal(meta.command, "consensus-review")
+  assert.equal(meta.target, "uncommitted")
+  assert.equal(readFileSync(join(r.out.dir, "sources/arbiter/command.md"), "utf8"), readFileSync(join(ROOT, "commands/consensus-review.md"), "utf8"))
+})
+
+test("A4: a doc outside the repo keeps its typed path as the target, not the .plan-review label", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  docRun(w.wd, "/tmp/x/plan.md")
+  const meta = readJson(finish(w.top, ["--wd", w.wd, "--report", "r.md"]).out.dir, "meta.json")
+  assert.equal(meta.target, "/tmp/x/plan.md")
+})
+
+test("A3: a doc run finished from a non-git dir is skipped and writes nothing", (t) => {
+  const w = workspace()
+  t.after(w.cleanup)
+  docRun(w.wd, "plan.md")
+  const norepo = mkdtempSync(join(tmpdir(), "archive-run-norepo-"))
+  t.after(() => rmSync(norepo, { recursive: true, force: true }))
+  assert.deepEqual(finish(norepo, ["--wd", w.wd, "--report", "r.md"]), { code: 0, out: { skipped: "not in a git worktree" }, stderr: "" })
+  assert.deepEqual(readdirSync(norepo), [])
+})

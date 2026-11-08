@@ -377,3 +377,18 @@ test("loop-review.md states the clone fallback adds objects to the reviewed clon
   const surface = md.split("\n## Write surface")[1].split("\n## ")[0]
   assert.match(surface, /fetches the PR's objects into the reviewed clone's object store\. It never\s+writes a ref, `FETCH_HEAD` or config\./)
 })
+
+test("L4: the plan finding schema is the finding schema except the dimension and owner enums", () => {
+  const withoutEnums = (schema) => {
+    const items = schema.properties.findings.items.properties
+    delete items.dimension.enum
+    delete items.owner.enum
+    return schema
+  }
+  const plan = contract("plan-finding.schema.json")
+  const items = plan.properties.findings.items.properties
+  assert.deepEqual(items.dimension.enum, ["feasibility", "completeness", "ambiguity", "scope", "testability"])
+  assert.deepEqual(items.owner.enum, ["feasibility", "completeness", "ambiguity", "scope", "testability", null])
+  assert.doesNotThrow(() => assertStrictSchema(plan))
+  assert.deepEqual(sortDeep(withoutEnums(contract("plan-finding.schema.json"))), sortDeep(withoutEnums(contract("finding.schema.json"))))
+})

@@ -6,6 +6,8 @@
 // lane ends in a status whose `display` names each attempt and why it ended.
 
 import { existsSync, readFileSync } from "node:fs"
+import { basename } from "node:path"
+import { fileURLToPath } from "node:url"
 import { validate } from "./json-schema.mjs"
 
 export const VERDICTS = ["AGREE", "DISAGREE_EVIDENCE", "DISAGREE_CONCERN"]
@@ -63,23 +65,27 @@ function failure(rc, log) {
   return { status: config ? "config" : "failed", reason }
 }
 
-let findingSchema = null // loaded on first use, so a missing file is probeCodex's diagnostic, not an import crash
+const schemas = new Map() // parsed on first use, so a missing file is probeCodex's diagnostic, not an import crash
 
-/** Findings must match the contract entry by entry; verdicts are checked per id by parseVotes. */
-function payloadProblem(payload, requireKey) {
+/** The schema run-lane sends a lane when no `--schema` is given. */
+const defaultSchema = (requireKey) =>
+  fileURLToPath(new URL(`../../contracts/${requireKey === "verdicts" ? "verdict" : "finding"}.schema.json`, import.meta.url))
+
+/** Findings must match the lane's schema entry by entry; verdicts are checked per id by parseVotes. */
+function payloadProblem(payload, requireKey, schemaPath = defaultSchema(requireKey)) {
   if (!Array.isArray(payload?.[requireKey])) return `output has no ${requireKey} array — the schema was not honoured`
   if (requireKey !== "findings") return null
-  findingSchema ??= JSON.parse(readFileSync(new URL("../../contracts/finding.schema.json", import.meta.url), "utf8"))
+  if (!schemas.has(schemaPath)) schemas.set(schemaPath, JSON.parse(readFileSync(schemaPath, "utf8")))
   // `lens` is new and advisory: a lane that omits it is not unparseable, it just names no lens.
   for (const finding of payload.findings) {
     if (finding && typeof finding === "object" && !("lens" in finding)) finding.lens = null
   }
-  const problems = validate(findingSchema, payload)
-  return problems.length ? `output does not match contracts/finding.schema.json: ${problems[0]}` : null
+  const problems = validate(schemas.get(schemaPath), payload)
+  return problems.length ? `output does not match contracts/${basename(schemaPath)}: ${problems[0]}` : null
 }
 
 /** Classify one codex attempt. `outPath` is the `-o` file; it is absent when codex failed. */
-export function classifyCodexResult({ rc, timedOut, log = "", outPath, requireKey = "findings" }) {
+export function classifyCodexResult({ rc, timedOut, log = "", outPath, requireKey = "findings", schema }) {
   if (timedOut) return { status: "timeout", reason: "timed out" }
   if (rc !== 0) return failure(rc, log)
   if (!existsSync(outPath)) return { status: "unparseable", reason: "exited 0 but wrote no output file" }
@@ -89,7 +95,7 @@ export function classifyCodexResult({ rc, timedOut, log = "", outPath, requireKe
   } catch (err) {
     return { status: "unparseable", reason: `output is not valid JSON: ${err.message}` }
   }
-  const problem = payloadProblem(payload, requireKey)
+  const problem = payloadProblem(payload, requireKey, schema)
   return problem ? { status: "unparseable", reason: problem } : { status: "ok", payload }
 }
 
@@ -97,7 +103,7 @@ export function classifyCodexResult({ rc, timedOut, log = "", outPath, requireKe
  * Read pi's JSONL events: the final answer is the last assistant message (`agent_end`, else the
  * last `turn_end`), and the payload is the LAST block between the markers for `requireKey`.
  */
-export function parsePiOutput(raw, requireKey = "findings") {
+export function parsePiOutput(raw, requireKey = "findings", schema) {
   let final = null
   let fallback = null
   for (const line of raw.split("\n")) {
@@ -125,16 +131,16 @@ export function parsePiOutput(raw, requireKey = "findings") {
     return { status: "unparseable", reason: `marker block is not valid JSON: ${err.message}`, ...meta }
   }
   if (!Array.isArray(items)) return { status: "unparseable", reason: "marker block is not a JSON array", ...meta }
-  const problem = payloadProblem({ [requireKey]: items }, requireKey)
+  const problem = payloadProblem({ [requireKey]: items }, requireKey, schema)
   if (problem) return { status: "unparseable", reason: problem, ...meta }
   return { status: "ok", payload: { [requireKey]: items }, ...meta }
 }
 
 /** Classify one pi attempt from its combined stdout/stderr. */
-export function classifyPiResult({ rc, timedOut, out = "", requireKey = "findings" }) {
+export function classifyPiResult({ rc, timedOut, out = "", requireKey = "findings", schema }) {
   if (timedOut) return { status: "timeout", reason: "timed out" }
   if (rc !== 0) return failure(rc, out)
-  return parsePiOutput(out, requireKey)
+  return parsePiOutput(out, requireKey, schema)
 }
 
 /** Grace between TERM and KILL: min(5, T/4); an override is clamped to ≤ T/4 so attempt 1 ≤ 2T. */
@@ -177,7 +183,7 @@ const CLAUDE_CONFIG_PATTERNS = [
  * stdout/stderr log (stream-json; a single `--output-format json` envelope also qualifies). With
  * `--json-schema` a refusal comes back as a valid empty payload, so it cannot be told from a clean run.
  */
-export function classifyClaudeResult({ rc, timedOut, out = "", requireKey = "findings" }) {
+export function classifyClaudeResult({ rc, timedOut, out = "", requireKey = "findings", schema }) {
   let envelope = null
   let init = null
   for (const line of out.split("\n")) {
@@ -200,7 +206,7 @@ export function classifyClaudeResult({ rc, timedOut, out = "", requireKey = "fin
       return { status: config ? "config" : "failed", reason: text.trim().slice(0, 200) }
     }
     if (envelope.stop_reason === "max_tokens") return { status: "unparseable", reason: "stopped at max_tokens" }
-    const problem = payloadProblem(envelope.structured_output, requireKey)
+    const problem = payloadProblem(envelope.structured_output, requireKey, schema)
     return problem ? { status: "unparseable", reason: problem } : { status: "ok", payload: envelope.structured_output }
   })()
   return { ...result, model }

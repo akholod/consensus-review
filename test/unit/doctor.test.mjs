@@ -64,7 +64,7 @@ test("states which model each dimension runs on", () => {
 test("E7: the dimension models line pins the frontmatter models and efforts", () => {
   // Expected from step 7 of .omc/plans/issue-7-profiles.md (the new frontmatter defaults).
   assert.equal(find(doctor(ROOT), "dimension models").detail,
-    "arch=opus/medium impact=opus/high quality=sonnet/high test=sonnet/high verifier=opus/high")
+    "arch=opus/medium impact=opus/high quality=sonnet/high test=sonnet/high plan=opus/high verifier=opus/high")
 })
 
 /** doctor --offline --json in a child, with PATH holding node, git and a `claude` printing `version`. */

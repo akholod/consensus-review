@@ -5,7 +5,7 @@
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { validStatus } from "../../scripts/lib/lanes.mjs"
@@ -131,6 +131,41 @@ test("1c: pi-refuter fail then votes → ok (retried: failed), verdicts written"
     assert.equal(status(ws, "pi-refuter").display, "ok (retried: failed)")
     const out = JSON.parse(readFileSync(join(ws.dir, "pi-refuter.json"), "utf8"))
     assert.deepEqual(out.verdicts.map((v) => [v.id, v.verdict]), [["F1", "DISAGREE_CONCERN"]])
+  } finally {
+    ws.cleanup()
+  }
+})
+
+test("L1/L2: a pi feasibility finding is ok under --schema plan-finding, unparseable under the default", async () => {
+  const ws = workspace()
+  try {
+    await launch(ws, runArgs(ws, "pi", ["--schema", join(ROOT, "contracts/plan-finding.schema.json")]), { fake: "plan" })
+    assert.equal(status(ws, "pi").display, "ok")
+    const out = JSON.parse(readFileSync(join(ws.dir, "pi.json"), "utf8"))
+    assert.equal(out.findings[0].dimension, "feasibility")
+  } finally {
+    ws.cleanup()
+  }
+  const ws2 = workspace()
+  try {
+    await launch(ws2, runArgs(ws2, "pi"), { fake: "plan,plan" })
+    const s = status(ws2, "pi")
+    assert.equal(s.status, "degraded")
+    assert.deepEqual(s.attempts.map((a) => a.status), ["unparseable", "unparseable"])
+    assert.match(s.attempts[0].reason, /^output does not match contracts\/finding\.schema\.json/)
+    assert.equal(existsSync(join(ws2.dir, "pi.json")), false)
+  } finally {
+    ws2.cleanup()
+  }
+})
+
+test("L6: a codex refuter run without --schema is sent verdict.schema.json", async () => {
+  const ws = workspace()
+  try {
+    await launch(ws, runArgs(ws, "codex", ["--name", "codex-refuter", "--require-key", "verdicts",
+      "--ids-file", join(ws.dir, "ids.json")]), { fake: "votes" })
+    assert.equal(status(ws, "codex-refuter").display, "ok")
+    assert.equal(flag(argv(ws, "codex", 1), "--output-schema"), join(ROOT, "contracts/verdict.schema.json"))
   } finally {
     ws.cleanup()
   }
@@ -907,6 +942,54 @@ test("T7.5: no --lenses-file → prompt is the brief, status lenses:null", async
     await lensRun(ws, "codex")
     assert.equal(prompt(ws, "codex"), "Review the diff.")
     assert.equal(status(ws).lenses, null)
+  } finally {
+    ws.cleanup()
+  }
+})
+
+// /plan-review: the doc label in the sceptic tally (Q4b) and a doc-only lane (L5). Expected values come
+// from "Other decisions: Diff label, Doc-only mode" and rows Q4b and L5 of .omc/plans/issue-4-plan-review.md.
+const PLAN_INPUT = join(ROOT, "scripts/plan-input.mjs")
+const planInput = (...args) => spawnSync(process.execPath, [PLAN_INPUT, ...args], { encoding: "utf8" })
+
+test("Q4b: decide --doc-label checks a doc citation against diff.patch only, never the edited worktree", async () => {
+  const ws = workspace()
+  try {
+    spawnSync("git", ["-C", ws.repo, "init", "-q"])
+    mkdirSync(join(ws.repo, "docs"))
+    writeFileSync(join(ws.repo, "docs/p.md"), "step one reads the plan\nstep two uses run-lane\n")
+    const prepared = planInput("prepare", "--wd", ws.dir, "--invoke", ws.repo, "--doc", "docs/p.md")
+    assert.equal(prepared.status, 0, prepared.stderr)
+    writeFileSync(join(ws.repo, "docs/p.md"), "step one reads the plan\nstep two edits settings.mjs\n")
+    writeFileSync(join(ws.dir, "ids.json"), '["F1"]')
+    writeFileSync(join(ws.dir, "verifier.verdicts.json"), JSON.stringify([{ id: "F1", verdict: "DISAGREE_EVIDENCE",
+      evidence: "the plan says so", citation: { file: "docs/p.md", line: "2", quote: "step two edits settings.mjs" }, suggested_severity: null }]))
+    const tally = (extra) => launch(ws, ["decide", "--wd", ws.dir, "--phase", "sceptic", "--lanes", "",
+      "--repo", ws.repo, "--head-sha", "worktree", ...extra])
+    await tally(["--doc-label", "docs/p.md"])
+    const d = decision(ws, "sceptic").perFinding.F1
+    assert.deepEqual(d.downgraded, { verifier: "quote not found in diff" })
+    assert.equal(d.decision, "unconfirmed")
+    await tally([]) // without the label the worktree copy would refute it
+    assert.equal(decision(ws, "sceptic").perFinding.F1.decision, "refuted")
+  } finally {
+    ws.cleanup()
+  }
+})
+
+test("L5: doc-only, a lane runs from <WD>/doc-cwd, which holds only the document", async () => {
+  const ws = workspace()
+  try {
+    const invoke = join(ws.dir, "invoke")
+    mkdirSync(invoke)
+    writeFileSync(join(invoke, "plan.md"), "step one reads the plan\n")
+    const prepared = planInput("prepare", "--wd", ws.dir, "--invoke", invoke, "--doc", "plan.md")
+    assert.equal(prepared.status, 0, prepared.stderr)
+    const docCwd = join(ws.dir, "doc-cwd")
+    assert.deepEqual(readdirSync(docCwd), ["plan.md"])
+    await launch(ws, ["run", "codex", "--wd", ws.dir, "--repo", docCwd, "--brief-file", join(ws.dir, "brief.txt"), "--timeout", "1"])
+    assert.equal(status(ws).status, "ok")
+    assert.equal(readFileSync(join(ws.dir, "codex.1.cwd"), "utf8"), docCwd)
   } finally {
     ws.cleanup()
   }

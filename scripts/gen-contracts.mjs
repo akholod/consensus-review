@@ -3,9 +3,10 @@
 // drift (see the F3 regression):
 //
 //   commands/consensus-review.md      <- contracts/finding.schema.json          (verbatim JSON)
+//   commands/plan-review.md           <- contracts/plan-finding.schema.json     (verbatim JSON)
 //   prompts/loop-review/discovery.md  <- loop-payload.schema.json#/$defs/discoveryPayload (sketch)
 //   prompts/loop-review/verify.md     <- loop-payload.schema.json#/$defs/verifierPayload  (sketch)
-//   agents/finding-verifier.md, and the §8 pi refuter brief in commands/consensus-review.md
+//   agents/finding-verifier.md, and the §8 pi refuter brief in commands/consensus-review.md and commands/plan-review.md
 //                                     <- verdict.schema.json#/properties/verdicts/items   (sketch)
 //
 // It also checks that loopFinding is still the declared projection of the consensus finding.
@@ -22,6 +23,7 @@ import { renderSketch } from "./lib/sketch.mjs"
 const dirFlag = process.argv.indexOf("--dir")
 const ROOT = dirFlag >= 0 ? process.argv[dirFlag + 1] : join(dirname(fileURLToPath(import.meta.url)), "..")
 const FINDING = "contracts/finding.schema.json"
+const PLAN_FINDING = "contracts/plan-finding.schema.json"
 const LOOP = "contracts/loop-payload.schema.json"
 const VERDICT = "contracts/verdict.schema.json"
 const VOTE = "#/properties/verdicts/items"
@@ -32,11 +34,13 @@ const read = (rel) => readFileSync(join(ROOT, rel), "utf8")
 
 const findingSchema = read(FINDING).trimEnd()
 const findingRoot = JSON.parse(findingSchema)
+const planFindingSchema = read(PLAN_FINDING).trimEnd()
 const loopRoot = JSON.parse(read(LOOP))
 const verdictRoot = JSON.parse(read(VERDICT))
 
 // Fail loudly rather than emitting a schema OpenAI strict mode would reject at run time.
 assertStrictSchema(findingRoot)
+assertStrictSchema(JSON.parse(planFindingSchema))
 assertStrictSchema(verdictRoot)
 
 /**
@@ -99,6 +103,11 @@ const JOBS = [
     body: `\`\`\`json\n${findingSchema}\n\`\`\``,
   },
   {
+    target: "commands/plan-review.md",
+    source: PLAN_FINDING,
+    body: `\`\`\`json\n${planFindingSchema}\n\`\`\``,
+  },
+  {
     target: "prompts/loop-review/discovery.md",
     source: `${LOOP}#/$defs/discoveryPayload`,
     body: `\`\`\`\n${renderSketch(loopRoot, "#/$defs/discoveryPayload")}\n\`\`\``,
@@ -108,7 +117,7 @@ const JOBS = [
     source: `${LOOP}#/$defs/verifierPayload`,
     body: `\`\`\`\n${renderSketch(loopRoot, "#/$defs/verifierPayload")}\n\`\`\``,
   },
-  ...["agents/finding-verifier.md", "commands/consensus-review.md"].map((target) => ({
+  ...["agents/finding-verifier.md", "commands/consensus-review.md", "commands/plan-review.md"].map((target) => ({
     target,
     source: `${VERDICT}${VOTE}`,
     body: `\`\`\`\n${renderSketch(verdictRoot, VOTE)}\n\`\`\``,

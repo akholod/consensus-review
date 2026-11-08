@@ -2,8 +2,8 @@
 // Resolves the /consensus-review arguments against one table of settings, so the arbiter reads
 // settings.json instead of interpreting flags in prose.
 //
-//   resolve --wd <WD> --args-file <file>
-//   profile --wd <WD> [--repo <REPO>] [--mode uncommitted]
+//   resolve --wd <WD> --args-file <file> [--mode doc]
+//   profile --wd <WD> [--repo <REPO>] [--mode uncommitted|doc]
 //   profile-edit --repo <REPO> --args-file <file>
 //   init --repo <REPO> --args-file <file>
 //
@@ -32,8 +32,8 @@ import {
 import { PI_MODEL_ID } from "./lib/lanes.mjs"
 
 const USAGE = [
-  "usage: settings.mjs resolve --wd <WD> --args-file <file>",
-  "       settings.mjs profile --wd <WD> [--repo <REPO>] [--mode uncommitted]",
+  "usage: settings.mjs resolve --wd <WD> --args-file <file> [--mode doc]",
+  "       settings.mjs profile --wd <WD> [--repo <REPO>] [--mode uncommitted|doc]",
   "       settings.mjs profile-edit --repo <REPO> --args-file <file>",
   "       settings.mjs init --repo <REPO> --args-file <file>",
 ].join("\n")
@@ -60,7 +60,7 @@ export const SETTINGS = {
   base: { default: null },
 }
 
-const ROLES = ["architecture", "impact", "quality", "tests", "verifier"]
+const ROLES = ["architecture", "impact", "quality", "tests", "plan", "verifier"]
 const ROLE_VALUES = {
   models: { noun: "model", values: ["opus", "sonnet", "haiku", "fable"] },
   effort: { noun: "effort", values: ["low", "medium", "high", "xhigh", "max"] },
@@ -79,6 +79,9 @@ const TARGETS = [
 ]
 // A token shaped like a target that fails TARGETS stops the run rather than falling back to uncommitted mode.
 const TARGET_LIKE = /^https?:\/\/|\/pull\/|^[^=\s]*#\d/
+// `mode: "doc"` (/plan-review): the keys it ignores, and the one default it changes.
+const DOC_IGNORED = new Set(["depth", "dims", "lenses", "base"])
+const DOC_IGNORED_REASON = "not used by plan-review"
 
 /** `a,b` as `{ set }` or `+a,-b` as `{ add, remove }`; `check(name)` returns an error or null. */
 const parseList = (items, noun, check) => {
@@ -174,10 +177,10 @@ const renderValue = (key, value) => {
   return [...value.add.map((d) => `+${d}`), ...value.remove.map((d) => `-${d}`)].join(",")
 }
 
-const renderLines = (settings, ignored, clamped, profile) => {
+const renderLines = (settings, ignored, clamped, profile, doc) => {
   // An unset `base` has no default to show.
   const layer = profile?.layer && profile.layer !== "repo" ? `, ${profile.layer}` : ""
-  const parts = Object.entries(settings).filter(([, { value }]) => value !== null).map(([key, { value, source }]) => {
+  const parts = Object.entries(settings).filter(([key, { value }]) => value !== null && !(doc && DOC_IGNORED.has(key))).map(([key, { value, source }]) => {
     const origin = source === "profile" ? `profile ${profile.name}${layer}` : source
     let note = clamped.has(key) ? `${origin}, clamped` : origin
     if (ROLE_VALUES[key] && value !== "agent") note = `${note}, requested`
@@ -226,30 +229,45 @@ const nameError = (raw) => `profile=${raw}: expected a profile name ([a-z0-9][a-
 /**
  * Tokens are the whitespace-split arguments; `profile` is the loaded layer `{ name, file, values:
  * { key: raw } }` or null. Returns the resolved object or `{ error }`. The last token for a key
- * wins. A `profile=<name>` token without a layer returns the profile as pending.
+ * wins. A `profile=<name>` token without a layer returns the profile as pending. With `mode: "doc"`
+ * the one path token is the target `{ kind: "doc", ref }`, and DOC_IGNORED keys are ignored.
  */
-export function resolveSettings(tokens, { profile = null } = {}) {
+export function resolveSettings(tokens, { profile = null, mode = null } = {}) {
+  const doc = mode === "doc"
   const settings = {}
   for (const [key, { default: value }] of Object.entries(SETTINGS)) settings[key] = { value, source: "default" }
+  if (doc) settings.sceptic = { value: "basic", source: "default" }
   const clamped = new Set()
+  const ignored = []
 
   if (profile) {
     const layer = parseProfileValues(profile.values, profile.layer)
     if (layer.error) return { error: `profile ${profile.name}: ${layer.error}` }
     for (const { key, value, clamped: isClamped } of layer.parsed) {
+      if (doc && DOC_IGNORED.has(key)) {
+        ignored.push({ token: `${key}=${renderValue(key, value)}`, reason: `profile ${profile.name}: ${DOC_IGNORED_REASON}` })
+        continue
+      }
       settings[key] = { value, source: "profile" }
       if (isClamped) clamped.add(key)
     }
   }
 
-  let target = { kind: "uncommitted", ref: null }
+  let target = doc ? null : { kind: "uncommitted", ref: null }
   let targetToken = null
   let profileName = null
   const tokenOf = {}
-  const ignored = []
   for (const token of tokens) {
     const word = token.startsWith("--") ? token.slice(2) : token
-    if (TARGETS.some((re) => re.test(word))) {
+    const isTarget = TARGETS.some((re) => re.test(word))
+    if (doc && isTarget) return { error: `${token}: plan-review takes a document path, not a PR` }
+    // In doc mode the path comes before TARGET_LIKE, so `notes#2.md` is a path.
+    if (doc && !(word.indexOf("=") > 0) && !SHORTHANDS[word.toLowerCase()]) {
+      if (target) return { error: `${token}: one document per run` }
+      target = { kind: "doc", ref: token }
+      continue
+    }
+    if (isTarget) {
       if (targetToken) ignored.push({ token: targetToken, reason: `overridden by ${token}` })
       target = { kind: "pr", ref: word }
       targetToken = token
@@ -278,12 +296,18 @@ export function resolveSettings(tokens, { profile = null } = {}) {
     }
     const result = parseValue(key, raw)
     if (result.error) return { error: result.error }
+    if (doc && DOC_IGNORED.has(key)) {
+      ignored.push({ token, reason: DOC_IGNORED_REASON })
+      continue
+    }
     if (tokenOf[key]) ignored.push({ token: tokenOf[key], reason: `overridden by ${token}` })
     tokenOf[key] = token
     settings[key] = { value: result.value, source: "flag" }
     if (result.clamped) clamped.add(key)
     else clamped.delete(key)
   }
+
+  if (!target) return { error: "plan-review needs a document path" }
 
   const noPiLane = ["codex", "claude-cli"].includes(settings.consultant.value) && settings.extra.value === "off"
   if (noPiLane && settings["pi-model"].source === "flag") {
@@ -296,7 +320,7 @@ export function resolveSettings(tokens, { profile = null } = {}) {
     settings.base = { value: null, source: "default" }
   }
 
-  const lines = renderLines(settings, ignored, clamped, profile)
+  const lines = renderLines(settings, ignored, clamped, profile, doc)
   if (profile) {
     return { schema: 1, target, settings, ignored, profile: { name: profile.name, layer: profile.layer ?? "repo", file: profile.file ?? null }, lines }
   }
@@ -494,9 +518,10 @@ const fail = (message) => {
 const applyProfile = ({ wd, repo, mode, run, sources }) => {
   const argsFile = join(wd, "args.txt")
   const diffFile = join(wd, "diff.patch")
-  if ((mode && mode !== "uncommitted") || !existsSync(argsFile)) return fail(USAGE)
+  if ((mode && mode !== "uncommitted" && mode !== "doc") || !existsSync(argsFile)) return fail(USAGE)
   const tokens = readTokens(argsFile)
-  const pending = resolveSettings(tokens)
+  const docMode = mode === "doc" ? "doc" : null
+  const pending = resolveSettings(tokens, { mode: docMode })
   if (pending.error) return fail(pending.error)
   if (!pending.profile) return fail("no profile=<name> in args.txt")
   const { name } = pending.profile
@@ -504,7 +529,7 @@ const applyProfile = ({ wd, repo, mode, run, sources }) => {
   const changed = repo ? parseDiff(readFileSync(diffFile, "utf8")).flatMap((s) => [s.path, s.oldPath]).filter(Boolean) : []
   const profile = loadProfile({ repo, name, changed, run, sources })
   if (profile.error) return fail(profile.error)
-  const resolved = resolveSettings(tokens, { profile })
+  const resolved = resolveSettings(tokens, { profile, mode: docMode })
   if (resolved.error) return fail(resolved.error)
   process.stdout.write(writeSettings(wd, resolved))
   return 0
@@ -783,7 +808,8 @@ export function main(argv, { run, sources } = {}) {
     return applyProfile({ wd: values.wd, repo: values.repo ?? null, mode: values.mode ?? null, run, sources })
   }
   if (positionals[0] !== "resolve" || !file || !existsSync(file)) return fail(USAGE)
-  const resolved = resolveSettings(readTokens(file))
+  if (values.mode && values.mode !== "doc") return fail(USAGE)
+  const resolved = resolveSettings(readTokens(file), { mode: values.mode ?? null })
   if (resolved.error) return fail(resolved.error)
   process.stdout.write(writeSettings(values.wd, resolved))
   return 0

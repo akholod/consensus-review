@@ -55,8 +55,11 @@ function inWindow(lines, line, quote) {
   return false
 }
 
-/** → {verified, reason, source: "diff"|"head"|null}. Never throws. */
-export function checkCitation({ citation, diffText, readHeadFile }) {
+/**
+ * → {verified, reason, source: "diff"|"head"|null}. Never throws. A citation of `diffOnly` (a path)
+ * is checked against the diff alone, never the head reader.
+ */
+export function checkCitation({ citation, diffText, readHeadFile, diffOnly = null }) {
   try {
     const { file, line: rawLine, quote } = citation ?? {}
     if (typeof file !== "string" || typeof quote !== "string"
@@ -70,7 +73,7 @@ export function checkCitation({ citation, diffText, readHeadFile }) {
     if (!safePath(file)) return fail("unsafe path")
     const diffLines = newSideLines(diffText, file)
     if (diffLines && inWindow(diffLines, line, quote)) return { verified: true, reason: null, source: "diff" }
-    if (!readHeadFile) return fail(diffLines ? "quote not found in diff" : "cannot verify outside diff")
+    if (!readHeadFile || file === diffOnly) return fail(diffLines ? "quote not found in diff" : "cannot verify outside diff")
     const content = readHeadFile(file)
     if (typeof content !== "string") return fail("file not readable at head")
     const headLines = new Map(content.split("\n").map((text, i) => [i + 1, text]))
@@ -117,7 +120,7 @@ export function makeReadHeadFile({ repo, headSha }) {
 }
 
 /** The `verifyCitation(citation)` that decideSceptic takes. */
-export function makeVerifyCitation({ diffText, repo, headSha }) {
+export function makeVerifyCitation({ diffText, repo, headSha, docLabel = null }) {
   const readHeadFile = makeReadHeadFile({ repo, headSha })
-  return (citation) => checkCitation({ citation, diffText, readHeadFile })
+  return (citation) => checkCitation({ citation, diffText, readHeadFile, diffOnly: docLabel })
 }

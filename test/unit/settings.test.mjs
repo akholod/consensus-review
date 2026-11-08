@@ -314,13 +314,13 @@ test("E3: effort roles and values are case-insensitive", () => {
 })
 
 const ROLE_MAP_ERRORS = [
-  ["M4", "models=arch:opus", "models=arch:opus: unknown role arch (expected architecture|impact|quality|tests|verifier)"],
+  ["M4", "models=arch:opus", "models=arch:opus: unknown role arch (expected architecture|impact|quality|tests|plan|verifier)"],
   ["M4", "models=impact:gpt", "models=impact:gpt: unknown model gpt (expected opus|sonnet|haiku|fable)"],
   ["M4", "models=impact:opus,impact:sonnet", "models=impact:opus,impact:sonnet: duplicate role impact"],
   ["M4", "models=impact:opus,", "models=impact:opus,: empty item"],
   ["M4", "models=impact", "models=impact: item impact is not role:model"],
   ["M4", "models=", "models=: expected agent or role:model items"],
-  ["E4", "effort=arch:high", "effort=arch:high: unknown role arch (expected architecture|impact|quality|tests|verifier)"],
+  ["E4", "effort=arch:high", "effort=arch:high: unknown role arch (expected architecture|impact|quality|tests|plan|verifier)"],
   ["E4", "effort=impact:huge", "effort=impact:huge: unknown effort huge (expected low|medium|high|xhigh|max)"],
   ["E4", "effort=impact:high,impact:low", "effort=impact:high,impact:low: duplicate role impact"],
   ["E4", "effort=impact:high,", "effort=impact:high,: empty item"],
@@ -1183,4 +1183,139 @@ test("I8: outside a git repository init exits 2", () => {
   assert.equal(run.status, 2)
   assert.match(run.stderr, /^not a git repository/)
   assert.equal(existsSync(join(dir, "repo", ".consensus-review")), false)
+})
+
+// ---------------------------------------------------------------------------------------------
+// doc mode (/plan-review). Expected values come from the "Other decisions: Settings, Profiles,
+// Roles" sections and the S rows of .omc/plans/issue-4-plan-review.md.
+// ---------------------------------------------------------------------------------------------
+
+const doc = (tokens, options = {}) => resolveSettings(tokens, { mode: "doc", ...options })
+
+test("S1: a path is the doc target, sceptic defaults to basic, nothing is ignored", () => {
+  const r = doc(["docs/p.md"])
+  assert.deepEqual(r.target, { kind: "doc", ref: "docs/p.md" })
+  assert.deepEqual(r.settings, { ...DEFAULTS, sceptic: { value: "basic", source: "default" } })
+  assert.deepEqual(r.ignored, [])
+  assert.match(r.lines.settings, /^Settings: sceptic=basic \(default\) \| /)
+})
+
+test("S1d: the doc-mode Settings line leaves out the keys plan-review does not use", () => {
+  assert.equal(doc(["docs/p.md"]).lines.settings,
+    "Settings: sceptic=basic (default) | lang=en (default) | out=default (default) | archive=on (default) | consultant=auto (default) | extra=off (default) | pi-model=auto (default) | timeout=900 (default) | models=agent (default) | effort=agent (default)")
+})
+
+test("S1b: notes#2.md is a path, not a malformed PR target", () => {
+  assert.deepEqual(doc(["notes#2.md"]).target, { kind: "doc", ref: "notes#2.md" })
+})
+
+test("S1c: sceptic=strict opts in", () => {
+  assert.deepEqual(doc(["docs/p.md", "sceptic=strict"]).settings.sceptic, { value: "strict", source: "flag" })
+})
+
+test("S2: dims, depth and lenses are ignored as not used by plan-review and keep their defaults", () => {
+  const r = doc(["docs/p.md", "dims=impact", "depth=deep", "lenses=none"])
+  assert.deepEqual(r.ignored, [
+    { token: "dims=impact", reason: "not used by plan-review" },
+    { token: "depth=deep", reason: "not used by plan-review" },
+    { token: "lenses=none", reason: "not used by plan-review" },
+  ])
+  assert.equal(r.settings.dims.value, "tier")
+  assert.equal(r.settings.depth.value, "auto")
+  assert.equal(r.settings.lenses.value, "auto")
+  assert.equal(r.lines.ignored,
+    "Ignored args: dims=impact (not used by plan-review), depth=deep (not used by plan-review), lenses=none (not used by plan-review)")
+})
+
+test("S3: the minimal shorthand and base= are ignored too", () => {
+  const r = doc(["docs/p.md", "minimal", "base=main"])
+  assert.deepEqual(r.ignored, [
+    { token: "minimal", reason: "not used by plan-review" },
+    { token: "base=main", reason: "not used by plan-review" },
+  ])
+  assert.equal(r.settings.depth.value, "auto")
+  assert.equal(r.settings.base.value, null)
+})
+
+const DOC_ERRORS = [
+  ["S4", ["#12"], "#12: plan-review takes a document path, not a PR"],
+  ["S4", ["docs/p.md", "https://github.com/o/r/pull/12"], "https://github.com/o/r/pull/12: plan-review takes a document path, not a PR"],
+  ["S5", ["a.md", "b.md"], "b.md: one document per run"],
+  ["S6", ["sceptic=basic"], "plan-review needs a document path"],
+  ["S6", [], "plan-review needs a document path"],
+  ["S7", ["docs/p.md", "sceptic=bogus"], "sceptic=bogus: expected off|basic|strict"],
+]
+for (const [id, tokens, error] of DOC_ERRORS) {
+  test(`${id}: ${JSON.stringify(tokens)} stops with its literal message`, () => {
+    assert.deepEqual(doc(tokens), { error })
+  })
+}
+
+test("S8: models accepts the plan role, in role order before verifier", () => {
+  const r = doc(["docs/p.md", "models=verifier:opus,plan:sonnet"])
+  assert.equal(JSON.stringify(r.settings.models.value), '{"plan":"sonnet","verifier":"opus"}')
+  assert.equal(JSON.stringify(resolveSettings(["effort=plan:high"]).settings.effort.value), '{"plan":"high"}')
+})
+
+test("S9: without a mode nothing changes: #12 deep is a PR target with the strict default", () => {
+  const r = resolveSettings(["#12", "deep"])
+  assert.deepEqual(r.target, { kind: "pr", ref: "#12" })
+  assert.deepEqual(r.settings, { ...DEFAULTS, depth: { value: "deep", source: "flag" } })
+  assert.deepEqual(resolveSettings(["notes#2.md"]), { error: "notes#2.md: not a valid PR target (letters, digits and ._-/#=? only)" })
+})
+
+test("S10: a profile's sceptic applies; its dims are ignored with the profile named", () => {
+  const r = doc(["docs/p.md"], { profile: { name: "x", values: { dims: "+tests", sceptic: "strict" } } })
+  assert.deepEqual(r.settings.sceptic, { value: "strict", source: "profile" })
+  assert.equal(r.settings.dims.value, "tier")
+  assert.deepEqual(r.ignored, [{ token: "dims=+tests", reason: "profile x: not used by plan-review" }])
+  assert.match(r.lines.settings, /sceptic=strict \(profile x\)/)
+})
+
+/** `resolve --mode doc` then `profile --mode doc`, no --repo unless given, as plan-review §0 and §1.5 run them. */
+function docProfile(args, extra = []) {
+  const wd = mkdtempSync(join(tmpdir(), "settings-doc-"))
+  dirs.push(wd)
+  writeFileSync(join(wd, "args.txt"), args)
+  const first = spawnSync(process.execPath, [SCRIPT, "resolve", "--wd", wd, "--args-file", join(wd, "args.txt"), "--mode", "doc"], { encoding: "utf8" })
+  assert.equal(first.status, 0, first.stderr)
+  const before = readFileSync(join(wd, "settings.json"), "utf8")
+  const run = spawnSync(process.execPath, [SCRIPT, "profile", "--wd", wd, "--mode", "doc", ...extra], { encoding: "utf8" })
+  const after = readFileSync(join(wd, "settings.json"), "utf8")
+  return { ...run, before, after, saved: JSON.parse(after) }
+}
+
+test("S12: profile=release on notes#2.md keeps the doc target and the basic default, ignores depth", () => {
+  const run = docProfile("notes#2.md profile=release")
+  assert.equal(run.status, 0, run.stderr)
+  assert.deepEqual(run.saved.target, { kind: "doc", ref: "notes#2.md" })
+  assert.deepEqual(run.saved.settings.sceptic, { value: "basic", source: "default" })
+  assert.deepEqual(run.saved.settings.extra, { value: "pi", source: "profile" })
+  assert.deepEqual(run.saved.settings.depth, { value: "auto", source: "default" })
+  assert.match(run.saved.lines.settings, /extra=pi \(profile release, builtin\)/)
+  assert.deepEqual(run.saved.ignored, [{ token: "depth=deep", reason: "profile release: not used by plan-review" }])
+})
+
+test("S11: doc-only (no --repo) applies the built-in quick; a repo-only name is the diff-only stop", () => {
+  const quick = docProfile("docs/p.md profile=quick")
+  assert.equal(quick.status, 0, quick.stderr)
+  assert.equal(quick.saved.profile.layer, "builtin")
+  assert.deepEqual(quick.saved.settings.sceptic, { value: "basic", source: "profile" })
+  assert.deepEqual(quick.saved.ignored, [
+    { token: "depth=minimal", reason: "profile quick: not used by plan-review" },
+    { token: "dims=+quality", reason: "profile quick: not used by plan-review" },
+  ])
+  assertStops(docProfile("docs/p.md profile=ci"), "profile=ci: needs the repository (diff-only mode)")
+})
+
+test("CLI: resolve --mode doc writes the doc target; another mode is a usage error", () => {
+  const wd = mkdtempSync(join(tmpdir(), "settings-doc-"))
+  dirs.push(wd)
+  writeFileSync(join(wd, "args.txt"), "docs/p.md\n")
+  const ok = spawnSync(process.execPath, [SCRIPT, "resolve", "--wd", wd, "--args-file", join(wd, "args.txt"), "--mode", "doc"], { encoding: "utf8" })
+  assert.equal(ok.status, 0, ok.stderr)
+  assert.deepEqual(JSON.parse(readFileSync(join(wd, "settings.json"), "utf8")).target, { kind: "doc", ref: "docs/p.md" })
+  const bad = spawnSync(process.execPath, [SCRIPT, "resolve", "--wd", wd, "--args-file", join(wd, "args.txt"), "--mode", "pr"], { encoding: "utf8" })
+  assert.equal(bad.status, 2)
+  assert.match(bad.stderr, /^usage:/)
 })

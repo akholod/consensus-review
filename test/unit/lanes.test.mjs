@@ -187,6 +187,28 @@ test("parsePiOutput: a finding that breaks contracts/finding.schema.json is unpa
   }
 })
 
+const PLAN_SCHEMA = new URL("../../contracts/plan-finding.schema.json", import.meta.url).pathname
+
+test("L3: dimension impact under the plan schema is unparseable and the reason names plan-finding.schema.json", () => {
+  const got = parsePiOutput(piEvents(block([finding("x")])), "findings", PLAN_SCHEMA)
+  assert.equal(got.status, "unparseable")
+  assert.match(got.reason, /^output does not match contracts\/plan-finding\.schema\.json/)
+})
+
+test("L1: dimension feasibility is ok under the plan schema (pi, codex, claude-cli)", () => {
+  const items = [{ ...finding("x"), dimension: "feasibility", owner: "scope" }]
+  assert.equal(parsePiOutput(piEvents(block(items)), "findings", PLAN_SCHEMA).status, "ok")
+  assert.equal(classifyPiResult({ rc: 0, timedOut: false, out: piEvents(block(items)), schema: PLAN_SCHEMA }).status, "ok")
+  withTmp((dir) => {
+    const out = join(dir, "codex.json")
+    writeFileSync(out, JSON.stringify({ findings: items }))
+    assert.equal(classifyCodexResult({ rc: 0, timedOut: false, outPath: out, schema: PLAN_SCHEMA }).status, "ok")
+    assert.equal(classifyCodexResult({ rc: 0, timedOut: false, outPath: out }).status, "unparseable")
+  })
+  const envelope = JSON.stringify({ type: "result", stop_reason: "end_turn", structured_output: { findings: items } })
+  assert.equal(classifyClaudeResult({ rc: 0, timedOut: false, out: envelope, schema: PLAN_SCHEMA }).status, "ok")
+})
+
 test("classifyCodexResult: a finding that breaks the contract is unparseable", () => {
   withTmp((dir) => {
     const out = join(dir, "codex.json")

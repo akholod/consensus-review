@@ -34,6 +34,10 @@ disallowedTools: Write, Edit
     `id`, `title`, `file:line`, `severity`, `dimension`, claimed `failure_scenario`, `source`, `rationale`.
   </Inputs>
 
+  <Document_Mode>
+    When the findings are about a document (a plan or spec under `/plan-review`), `diff.patch` is that document as a new file, and `file:line` is the document label and its line. Each claim is "built as written → this consequence". Refute it by quoting the document (the new side of `diff.patch`, `file` = the label exactly as given) or the code in the repo. The vote shape is unchanged.
+  </Document_Mode>
+
   <Verification_Protocol>
     For EACH finding:
     1. Reconstruct the claim precisely: what input/state → what wrong output/harm.

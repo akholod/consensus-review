@@ -108,6 +108,7 @@ radius first, and a docs-only diff skips the panel entirely.
 | `/test-review`                  | whether the tests catch realistic regressions                |
 | `/arch-review`                  | architectural impact of the change                           |
 | `/architecture-audit`           | the whole project's architecture, not just a diff            |
+| `/consensus-review:plan-review` | a plan, spec or design doc, before code exists               |
 | `/consensus-review:doctor`      | what a broken setup would silently do to a review            |
 | `/consensus-review:profile`     | create, update or list review profiles                       |
 | `/consensus-review:init-lenses` | copy the built-in lenses and profiles into the repo          |
@@ -126,6 +127,7 @@ Flags: [docs/consensus-review.md](https://github.com/akholod/consensus-review/bl
   succeeded and every risk cell was covered with evidence; that rule is
   in code, not in a prompt.
 - You want one angle only: the single-dimension commands.
+- You have a plan, spec or design doc and no code yet: `/consensus-review:plan-review` ([docs](https://github.com/akholod/consensus-review/blob/main/docs/plan-review.md)).
 
 ## Profiles
 
@@ -171,6 +173,7 @@ and [Models](https://github.com/akholod/consensus-review/blob/main/docs/models.m
 - [Install](https://github.com/akholod/consensus-review/blob/main/docs/install.md): step by step, written for an agent but fine by hand.
 - [consensus-review](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md): flags, triage tiers, how findings are merged and verified.
 - [loop-review](https://github.com/akholod/consensus-review/blob/main/docs/loop-review.md): passes, coverage cells, terminal states, cost.
+- [plan-review](https://github.com/akholod/consensus-review/blob/main/docs/plan-review.md): a plan or spec before code exists, its settings, limits and report.
 - [Models](https://github.com/akholod/consensus-review/blob/main/docs/models.md): which model each part runs on, and how to change it.
 - [Troubleshooting](https://github.com/akholod/consensus-review/blob/main/docs/troubleshooting.md): what the doctor's warnings mean.
 - [Changelog](https://github.com/akholod/consensus-review/blob/main/CHANGELOG.md).

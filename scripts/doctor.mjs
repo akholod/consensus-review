@@ -160,7 +160,7 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
   {
     const problems = lint(ROOT)
     add("contracts", "agents and prompts", problems.length ? "fail" : "ok",
-      problems.length ? problems.map((p) => `${p.file}:${p.line} ${p.message}`).join("; ") : "5 agents, vocabulary and dispatch intact",
+      problems.length ? problems.map((p) => `${p.file}:${p.line} ${p.message}`).join("; ") : "6 agents, vocabulary and dispatch intact",
       problems.length ? "an agent may be undispatchable, or a read-only guarantee may be gone" : "")
 
     const sync = sh("node", [join(ROOT, "scripts/gen-contracts.mjs"), "--check"], { cwd: ROOT })
@@ -176,7 +176,7 @@ export function diagnose({ root = SELF, repo = process.cwd(), offline = false, c
       return `${model}/${text.match(/^effort:\s*(\S+)/m)?.[1] ?? "session"}`
     }
     const models = ["arch", "impact", "quality", "test"].map((n) => `${n}=${modelOf(`agents/${n}-reviewer.md`)}`)
-    add("contracts", "dimension models", "ok", `${models.join(" ")} verifier=${modelOf("agents/finding-verifier.md")}`,
+    add("contracts", "dimension models", "ok", `${models.join(" ")} plan=${modelOf("agents/plan-reviewer.md")} verifier=${modelOf("agents/finding-verifier.md")}`,
       "a profile or `models=` / `effort=` may override")
 
     // Per-invocation effort on subagents arrived in Claude Code 2.1.292; an older CLI ignores it silently.

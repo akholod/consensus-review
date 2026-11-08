@@ -177,6 +177,29 @@ export function lint(root) {
     if (!runs.refuter) fail("commands/consensus-review.md", 1, 'L7: the §8 refuter run line (`node "$H" run ` … `-refuter`) is missing')
   }
 
+  // L7 on plan-review.md: the §5 lines validate against the plan schema, the §8 refuter lines keep the
+  // default verdict schema, and no lenses reach either (none apply to a document).
+  const plan = join(commandsDir, "plan-review.md")
+  if (existsSync(plan)) {
+    const rel = "commands/plan-review.md"
+    const lines = readFileSync(plan, "utf8").split("\n")
+    const runs = { consultant: 0, refuter: 0 }
+    lines.forEach((line, i) => {
+      if (!line.trim().startsWith('node "$H" run ')) return
+      let run = line
+      for (let j = i; lines[j]?.trimEnd().endsWith("\\"); j++) run += lines[j + 1]
+      const refuter = run.includes("-refuter")
+      runs[refuter ? "refuter" : "consultant"]++
+      if (run.includes("--lenses-file")) fail(rel, i + 1, "L7: a plan-review run line passes `--lenses-file`; lenses do not apply to a document")
+      if (refuter && run.includes("--schema")) fail(rel, i + 1, "L7: the refuter run line passes `--schema`; refuters keep the default verdict schema")
+      if (!refuter && !/--schema "[^"]*plan-finding\.schema\.json"/.test(run)) {
+        fail(rel, i + 1, "L7: the §5 run line must pass `--schema` with `plan-finding.schema.json`")
+      }
+    })
+    if (!runs.consultant) fail(rel, 1, 'L7: the §5 consultant run line (`node "$H" run `) is missing')
+    if (!runs.refuter) fail(rel, 1, 'L7: the §8 refuter run line (`node "$H" run ` … `-refuter`) is missing')
+  }
+
   return problems
 }
 

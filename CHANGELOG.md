@@ -4,6 +4,19 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
 
 ## Unreleased
 
+- **Added — `/consensus-review:plan-review <path>`**
+  ([#4](https://github.com/akholod/consensus-review/issues/4)): review of
+  one plan, spec or design doc before code exists, across five document
+  dimensions (feasibility, completeness, ambiguity, scope, testability)
+  with an `Open questions for the author` section. It ignores `depth`,
+  `deep`, `minimal`, `dims`, `lenses` and `base` (`not used by
+  plan-review`) and defaults to `sceptic=basic`. The report goes to
+  `.reviews/plan-review-<slug>-<date>.md` (`-2`, `-3` when taken). Outside
+  a git repository feasibility is not checked and no archive is written.
+
+- **Changed — `models`/`effort` accept the role `plan`**, and lane
+  validation follows the lane's `--schema`.
+
 - **Fixed — a PR diff fetched without `gh` can no longer come back empty
   as "no changes"** (codex review of
   [#12](https://github.com/akholod/consensus-review/issues/12)). `curl`

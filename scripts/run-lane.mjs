@@ -9,6 +9,7 @@
 //       [--skip <why> [--skip-reason <r>]] [--from-decision <file>] [--kill-grace <sec>] [--lenses-file <file>]
 //   decide --wd <dir> --phase review|sceptic --lanes <name,name> [--ids-file <file>, default <wd>/ids.json]
 //       [--repo <dir>] [--diff <file>, default <wd>/diff.patch] [--head-sha <worktree|40-hex>]   (sceptic only)
+//       [--doc-label <path>]   (sceptic only: citations of this path are checked against the diff alone)
 //
 // Each attempt runs in its own process group, which is killed whenever the attempt settles, so a
 // grandchild never outlives its attempt. A killed helper writes no status; `decide` reports that.
@@ -31,7 +32,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const OPTIONS = {
   ...Object.fromEntries(
     ["wd", "name", "repo", "brief-file", "timeout", "schema", "model", "require-key", "ids-file", "skip", "skip-reason",
-      "from-decision", "kill-grace", "lenses-file", "phase", "lanes", "consultant", "pi-model", "diff", "head-sha"].map((k) => [k, { type: "string" }]),
+      "from-decision", "kill-grace", "lenses-file", "phase", "lanes", "consultant", "pi-model", "diff", "head-sha", "doc-label"].map((k) => [k, { type: "string" }]),
   ),
   extra: { type: "boolean" },
 }
@@ -80,7 +81,7 @@ const killGroup = (pid, signal) => {
 
 let active = null // the attempt's group leader, killed on any helper exit
 
-function attempt({ lane, wd, file, cmd, seconds, grace, requireKey, onSpawned }) {
+function attempt({ lane, wd, file, cmd, seconds, grace, requireKey, schema, onSpawned }) {
   const started = performance.now()
   const log = openSync(join(wd, `${file}.log`), "w")
   const child = spawn(cmd.bin, cmd.args, { cwd: cmd.cwd, env: cmd.env, detached: true, stdio: ["ignore", log, log] })
@@ -104,7 +105,7 @@ function attempt({ lane, wd, file, cmd, seconds, grace, requireKey, onSpawned })
       active = null
       closeSync(log)
       const text = spawnError ?? readFileSync(join(wd, `${file}.log`), "utf8")
-      const result = CLASSIFY[lane]({ rc, timedOut, text, outPath: join(wd, `${file}.json`), requireKey })
+      const result = CLASSIFY[lane]({ rc, timedOut, text, outPath: join(wd, `${file}.json`), requireKey, schema })
       resolve({ ...result, rc, seconds: Number(((performance.now() - started) / 1000).toFixed(2)) })
     }
     child.once("error", (err) => settle(err.code === "ENOENT" ? 127 : 126, `${err.message}\n`))
@@ -156,7 +157,7 @@ async function runLane(lane, v, { onSpawned }) {
     const file = `${name}.a${n}`
     const cmd = laneCommand(lane, { repo: v.repo, wd, schema, out: join(wd, `${file}.json`), model: v.model, brief })
     const startedAt = new Date().toISOString()
-    result = await attempt({ lane, wd, file, cmd, seconds, grace, requireKey, onSpawned })
+    result = await attempt({ lane, wd, file, cmd, seconds, grace, requireKey, schema, onSpawned })
     const record = { n, startedAt, status: result.status, reason: result.reason ?? null, rc: result.rc, seconds: result.seconds }
     if (result.status === "ok" && ids) {
       const { status, ignored, duplicates } = parseVotes(result.payload, ids)
@@ -232,7 +233,7 @@ export function buildVerifyCitation(v) {
   try {
     diffText = readFileSync(v.diff ?? join(v.wd, "diff.patch"), "utf8")
   } catch {}
-  return makeVerifyCitation({ diffText, repo: v.repo, headSha: v["head-sha"] })
+  return makeVerifyCitation({ diffText, repo: v.repo, headSha: v["head-sha"], docLabel: v["doc-label"] ?? null })
 }
 
 function decide(v) {

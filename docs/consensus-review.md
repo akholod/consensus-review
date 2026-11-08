@@ -368,6 +368,8 @@ such as `main..HEAD`, or a path) and `lang=`.
 `/architecture-audit` is different: it reviews the whole project's
 architecture, not a diff, and is heavier.
 
+To review a plan, spec or design doc before code exists, see [plan-review](plan-review.md).
+
 ## Project lenses
 
 A lens is a project rule the reviewers apply to the files it names. Lenses

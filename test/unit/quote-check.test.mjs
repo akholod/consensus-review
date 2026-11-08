@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { checkCitation, newSideLines, safePath } from "../../scripts/lib/quote-check.mjs"
+import { docDiff } from "../../scripts/plan-input.mjs"
 
 // src/auth.js new side: lines 10..14; lines 11 and 12 are added.
 const DIFF = `diff --git a/src/auth.js b/src/auth.js
@@ -103,4 +104,46 @@ test("paths './x', '../x', 'a/../x' and absolute are rejected before any read", 
   }
   assert.equal(reads, 0)
   assert.equal(safePath("a..b/c.js"), true)
+})
+
+// /plan-review: the document as a new-file diff (plan-input.mjs) and the diffOnly label. Expected
+// values come from "Other decisions: Diff label" and the Q rows of .omc/plans/issue-4-plan-review.md.
+const DOC = "step one reads the plan\nstep two uses run-lane\n"
+const DOC_DIFF = docDiff("docs/p.md", DOC)
+const STEP_TWO = { file: "docs/p.md", line: "2", quote: "step two uses run-lane" }
+const docCheck = (citation, readHeadFile = null, diffOnly = null, diffText = DOC_DIFF) =>
+  checkCitation({ citation, diffText, readHeadFile, diffOnly })
+
+test("Q1: a verbatim document quote verifies on the synthesized diff's new side", () => {
+  const lines = newSideLines(DOC_DIFF, "docs/p.md")
+  assert.equal(lines.get(1), "step one reads the plan")
+  assert.equal(lines.get(2), "step two uses run-lane")
+  ok(docCheck(STEP_TWO), "diff")
+})
+
+test("Q2: a quote that is not in the document does not verify", () => {
+  no(docCheck({ ...STEP_TWO, quote: "step three edits settings" }), "quote not found in diff")
+})
+
+test("Q3: the outside-repo label .plan-review/<basename> is a safe path", () => {
+  assert.equal(safePath(".plan-review/plan.md"), true)
+})
+
+test("Q4: diffOnly ignores a worktree copy edited after prepare to hold the quote", () => {
+  const edited = reader({ "docs/p.md": "step one reads the plan\nstep two edits settings.mjs\n" })
+  const quote = { ...STEP_TWO, quote: "step two edits settings.mjs" }
+  ok(docCheck(quote, edited), "head") // without diffOnly the worktree would answer
+  no(docCheck(quote, edited, "docs/p.md"), "quote not found in diff")
+})
+
+test("Q5: a real .plan-review/plan.md in the repo never verifies a quote the reviewed doc lacks", () => {
+  const diff = docDiff(".plan-review/plan.md", DOC)
+  const planted = reader({ ".plan-review/plan.md": "the planted text says yes\n" })
+  const citation = { file: ".plan-review/plan.md", line: "1", quote: "the planted text says yes" }
+  no(docCheck(citation, planted, ".plan-review/plan.md", diff), "quote not found in diff")
+})
+
+test("Q6: a code citation still reads the worktree under diffOnly", () => {
+  const code = reader({ "scripts/x.mjs": "export const x = parseValue(raw)\n" })
+  ok(docCheck({ file: "scripts/x.mjs", line: "1", quote: "export const x = parseValue(raw)" }, code, "docs/p.md"), "head")
 })
