@@ -52,14 +52,14 @@ What each setting means (`settings.<key>.value`):
 `WD` and `INVOKE` come from §0, as literals.
 
 **PR mode:**
-- gh repo resolution (for `gh pr view`): a full URL is self-describing. For `owner/repo#N` and `#N` pass `-R '<owner/repo>'` (otherwise `gh pr view` from a non-git dir fails with "not a git repository"). Bare `#N` without owner/repo: try to derive the repo from the cwd git remote, else stop and ask for `owner/repo#N` or a URL.
-- When `gh` is available and authenticated: `gh pr view '<target>' [-R '<owner/repo>'] --json title,baseRefName,headRefName,headRefOid,url` (metadata only, **no** `body`). Without `gh`, skip this and the second `gh pr view` below.
+- gh selector (for both `gh pr view` calls): a full URL is passed as is. For `owner/repo#N` and `#N` pass the number alone plus `-R '<owner/repo>'`, i.e. `'<N>' -R '<owner/repo>'` (gh rejects `owner/repo#N` as a selector, and without `-R` a non-git dir fails with "not a git repository"). Bare `#N` without owner/repo: try to derive the repo from the cwd git remote, else stop and ask for `owner/repo#N` or a URL.
+- When `gh` is available and authenticated: `gh pr view '<URL or N>' [-R '<owner/repo>'] --json title,baseRefName,headRefName,headRefOid,url` (metadata only, **no** `body`). Without `gh`, skip this and the second `gh pr view` below.
 - The diff, always in code, in **one** foreground call (never write `gh pr diff` output yourself):
   ```bash
   node "${CLAUDE_PLUGIN_ROOT}/scripts/pr-diff.mjs" --wd '<literal WD>' --repo '<literal INVOKE>' --target '<target.ref>' [--base '<settings.base.value>']
   ```
   `--base` only when `settings.base.value` is set. It tries `gh pr diff` first, then a local clone of the PR's repository (it needs `base=<branch>` and full history, never checks the PR out, and adds git objects but writes no ref, `FETCH_HEAD` or config), then, for a URL or `owner/repo#N`, the public diff over HTTP on the PR's own host (never a token from the environment). It writes `$WD/diff.patch` and prints `{"headSha","baseRef","mode"}`. Exit 2 (no source, or an **empty** diff) → print its stderr message and **stop**: no guessed base, no other fallback, never "no changes".
-- After a `mode: "gh"` diff: `gh pr view '<target>' [-R '<owner/repo>'] --json headRefOid` again.
+- After a `mode: "gh"` diff: `gh pr view '<URL or N>' [-R '<owner/repo>'] --json headRefOid` again.
 - By `mode`:
   - `"gh"` → `HEAD_SHA` = the second `headRefOid` if it equals the first one; if they differ (or either view failed), the PR moved under the diff and `HEAD_SHA` is **empty**. `REPO` = the current clone if it matches the PR; otherwise **diff-only mode** (note it in the report).
   - `"clone"` → `REPO` = the current clone and `HEAD_SHA` = `headSha`.

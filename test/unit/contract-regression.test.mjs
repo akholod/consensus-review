@@ -222,8 +222,10 @@ test("§0 states the single-quote rule and the PR commands quote every pasted va
   const md = command()
   assert.match(section(md, 0), /\*\*Quoting rule:\*\* every value .* goes in \*\*single quotes\*\*/)
   const s1 = section(md, 1)
-  assert.match(s1, /`gh pr view '<target>' \[-R '<owner\/repo>'\] --json title,/)
-  assert.match(s1, /`gh pr view '<target>' \[-R '<owner\/repo>'\] --json headRefOid`/)
+  assert.match(s1, /`gh pr view '<URL or N>' \[-R '<owner\/repo>'\] --json title,/)
+  assert.match(s1, /`gh pr view '<URL or N>' \[-R '<owner\/repo>'\] --json headRefOid`/)
+  assert.doesNotMatch(s1, /gh pr view '<target>'/, "gh rejects owner/repo#N as a selector: views pass N -R owner/repo")
+  assert.match(s1, /`'<N>' -R '<owner\/repo>'`/)
   assert.ok(s1.includes(`pr-diff.mjs" --wd '<literal WD>' --repo '<literal INVOKE>' --target '<target.ref>' [--base '<settings.base.value>']`), s1)
   assert.doesNotMatch(s1, /github\.com|FETCH_HEAD\b(?!`)|git fetch/, "the gh-less PR path lives in pr-diff.mjs, on the PR's own host")
   // Codex re-review, item 2: one PR diff path, so its empty-diff stop covers the gh source too.

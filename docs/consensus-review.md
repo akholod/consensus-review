@@ -473,6 +473,9 @@ file of that name is reported `shadowed by <layer>`:
 - A user file that fails a check or does not parse **reserves** the name:
   no lower layer takes it, and a run that names it in `lenses=` stops. You
   own those bytes; fix them.
+- A user `lenses/` directory that exists but cannot be listed (for
+  example `EACCES`) stops lens selection for every `lenses=` value except
+  `none`: its names are unknown, so nothing below it may take their place.
 - A repository lens that is skipped (`changed in this diff`, `not
   committed`) or rejected does **not** reserve the name, so a diff that
   adds or edits a repo `migrations.md` cannot remove the built-in
