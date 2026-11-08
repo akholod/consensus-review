@@ -969,14 +969,16 @@ export function resolveTarget({ repo, mode, range, prTarget, workDir, base = nul
   }
   if (mode === "pr") {
     // Same target semantics as commands/consensus-review.md §1. Never checks the PR out.
-    const gh = run("gh", ["pr", "diff", prTarget], { cwd: repo, encoding: "utf8", maxBuffer: BIG, stdio: ["ignore", "pipe", "pipe"] })
+    const scope = parseScope(prTarget)
+    // `owner/repo#N` is not a selector gh accepts: pass the number with -R.
+    const ghTarget = scope?.repo && !scope.ref ? [scope.pr, "-R", scope.repo] : [prTarget]
+    const gh = run("gh", ["pr", "diff", ...ghTarget], { cwd: repo, encoding: "utf8", maxBuffer: BIG, stdio: ["ignore", "pipe", "pipe"] })
     // An empty PR diff stops: a source that printed nothing must not become "no changes".
     const nonEmpty = (r) => {
       if (!String(r.diffText).trim()) throw new Error(`PR ${prTarget}: the ${r.mode} diff is empty; nothing to review`)
       return r
     }
     if (!gh.error && gh.status === 0) return nonEmpty({ diffText: gh.stdout, base: null, describe: `PR ${prTarget}`, mode: "gh" })
-    const scope = parseScope(prTarget)
     const noSource = new Error(`${failed(`gh pr diff ${prTarget}`, gh)}; no local clone or public diff URL for it`)
     if (!scope?.pr) throw noSource
     const remote = repo ? prRemote(repo, scope, run) : null

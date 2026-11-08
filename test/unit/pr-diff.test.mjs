@@ -245,6 +245,28 @@ test("gh printing an empty diff stops instead of becoming no changes", () => {
   assert.throws(() => pr(fx, "#1", { run }), { message: "PR #1: the gh diff is empty; nothing to review" })
 })
 
+// §1 now always diffs through pr-diff.mjs, so its gh try must reach owner/repo#N: gh accepts a
+// number, URL or branch as the selector, and the repository only through -R.
+test("gh gets owner/repo#7 as `7 -R owner/repo`, a URL and #N as given", () => {
+  const fx = fixture()
+  const calls = []
+  const run = (cmd, args, options) => {
+    if (cmd !== "gh") return spawnSync(cmd, args, options)
+    calls.push(args)
+    return { status: 0, stdout: "diff --git a/x b/x\n" }
+  }
+
+  pr(fx, "owner/repo#7", { run })
+  pr(fx, "https://github.com/owner/repo/pull/7", { run })
+  pr(fx, "#7", { run })
+
+  assert.deepEqual(calls, [
+    ["pr", "diff", "7", "-R", "owner/repo"],
+    ["pr", "diff", "https://github.com/owner/repo/pull/7"],
+    ["pr", "diff", "#7"],
+  ])
+})
+
 test("a browser URL /pull/7/files?diff=split#r1 curls the canonical .diff URL", () => {
   const fx = fixture()
   git(fx.clone, "config", "remote.origin.url", "https://git.example.com/a/b")

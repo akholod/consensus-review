@@ -21,7 +21,7 @@ or comment on a pull request — and that is enforced, not merely intended:
   `gh`, a `--pr` through a local clone fetches its commits into this repository's object store
   (even with `--no-file`);
 - it writes only the report and its private run archive in the ignored `.reviews/` (`--no-archive`
-  drops the archive; `--no-file` writes nothing at all). Working files live in a temp directory outside the repo.
+  drops the archive; `--no-file` writes neither). Working files live in a temp directory outside the repo.
 
 Applying fixes is a separate, human-initiated step. The intended cycle is: review → a human or a
 separate agent applies changes → review again on the new diff. The runtime recomputes the diff
@@ -35,7 +35,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/loop-review.mjs" [flags]
 
 | Flag | Meaning |
 |---|---|
-| `--pr=<n\|url>` | Review a pull request (reuses the `gh` path; the fallback fetch stays in a temp dir) |
+| `--pr=<n\|url>` | Review a pull request (reuses the `gh` path; the gh-less clone fallback adds git objects to the reviewed clone, never a ref, `FETCH_HEAD` or config) |
 | `--base=<branch>` | The branch the PR targets; without `gh`, a PR from a local clone needs it (and stops otherwise) |
 | `--range=<base..head>` | Review a git range |
 | *(neither)* | Review uncommitted changes against `HEAD` |
@@ -54,12 +54,13 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/loop-review.mjs" [flags]
 | `.reviews/loop-review-<hash>.md` | default report destination |
 | `.reviews/<run-id>/` | private run archive (diff, prompts, raw output, findings, events); only when git ignores `.reviews/`; never written next to `--out`; off with `--no-archive` |
 | `--out=<path>` | report written there instead |
-| `--no-file` | nothing written at all, archive included; report goes to the terminal only |
+| `--no-file` | no report and no archive; report goes to the terminal only |
 | a temp directory | working files, outside the repository, for the duration of the run |
 
-Nothing else is written. Reviewed source, git state and the pull request are never touched. The
-PR fallback path (used when `gh` is unavailable) fetches into the temp directory, so even that
-leaves the invoking repository's refs untouched.
+Nothing else is written, with one exception: the PR fallback path from a local clone (used when
+`gh` is unavailable) fetches the PR's objects into the reviewed clone's object store. It never
+writes a ref, `FETCH_HEAD` or config. Reviewed source, the working tree and the pull request are
+never touched.
 
 ## Reading the result
 

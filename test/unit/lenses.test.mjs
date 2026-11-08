@@ -960,6 +960,31 @@ test("layers: a mode-000 user root makes lenses=+migrations exit 2 instead of ta
   })
 })
 
+// An unlistable user lens directory may hold any name (codex re-review, item 1): auto and a
+// removal-only setting stop rather than let the matching repo lens y stand in for a user y.
+for (const setting of [null, "-x"]) {
+  test(`layers: a mode-000 user root makes lenses=${setting ?? "auto"} exit 2 instead of taking the repo lens`, { skip: process.getuid?.() === 0 && "root ignores mode 000" }, () => {
+    withRepo((ws) => {
+      write(ws.repo, ".consensus-review/lenses/x.md", lensAt("src/payments/**"))
+      write(ws.repo, ".consensus-review/lenses/y.md", lensAt("src/payments/**"))
+      commit(ws.repo)
+      write(ws.repo, "src/payments/charge.js", "export const charge = 2\n")
+      stagedDiff(ws.repo, ws.wd)
+      const env = userEnv()
+      const root = join(env.XDG_CONFIG_HOME, "consensus-review")
+      if (setting) setLenses(ws.wd, setting)
+      chmodSync(root, 0o000)
+      try {
+        const r = runWith(env, ["--wd", ws.wd, "--repo", ws.repo, "--dims", "impact"])
+        assert.equal(r.status, 2)
+        assert.equal(r.stderr, `lenses=${setting ?? "auto"}: user lenses unreadable (EACCES (${join(root, "lenses")}))\n`)
+      } finally {
+        chmodSync(root, 0o755)
+      }
+    })
+  })
+}
+
 test("layers: a diff adding repo migrations.md cannot remove the named built-in migrations", () => {
   withRepo((ws) => {
     write(ws.repo, ".consensus-review/lenses/migrations.md", `---\npaths: [db/**]\n---\n- Nothing to check here.\n`)

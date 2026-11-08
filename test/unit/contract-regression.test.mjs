@@ -223,10 +223,14 @@ test("§0 states the single-quote rule and the PR commands quote every pasted va
   assert.match(section(md, 0), /\*\*Quoting rule:\*\* every value .* goes in \*\*single quotes\*\*/)
   const s1 = section(md, 1)
   assert.match(s1, /`gh pr view '<target>' \[-R '<owner\/repo>'\] --json title,/)
-  assert.match(s1, /`gh pr diff '<target>' \[-R '<owner\/repo>'\] > "\$WD\/diff\.patch"`/)
   assert.match(s1, /`gh pr view '<target>' \[-R '<owner\/repo>'\] --json headRefOid`/)
   assert.ok(s1.includes(`pr-diff.mjs" --wd '<literal WD>' --repo '<literal INVOKE>' --target '<target.ref>' [--base '<settings.base.value>']`), s1)
   assert.doesNotMatch(s1, /github\.com|FETCH_HEAD\b(?!`)|git fetch/, "the gh-less PR path lives in pr-diff.mjs, on the PR's own host")
+  // Codex re-review, item 2: one PR diff path, so its empty-diff stop covers the gh source too.
+  const pr = s1.split("**PR mode:**")[1].split("**Uncommitted mode:**")[0]
+  assert.equal(pr.split("scripts/pr-diff.mjs").length - 1, 1, "PR mode diffs through pr-diff.mjs exactly once")
+  assert.ok(!/\bgh pr diff\b[^\n`]*>/.test(pr), "PR mode never redirects gh pr diff output itself")
+  assert.ok(pr.includes("an **empty** diff) → print its stderr message and **stop**"), pr)
   assert.match(section(md, 0), /written with the `'\\''` escape/)
   assert.doesNotMatch(md, /gh pr (view|diff) <target>|--report <final|--pi-model <m>|--consultant <x>|--model <model>|--wd <literal|--wd <WD>|--repo <literal|--repo "<literal|cd <literal|--head-sha <literal|--args-file <literal|--skip-reason "|WD=\/tmp/)
 })
@@ -360,4 +364,14 @@ test("commands/profile.md is the writer: frontmatter, the helper call, verbatim 
   assert.match(readme, /^\| `\/consensus-review:profile` +\| create, update or list review profiles +\|$/m)
   const manifest = readFileSync(new URL("../../.claude-plugin/plugin.json", import.meta.url), "utf8")
   assert.doesNotMatch(manifest, /Strictly read-only/)
+})
+
+// Codex re-review, item 3: cloneDiff fetches into the reviewed clone, so loop-review.md must not
+// promise a temp-dir fetch or an empty write surface.
+test("loop-review.md states the clone fallback adds objects to the reviewed clone, never a ref", () => {
+  const md = readFileSync(new URL("../../commands/loop-review.md", import.meta.url), "utf8")
+  assert.doesNotMatch(md, /fetch(es)? (stays )?in(to)? (a|the) temp/)
+  assert.doesNotMatch(md, /nothing written at all|writes nothing at all|^Nothing else is written\.\s/m)
+  const surface = md.split("\n## Write surface")[1].split("\n## ")[0]
+  assert.match(surface, /fetches the PR's objects into the reviewed clone's object store\. It never\s+writes a ref, `FETCH_HEAD` or config\./)
 })
