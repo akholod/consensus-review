@@ -176,8 +176,8 @@ const renderValue = (key, value) => {
 
 const renderLines = (settings, ignored, clamped, profile) => {
   // An unset `base` has no default to show.
+  const layer = profile?.layer && profile.layer !== "repo" ? `, ${profile.layer}` : ""
   const parts = Object.entries(settings).filter(([, { value }]) => value !== null).map(([key, { value, source }]) => {
-    const layer = profile?.layer && profile.layer !== "repo" ? `, ${profile.layer}` : ""
     const origin = source === "profile" ? `profile ${profile.name}${layer}` : source
     let note = clamped.has(key) ? `${origin}, clamped` : origin
     if (ROLE_VALUES[key] && value !== "agent") note = `${note}, requested`
@@ -597,10 +597,14 @@ const replaceFile = (dir, name, target, content, mode) => {
   }
 }
 
+const isWorkTree = (repo) => {
+  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  return !inside.error && inside.status === 0
+}
+
 /** /consensus-review:profile: list (no args), print (`<name>`) or write (`<name> key=value…`). Never commits. */
 const editProfile = ({ repo, argsFile, sources }) => {
-  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-  if (inside.error || inside.status !== 0) return fail(`not a git repository (${repo})`)
+  if (!isWorkTree(repo)) return fail(`not a git repository (${repo})`)
   const tokens = readTokens(argsFile)
   if (!tokens.length) return listProfileLines(repo, sources)
   const name = tokens[0]
@@ -706,8 +710,7 @@ const createFile = (dir, target, content) => {
 
 /** /consensus-review:init-lenses: copies presets/{lenses,profiles}/*.md (all, or the names given). Never commits. */
 const initPresets = ({ repo, argsFile }) => {
-  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-  if (inside.error || inside.status !== 0) return fail(`not a git repository (${repo})`)
+  if (!isWorkTree(repo)) return fail(`not a git repository (${repo})`)
   const presets = ["lenses", "profiles"].flatMap((kind) => readdirSync(join(PRESETS, kind))
     .filter((entry) => entry.endsWith(".md")).sort().map((entry) => ({ kind, name: entry.slice(0, -3), entry })))
   const names = readTokens(argsFile)

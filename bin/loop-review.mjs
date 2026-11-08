@@ -62,7 +62,8 @@ const workDir = mkdtempSync(join(tmpdir(), "loop-review-"))
 
 const log = (m) => process.stderr.write(`${m}\n`)
 
-const resolved = resolveTarget({ repo, mode, range: String(range ?? ""), prTarget: String(prTarget ?? ""), workDir, base: base === null ? null : String(base) })
+const targetArgs = { repo, mode, range: String(range ?? ""), prTarget: String(prTarget ?? ""), workDir, base: base === null ? null : String(base) }
+const resolved = resolveTarget(targetArgs)
 if (!resolved.diffText.trim()) {
   log("No changes to review.")
   process.exit(0)
@@ -148,7 +149,7 @@ const run = await runLoop({
 
 // Sample the target again now that all model work is done: a tree that moved during the review
 // makes the run stale, and a stale run is never CLEAN.
-const finalDiff = resolveTarget({ repo, mode, range: String(range ?? ""), prTarget: String(prTarget ?? ""), workDir, base: base === null ? null : String(base) })
+const finalDiff = resolveTarget(targetArgs)
 const finalHash = diffHash(finalDiff.diffText)
 if (finalHash !== ctx.diffHash) log(`diff changed during the run (${ctx.diffHash} -> ${finalHash})`)
 const terminal = evaluateTerminal(run, finalHash)

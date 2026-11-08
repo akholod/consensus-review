@@ -623,13 +623,6 @@ const lensRecord = (name, file, layer, lens) => ({
 })
 
 const PLUGIN_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)))
-const realOrNull = (path) => {
-  try {
-    return realpathSync(path)
-  } catch {
-    return null
-  }
-}
 /** `{ real }`, `{ absent: true }` (ENOENT, ENOTDIR) or `{ error }` (EACCES, ELOOP, ...): only absence is absence. */
 const realOrError = (path) => {
   try {
@@ -661,7 +654,7 @@ const ownerProblem = (st, uid, path) => {
  * path (EACCES, ELOOP, ...) is a `failure`, so it reserves names too; in the built-in layer, a problem.
  */
 export function sourceRoots({ repo = null, kind, env = process.env, pluginRoot = PLUGIN_ROOT, uid = process.getuid?.() ?? null, stat = statSync }) {
-  const repoReal = repo ? realOrNull(repo) ?? resolve(repo) : null
+  const repoReal = repo ? realOrError(repo).real ?? resolve(repo) : null
   const outside = (path) => {
     const { real, absent, error } = realOrError(path)
     if (absent) return { problem: "absent" }
@@ -931,27 +924,27 @@ function cloneDiff({ repo, remote, pr, base, run }) {
   return { diffText: git(["diff", "-M", mergeBase, headSha]), base: mergeBase, headSha, baseRef: base, mode: "clone" }
 }
 
+/** The raw URL of remote `name`, or null: `remote get-url` expands insteadOf, which is the user's routing, not identity. */
+function rawUrl(repo, name, run) {
+  const result = run("git", ["config", "--get", `remote.${name}.url`], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  return result.status === 0 ? result.stdout.trim() : null
+}
+
 /** The remote of `repo` whose raw URL names the PR's repository; `#N` means origin. Null when none does. */
 function prRemote(repo, scope, run) {
-  const rawUrl = (name) => {
-    // The raw value: `remote get-url` expands insteadOf, which is the user's routing, not identity.
-    const result = run("git", ["config", "--get", `remote.${name}.url`], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-    return result.status === 0 ? result.stdout.trim() : null
-  }
-  if (!scope.repo) return rawUrl("origin") ? "origin" : null
+  if (!scope.repo) return rawUrl(repo, "origin", run) ? "origin" : null
   const listed = run("git", ["remote"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
   const names = listed.status === 0 ? listed.stdout.split("\n").filter(Boolean) : []
   const ordered = [...names.filter((name) => name === "origin"), ...names.filter((name) => name !== "origin")]
-  const wanted = scope.ref ? scope.repo : `${originRepo(rawUrl("origin") ?? "")?.split("/")[0]}/${scope.repo}`
-  return ordered.find((name) => originRepo(rawUrl(name) ?? "") === wanted) ?? null
+  const wanted = scope.ref ? scope.repo : `${originRepo(rawUrl(repo, "origin", run) ?? "")?.split("/")[0]}/${scope.repo}`
+  return ordered.find((name) => originRepo(rawUrl(repo, name, run) ?? "") === wanted) ?? null
 }
 
 /** The public diff URL for a PR target, on its own host (a URL's, or origin's for `owner/repo#N`). */
 function diffUrl(repo, scope, run) {
   if (scope.ref) return `${scope.ref.replace(/\/+$/, "")}.diff`
   if (!scope.repo || !repo) return null
-  const origin = run("git", ["config", "--get", "remote.origin.url"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-  const host = origin.status === 0 ? originRepo(origin.stdout)?.split("/")[0] : null
+  const host = originRepo(rawUrl(repo, "origin", run) ?? "")?.split("/")[0]
   return host ? `https://${host}/${scope.repo}/pull/${scope.pr}.diff` : null
 }
 
