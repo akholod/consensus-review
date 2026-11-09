@@ -1,0 +1,248 @@
+{
+  "fixture": "test/fixtures/test-review",
+  "clock": "2026-11-08T00:00:00Z",
+  "entries": [
+    {
+      "id": "S1",
+      "family": "cannot-fail",
+      "test": { "file": "test/coupon.test.js", "names": ["rejects a malformed coupon"], "lines": [5, 12] },
+      "prodLine": "src/coupon.js:13",
+      "severity": { "key": "P1", "accepted": ["P1"] },
+      "match": "the malformed-coupon test would still pass if `parseCoupon` stopped throwing",
+      "check": { "kind": "survives", "file": "src/coupon.js", "line": 13, "from": "throw new InvalidCouponError(code)", "to": "return null" },
+      "loop": "expected",
+      "set": "original"
+    },
+    {
+      "id": "S2",
+      "family": "under-asserted",
+      "test": { "file": "test/receipt.test.js", "names": ["receipt shows the order total"], "lines": [8, 14] },
+      "prodLine": "src/receipt.js:6",
+      "severity": { "key": "P1", "accepted": ["P1", "P2"] },
+      "match": "the receipt-total test would still pass if the `Total:` line were missing from the receipt",
+      "check": { "kind": "survives", "file": "src/receipt.js", "line": 6, "from": "lines.push(`Total: ${formatCents(total)}`)", "to": "" },
+      "loop": "expected",
+      "set": "original"
+    },
+    {
+      "id": "S3",
+      "family": "self-confirming",
+      "test": { "file": "test/inventory.test.js", "names": ["reports available units"], "lines": [5, 10] },
+      "prodLine": "src/inventory.js:5",
+      "severity": { "key": "P1", "accepted": ["P1"] },
+      "match": "the available-units test would still pass if held units were no longer subtracted, because its holds double returns 0 and its expected 7 is the stock double's value",
+      "check": { "kind": "survives", "file": "src/inventory.js", "line": 5, "from": "onHand - held", "to": "onHand" },
+      "loop": "expected",
+      "set": "original"
+    },
+    {
+      "id": "S4",
+      "family": "self-confirming",
+      "test": { "file": "test/loyalty.test.js", "names": ["doubles points for gold orders"], "lines": [5, 7] },
+      "prodLine": "src/loyalty.js:5",
+      "severity": { "key": "P1", "accepted": ["P1"] },
+      "match": "the gold-points test computes its expected value with `basePoints`, so it would still pass if `basePoints` divided by the wrong amount",
+      "check": { "kind": "survives", "file": "src/loyalty.js", "line": 5, "from": "/ 100", "to": "/ 10" },
+      "loop": "expected",
+      "set": "original"
+    },
+    {
+      "id": "S5",
+      "family": "doubles",
+      "test": { "file": "test/reviews.test.js", "names": ["a user cannot review the same product twice"], "lines": [6, 28] },
+      "prodLine": "src/store.js:11",
+      "severity": { "key": "P1", "accepted": ["P1"] },
+      "match": "the duplicate-review test runs against a hand-written store that re-implements the uniqueness rule, so it would still pass if `src/store.js` stopped rejecting a second review by the same user",
+      "check": { "kind": "survives", "file": "src/store.js", "line": 11, "from": "if (exists) throw new DuplicateReviewError(review.productId, review.userId)", "to": "" },
+      "loop": "expected",
+      "set": "original"
+    },
+    {
+      "id": "S6",
+      "family": "missing-case",
+      "test": { "file": "test/checkout.test.js", "names": ["charges the flat rate below the threshold", "ships free for large orders"], "lines": [7, 13] },
+      "prodLine": "src/shipping.js:6",
+      "severity": { "key": "P1", "accepted": ["P1"] },
+      "match": "no test quotes a subtotal of exactly 5000, so the shipping tests would still pass if free shipping started above 5000 instead of at 5000",
+      "check": { "kind": "survives", "file": "src/shipping.js", "line": 6, "from": ">=", "to": ">" },
+      "loop": "expected",
+      "set": "original"
+    },
+    {
+      "id": "S7",
+      "family": "coupled",
+      "test": { "file": "test/cart.test.js", "names": ["add stores the line"], "lines": [5, 13] },
+      "prodLine": "src/cart.js:3",
+      "severity": { "key": "P2", "accepted": ["P2"] },
+      "match": "the cart test reads the private `_lines` field and spies on `_recalculate`, so renaming the field fails it while the cart behaves the same",
+      "check": { "kind": "refactor", "file": "src/cart.js", "line": 3, "from": "_lines", "to": "_items" },
+      "loop": "out of context",
+      "set": "original"
+    },
+    {
+      "id": "S8",
+      "family": "isolation",
+      "test": { "file": "test/coupon.test.js", "names": ["a coupon is valid before its expiry"], "lines": [14, 18] },
+      "prodLine": "src/coupon.js:20",
+      "severity": { "key": "P2", "accepted": ["P1", "P2"] },
+      "match": "the coupon-validity test uses the real clock against a fixed 2027-06-30 expiry, so it starts failing on that date with no code change",
+      "check": { "kind": "clock", "at": "2027-07-01T00:00:00Z" },
+      "loop": "expected",
+      "set": "original"
+    },
+    {
+      "id": "S9",
+      "family": "enshrined",
+      "test": { "file": "test/checkout.test.js", "names": ["charges VAT"], "lines": [15, 17] },
+      "prodLine": "src/tax.js:5",
+      "severity": { "key": "P0", "accepted": ["P0", "P1"] },
+      "match": "the VAT test expects 399 for 1999 cents, while the documented rule in `src/tax.js` (20 %, rounded half up) gives 400, so it locks in a wrong amount",
+      "check": { "kind": "fix", "file": "src/tax.js", "line": 5, "from": "Math.floor", "to": "Math.round" },
+      "loop": "expected",
+      "set": "original"
+    },
+    {
+      "id": "C1",
+      "family": "control",
+      "test": { "file": "test/receipt.test.js", "names": ["emails the receipt"], "lines": [16, 22] },
+      "prodLine": "src/notify.js:4",
+      "severity": null,
+      "match": "the receipt-email test compares the whole message on the fake mailer's `sent`, so it fails if the message sent changes",
+      "check": { "kind": "killed", "file": "src/notify.js", "line": 4, "from": "\"receipt\"", "to": "\"invoice\"" },
+      "loop": "control",
+      "set": "original"
+    },
+    {
+      "id": "C2",
+      "family": "control",
+      "test": { "file": "test/checkout.test.js", "names": ["allows exactly MAX_ITEMS", "rejects MAX_ITEMS + 1", "rejects an empty cart", "allows a single item"], "lines": [19, 33] },
+      "prodLine": "src/limits.js:5",
+      "severity": null,
+      "match": "the checkout-limit tests hit MAX_ITEMS, MAX_ITEMS + 1 and 0, so they fail if the upper-limit comparison changes",
+      "check": { "kind": "killed", "file": "src/limits.js", "line": 5, "from": "<=", "to": "<" },
+      "loop": "control",
+      "set": "original"
+    },
+    {
+      "id": "C3",
+      "family": "control",
+      "test": { "file": "test/receipt.test.js", "names": ["formats 0", "formats 5", "formats 499", "formats 123456"], "lines": [24, 35] },
+      "prodLine": "src/money.js:3",
+      "severity": null,
+      "match": "each `formatCents` case is a literal pair from a module-level table, so the cases fail if the formatting changes",
+      "check": { "kind": "killed", "file": "src/money.js", "line": 3, "from": "toFixed(2)", "to": "toFixed(1)" },
+      "loop": "control",
+      "set": "original"
+    },
+    {
+      "id": "C4",
+      "family": "control",
+      "test": { "file": "test/slug.test.js", "names": ["pins legacy slugs (characterisation)"], "lines": [5, 9] },
+      "prodLine": "src/slug.js:5",
+      "severity": null,
+      "match": "the slug test is a labelled characterisation test of today's output, so it fails if the cut length changes",
+      "check": { "kind": "killed", "file": "src/slug.js", "line": 5, "from": "slice(0, 12)", "to": "slice(0, 13)" },
+      "loop": "control",
+      "set": "original"
+    },
+    {
+      "id": "H1",
+      "family": "self-confirming",
+      "test": { "file": "test/refund.test.js", "names": ["refunds an opened item minus the restocking fee"], "lines": [5, 10] },
+      "prodLine": "src/refund.js:3",
+      "severity": { "key": "P1", "accepted": ["P1"] },
+      "match": "the opened-item refund test computes its expected value with `restockingFee`, so it would still pass if `restockingFee` charged a rate other than the documented 15 %",
+      "check": { "kind": "survives", "file": "src/refund.js", "line": 3, "from": "0.15", "to": "0.05" },
+      "loop": "expected",
+      "set": "holdout"
+    },
+    {
+      "id": "H2",
+      "family": "self-confirming",
+      "test": { "file": "test/deposit.test.js", "names": ["takes a deposit on a made-to-order item"], "lines": [5, 10] },
+      "prodLine": "src/deposit.js:1",
+      "severity": { "key": "P1", "accepted": ["P1"] },
+      "match": "the deposit test recomputes the deposit with the same formula and `DEPOSIT_RATE` as `splitPayment`, so it would still pass if the rate were not the documented 30 %",
+      "check": { "kind": "survives", "file": "src/deposit.js", "line": 1, "from": "0.3", "to": "0.03" },
+      "loop": "expected",
+      "set": "holdout"
+    },
+    {
+      "id": "H3",
+      "family": "coupled",
+      "test": { "file": "test/wishlist.test.js", "names": ["adding the same item twice keeps one entry"], "lines": [13, 20] },
+      "prodLine": "src/wishlist.js:3",
+      "severity": { "key": "P2", "accepted": ["P2"] },
+      "match": "the repeated-add wishlist test reads the private `_skus` field, so renaming the field fails it while the wishlist behaves the same",
+      "check": { "kind": "refactor", "file": "src/wishlist.js", "line": 3, "from": "_skus", "to": "_entries" },
+      "loop": "out of context",
+      "set": "holdout"
+    },
+    {
+      "id": "H4",
+      "family": "coupled",
+      "test": { "file": "test/order.test.js", "names": ["cancelling an open order releases its stock"], "lines": [5, 13] },
+      "prodLine": "src/order.js:15",
+      "severity": { "key": "P2", "accepted": ["P2"] },
+      "match": "the order-cancel test spies on the private `_releaseStock` method, so renaming the method fails it while cancelling behaves the same",
+      "check": { "kind": "refactor", "file": "src/order.js", "line": 15, "from": "_releaseStock", "to": "_restock" },
+      "loop": "out of context",
+      "set": "holdout"
+    },
+    {
+      "id": "H5",
+      "family": "cannot-fail",
+      "test": { "file": "test/giftcard.test.js", "names": ["refuses to redeem more than the balance"], "lines": [11, 17] },
+      "prodLine": "src/giftcard.js:11",
+      "severity": { "key": "P1", "accepted": ["P1"] },
+      "match": "the over-balance gift-card test asserts only inside `.catch`, so it would still pass if `redeem` stopped rejecting an amount above the balance",
+      "check": { "kind": "survives", "file": "src/giftcard.js", "line": 11, "from": "throw new InsufficientBalanceError(card.id, cents)", "to": "return card" },
+      "loop": "expected",
+      "set": "holdout"
+    },
+    {
+      "id": "H6",
+      "family": "under-asserted",
+      "test": { "file": "test/bundle.test.js", "names": ["prices a three-item bundle"], "lines": [5, 12] },
+      "prodLine": "src/bundle.js:4",
+      "severity": { "key": "P1", "accepted": ["P1", "P2"] },
+      "match": "the bundle test checks only that the total is a number and the discount an integer, so it would still pass if the bundle discount were not 10 % of the sum",
+      "check": { "kind": "survives", "file": "src/bundle.js", "line": 4, "from": "sum / 10", "to": "sum / 100" },
+      "loop": "expected",
+      "set": "holdout"
+    },
+    {
+      "id": "H7",
+      "family": "doubles",
+      "test": { "file": "test/rating.test.js", "names": ["averages the stars of a product's reviews"], "lines": [5, 19] },
+      "prodLine": "src/store.js:17",
+      "severity": { "key": "P1", "accepted": ["P1", "P2"] },
+      "match": "the average-rating test runs against a hand-written store that re-implements `reviewsFor`, so it would still pass if `src/store.js` returned the reviews of other products too",
+      "check": { "kind": "survives", "file": "src/store.js", "line": 17, "from": "row.productId === productId", "to": "true" },
+      "loop": "expected",
+      "set": "holdout"
+    },
+    {
+      "id": "C5",
+      "family": "control",
+      "test": { "file": "test/giftwrap.test.js", "names": ["charges one gift-wrap fee for a whole order"], "lines": [5, 9] },
+      "prodLine": "src/giftwrap.js:5",
+      "severity": null,
+      "match": "the gift-wrap test expects the exported flat fee `GIFT_WRAP_CENTS` for a three-item order, so it fails if the fee is charged per item",
+      "check": { "kind": "killed", "file": "src/giftwrap.js", "line": 5, "from": "? GIFT_WRAP_CENTS :", "to": "? GIFT_WRAP_CENTS * order.items.length :" },
+      "loop": "control",
+      "set": "holdout"
+    },
+    {
+      "id": "C6",
+      "family": "control",
+      "test": { "file": "test/ticket.test.js", "names": ["prints the warehouse code on the slip"], "lines": [5, 9] },
+      "prodLine": "src/ticket.js:8",
+      "severity": null,
+      "match": "the pick-ticket test reads the public `internalCode` getter against a literal, so it fails if the printed code changes",
+      "check": { "kind": "killed", "file": "src/ticket.js", "line": 8, "from": "padStart(4, \"0\")", "to": "padStart(3, \"0\")" },
+      "loop": "control",
+      "set": "holdout"
+    }
+  ]
+}

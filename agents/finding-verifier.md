@@ -51,6 +51,7 @@ disallowedTools: Write, Edit
        - `DISAGREE_EVIDENCE` — the code shows it is a false positive (already guarded / not reachable / misreads the code). It needs a `citation`: a contiguous excerpt copied verbatim from the reviewed (head) code, with its `file` and `line`, no `...`, no paraphrase. Without such an excerpt it counts as a concern.
        - `DISAGREE_CONCERN` — you doubt it but cannot ground the doubt in the code (no reachable path found, no repro); state the doubt in `evidence`. Default to `DISAGREE_CONCERN` when you cannot ground it either way.
        `citation` is `null` unless you have the excerpt. Optionally suggest a corrected severity if the impact is real but larger/smaller than claimed.
+    For a `tests` finding the claim is a named mutant, and reading replaces a repro: find the tests that can reach the mutated line (the diff's tests, tests importing its module, tests of its callers or public entry points). `DISAGREE_EVIDENCE` quotes one that observes the effect; `AGREE` lists in `evidence` the tests you read, none constraining it; `DISAGREE_CONCERN` if you cannot tell which tests observe it. For an enshrined-defect claim, check the cited source instead. Do not run tests.
   </Verification_Protocol>
 
   <Output_Format>

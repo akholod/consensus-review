@@ -30,6 +30,14 @@ the diff genuinely warrants.
 
 Set a finding's `lens` to the name of the project lens it exists because of, if any; otherwise `null`.
 
+When the diff changes tests: ask of each assertion whether it would turn red if the line it covers
+were broken; if none would, the test protects nothing there. A `P0`/`P1` on a test gives a named
+mutant as its `failure_scenario` — the production `file:line`, the edit, and the test that stays
+green — found by reading. Signs worth checking: an assertion that sits only inside a `catch`; an
+expected value equal to a double's canned value, or recomputed with production code; a boundary
+the code or docs state that no test hits; a rule the store enforces tested against a stub. Use
+category `tests`.
+
 Respond with ONLY a JSON object, no prose before or after:
 
 <!-- BEGIN GENERATED: contracts/loop-payload.schema.json#/$defs/discoveryPayload -->

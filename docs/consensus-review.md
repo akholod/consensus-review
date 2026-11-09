@@ -228,6 +228,20 @@ consultant brief alike:
   project-specific anchor: a documented convention, an existing pattern,
   a contract. A general best practice alone is not a finding.
 
+A P0/P1 test finding's failure scenario is a **named mutant**: a concrete
+change to the production code that the test would still pass. A test that
+enshrines a defect gives the source, the value it requires and the value
+the test asserts instead. Both are found and verified by reading, never by
+running anything. A P0/P1 claim with neither is not a finding: the agent
+lists it as a hypothesis under its `## Questions`, never as a P2. A P2
+test finding states its own cost; for coupling, the behaviour-preserving
+refactor that turns the test red.
+
+The no-execution rule for `test-reviewer` is an instruction, not an
+enforced boundary: `Bash` stays available, the host's permissions are the
+boundary, and `Skill` is denied. An agent's `## Questions` section
+(hypotheses included) is not carried into the report.
+
 Without both bars, P2 becomes the place where unproven claims go to
 survive, and the report fills with twenty entries of noise.
 

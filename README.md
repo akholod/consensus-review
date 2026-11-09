@@ -162,7 +162,7 @@ override per run or per profile:
 | `impact-reviewer`  | opus    | high   |
 | `arch-reviewer`    | opus    | medium |
 | `quality-reviewer` | sonnet  | high   |
-| `test-reviewer`    | sonnet  | high   |
+| `test-reviewer`    | opus    | high   |
 
 The arbiter runs on your session's model (`/model`). See
 [Profiles](https://github.com/akholod/consensus-review/blob/main/docs/consensus-review.md#profiles)

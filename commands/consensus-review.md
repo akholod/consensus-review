@@ -149,6 +149,8 @@ One brief for the consultants in `consultants.json` (the dimension agents get th
   - *quality* — project conventions, duplication/reuse, AI-slop, contract alignment in production code, scope control.
   - *impact* — correctness, regressions and effect on adjacent/dependent parts, security, migration/deploy safety.
   - *tests* — whether tests protect critical behavior, missing scenarios, mock/fixture correctness, test layering.
+    - The core question, per assertion: if the line it covers were broken, would this assertion turn red? If none would, the test protects nothing there.
+    - A P0/P1 on a test gives a named mutant as `failure_scenario` (`path:line`, the edit, the test that stays green), found by reading, not by running tests; a test that enshrines a defect gives the source, the value it requires and the value asserted instead.
 - The severity rubric: **P0** blocker (wrong behavior, security, data loss, crash, breaking change); **P1** important, not a blocker; **P2** minor. **Evidence bar:** every P0/P1 must carry a concrete `failure_scenario` (specific input/state → wrong output/harm, or a genuinely reachable security/data path) and a `confidence`; without a concrete scenario the finding is **not** a P0/P1 — it goes to the **Unverified — needs confirmation** bucket (§9), *not* into P2. Do not inflate severity; pure style/nitpicks are P2 only.
 - **P2 admission bar.** A P2 must name the concrete cost of leaving it **and** a project-specific anchor (a documented convention, an existing pattern in this repo, a contract). A remark justified only by a general best practice is not a finding. Collapse repeats into one P2 covering N sites. P2 is for grounded small cleanups — it is not the landfill for claims that failed the P0/P1 evidence bar, which is what turns it into twenty entries of noise.
 - The category enum: `security|correctness|perf|maintainability|tests|style`.
@@ -289,10 +291,11 @@ Run only what the tier assigns (section 3.5): T0 — neither agents nor consulta
 - impact → `Task(subagent_type="impact-reviewer")`
 - tests → `Task(subagent_type="test-reviewer")`
 
-**Model per dimension (set in each agent's frontmatter, not here).** `impact` and `architecture`
-run on Opus; `quality` and `tests` run on Sonnet. The split is by what the dimension actually does:
+**Model per dimension (set in each agent's frontmatter, not here).** `impact`, `architecture` and `tests`
+run on Opus; `quality` runs on Sonnet. `tests` is on Opus because it was measured (see
+`docs/design/test-review-measurements.md`, `## Model decision`). The split is by what the dimension actually does:
 tracing call sites and reasoning about regressions or future complexity is what the larger model is
-for, while convention alignment, duplication and mock drift are largely recognition against
+for, while convention alignment and duplication are largely recognition against
 precedent the repo already sets. `finding-verifier` stays on Opus deliberately — a weaker reviewer
 misses findings, but a weaker sceptic lets **false** ones through, and one confirmed false P0 costs
 more trust than a missed bug costs coverage.
@@ -301,8 +304,8 @@ A `models` setting can override it per run; the arbiter itself is the session mo
 
 **Per-run overrides (`models`, `effort`).** On each dimension-agent Task pass `model: '<settings.models.value[<dimension>]>'` only when that dimension's role is listed in `settings.models.value`, and `effort: '<settings.effort.value[<dimension>]>'` only when it is listed in `settings.effort.value`; with `agent`, or for an unlisted role, pass neither and the frontmatter applies. If a Task is rejected because of its `model` or `effort`, re-run it once without the overrides — at most once, dropping every `model`/`effort` override it was given — and add `models override dropped (<role>)` and/or `effort override dropped (<role>)` to Source availability, naming every override that was passed even when the error does not say which one was rejected. A second failure is reported as the lane's real failure (the usual failed/degraded handling), never retried again.
 
-This allocation is a judgement, not a measurement: the repository has no behavioural evals yet, so
-the effect on recall is unverified. Issue #1 (the eval corpus) is what would settle it.
+This allocation is a judgement, not a measurement (except `tests`, see above): for the other
+dimensions the effect on recall is unverified. Issue #1 (the eval corpus) is what would settle it.
 Note: when installed as a plugin the agents may be namespaced — if a bare name does not resolve, use `consensus-review:arch-reviewer`, `consensus-review:quality-reviewer`, `consensus-review:impact-reviewer`, `consensus-review:test-reviewer`.
 Pass each one: the path to `$WD/diff.patch`, `REPO`, the mode (PR/uncommitted/diff-only), the output language (from `lang`), the path `$WD/<outputs.<dim>>` from `lenses.json` when that output is set (the agent reads it as advisory project lenses; nothing when unset), and **`TIER` with an exploration budget** — T1/T2 means "the diff plus its nearest context and direct consumers; do not sweep the repository", T3 means the full protocol. Each agent explores independently (that is what buys source independence), so an unbounded brief multiplies the same repo walk by the number of lanes. Their structured output is the Claude lane's share of the findings, each already carrying its `dimension`. The **same P0/P1 evidence bar and P2 admission bar** are built into each agent prompt, so every lane is held to one standard — the consultant brief in §4 is not a stricter rule for the consultants alone, and the standalone `/arch-review`-style commands keep the bar even without an orchestrator.
 

@@ -72,6 +72,7 @@ One brief for the consultants. Do **not** list hypotheses or give finding exampl
   - *ambiguity* — contradictions, terms with two meanings, steps two implementers would build differently.
   - *scope* — scope creep or gaps against the stated goal; complexity out of proportion.
   - *testability* — checkable acceptance criteria, stated expected values, an observable and reversible rollout.
+    - Behavioural criteria and planned tests need a literal expected value with its source, numeric boundaries with inclusivity, and the cheapest level that observes the failure; *valid / correct / fast* with no number is not checkable.
 - Severity: **P0** — following the document as written produces broken or unsafe software; **P1** — it produces the wrong thing or costly rework; **P2** — a small, named gap. **Consequence bar:** every P0/P1 carries a `failure_scenario` stating **what breaks or gets built wrong if the plan ships as written**, and a `confidence`; without one it is not a P0/P1. **P2 admission bar:** a concrete cost **and** an anchor in the document or the repository; general planning advice is not a finding.
 - The category enum: `security|correctness|perf|maintainability|tests|style`.
 - Emit findings strictly per the schema below, each with a `dimension` from the five.

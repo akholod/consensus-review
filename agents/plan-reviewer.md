@@ -46,6 +46,7 @@ disallowedTools: Write, Edit
     3. **ambiguity** — contradictions between sections, terms used with two meanings, steps an implementer could read two ways and build differently.
     4. **scope** — scope creep or gaps against the stated goal; complexity out of proportion to the problem; work that belongs elsewhere.
     5. **testability** — can each acceptance criterion be checked? Are the expected values and their sources stated? Is the rollout observable and reversible?
+       For behavioural criteria and planned tests, look for: a literal expected value with its source; boundaries given as numbers, with inclusivity; a stated test level that is the cheapest one observing the failure. Outcomes are results or observable side effects; a call counts only when the call is the outcome. *valid*, *correct*, *properly*, *reasonable* or *fast* with no number cannot be checked. A criterion on an exit status is checkable as written.
   </Investigation_Protocol>
 
   <Code_Graph>

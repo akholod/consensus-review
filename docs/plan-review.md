@@ -32,6 +32,7 @@ Every run reviews five, with no triage tiers:
 - `ambiguity`: contradictions, terms with two meanings, steps read two ways.
 - `scope`: creep or gaps against the goal; complexity out of proportion.
 - `testability`: checkable acceptance criteria, stated expected values, an observable and reversible rollout.
+  A behavioural criterion needs a literal expected value with its source, numeric boundaries with inclusivity, and the cheapest test level that observes the failure; *valid* or *fast* with no number is not checkable.
 
 ## Severity
 

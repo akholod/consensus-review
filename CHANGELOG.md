@@ -14,6 +14,19 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
   `.reviews/plan-review-<slug>-<date>.md` (`-2`, `-3` when taken). Outside
   a git repository feasibility is not checked and no archive is written.
 
+- **Changed — rewritten tests dimension, `test-reviewer` now on opus
+  (was sonnet).** The rubric asks a red question per assertion and
+  requires a named mutant as evidence; flags self-confirming expected
+  values; counts doubles inside the slice as fine; reserves P0 for
+  enshrined P0-kind defects; and `Skill` is denied. The consultant brief
+  gains 2 lines, the finding-verifier gains a line, the loop-review
+  discovery prompt a paragraph, and plan-review gains testability rules.
+  Measured (round 3, 16-seed fixture, 3 runs each, so fixture-specific):
+  opus with the new prompt 12.0/16 hits and 0 false findings per run vs
+  the old prompt 13.0/16 and 1.33; severity correct 100 % vs 69 %; every
+  P0/P1 came with a verifiable mutant. See
+  `docs/design/test-review-measurements.md`.
+
 - **Changed — `models`/`effort` accept the role `plan`**, and lane
   validation follows the lane's `--schema`.
 

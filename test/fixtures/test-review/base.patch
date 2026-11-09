@@ -1,0 +1,100 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..7ac289e
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,2 @@
++.reviews/
++node_modules/
+diff --git a/package.json b/package.json
+new file mode 100644
+index 0000000..4ee1f6b
+--- /dev/null
++++ b/package.json
+@@ -0,0 +1,9 @@
++{
++  "name": "shop-core",
++  "version": "1.0.0",
++  "private": true,
++  "type": "module",
++  "scripts": {
++    "test": "node --test"
++  }
++}
+diff --git a/src/money.js b/src/money.js
+new file mode 100644
+index 0000000..622ece3
+--- /dev/null
++++ b/src/money.js
+@@ -0,0 +1,4 @@
++// Prices are integer cents everywhere in this package.
++export function formatCents(cents) {
++  return (cents / 100).toFixed(2)
++}
+diff --git a/src/slug.js b/src/slug.js
+new file mode 100644
+index 0000000..2b34575
+--- /dev/null
++++ b/src/slug.js
+@@ -0,0 +1,6 @@
++// Slugs for titles created before the current URL scheme.
++export function legacySlug(title) {
++  const dashed = title.toLowerCase().replace(/[^a-z0-9]+/g, "-")
++  const trimmed = dashed.replace(/^-+|-+$/g, "")
++  return trimmed.slice(0, 12)
++}
+diff --git a/src/store.js b/src/store.js
+new file mode 100644
+index 0000000..fa107d4
+--- /dev/null
++++ b/src/store.js
+@@ -0,0 +1,17 @@
++// In-memory review store.
++export function insertReview(rows, review) {
++  rows.push({ ...review })
++  return review
++}
++
++export function reviewsFor(rows, productId) {
++  return rows.filter((row) => row.productId === productId)
++}
++
++export function makeStore() {
++  const rows = []
++  return {
++    insertReview: (review) => insertReview(rows, review),
++    reviewsFor: (productId) => reviewsFor(rows, productId),
++  }
++}
+diff --git a/test/README.md b/test/README.md
+new file mode 100644
+index 0000000..9cbadbc
+--- /dev/null
++++ b/test/README.md
+@@ -0,0 +1,10 @@
++# Tests
++
++Conventions for this package:
++
++1. Tests use the real in-memory store from `makeStore()` (`src/store.js`), never a hand-written stand-in.
++2. Outbound email is asserted on `makeFakeMailer().sent` (`test/helpers.js`), because the message sent is the outcome.
++3. Test through the public API. Fields and methods whose names start with `_` are private.
++4. Freeze time with `mock.timers` from `node:test`; no test depends on the real clock.
++
++Run the suite with `npm test`.
+diff --git a/test/helpers.js b/test/helpers.js
+new file mode 100644
+index 0000000..2b6d931
+--- /dev/null
++++ b/test/helpers.js
+@@ -0,0 +1,10 @@
++// A mailer that keeps every message it is asked to send.
++export function makeFakeMailer() {
++  const sent = []
++  return {
++    sent,
++    async send(message) {
++      sent.push(message)
++    },
++  }
++}

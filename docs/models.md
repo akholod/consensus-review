@@ -16,7 +16,7 @@ without one too. `/consensus-review:doctor` prints what each agent runs on.
 | `impact-reviewer`        | `opus`                    | `high`     | tracing call sites and regressions is deep reasoning                      |
 | `arch-reviewer`          | `opus`                    | `medium`   | boundaries and long-term complexity                                       |
 | `quality-reviewer`       | `sonnet`                  | `high`     | conventions and duplication: matching against the repo's own precedent    |
-| `test-reviewer`          | `sonnet`                  | `high`     | the same kind of work, for tests                                          |
+| `test-reviewer`          | `opus`                    | `high`     | measured: opus held recall and cut false findings, see below              |
 | `plan-reviewer`          | `opus`                    | `high`     | `/consensus-review:plan-review`: checks a document against the code       |
 | `finding-verifier`       | `opus`                    | `high`     | see below                                                                 |
 | codex consultant         | codex's configured model  | codex's    | the plugin passes no `--model`                                            |
@@ -52,8 +52,11 @@ label, never a model the Task result does not confirm. Per-invocation
 `effort` on subagents needs Claude Code 2.1.292 or later; an older CLI may
 ignore it, and `/consensus-review:doctor` warns.
 
-The Opus/Sonnet split is a judgement, not a measurement: no behavioural
-eval yet shows what it does to recall.
+The Opus/Sonnet split for the other agents is a judgement, not a
+measurement. `test-reviewer` is the exception: it runs on Opus because the
+round-3 measurement on a 16-seed fixture favoured it, see `## Model
+decision` in
+[design/test-review-measurements.md](design/test-review-measurements.md).
 
 ## The consultants need a different model
 
