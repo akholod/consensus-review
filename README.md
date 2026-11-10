@@ -219,12 +219,12 @@ Everything the plugin runs, and where your code goes:
 
 The plugin has no telemetry and makes no other network call of its own.
 The Claude agents run with your session's tools and permissions, minus
-`Write` and `Edit`.
+`Write` and `Edit` (and `Skill` for `test-reviewer`).
 
 ## Under the hood
 
 The panel is plain Claude Code: commands and read-only subagents
-(`disallowedTools: Write, Edit`), plus one small Node helper
+(`disallowedTools: Write, Edit`; `test-reviewer` also denies `Skill`), plus one small Node helper
 (`scripts/run-lane.mjs`) that runs `codex` and `pi` with their read-only
 flags (`pi`: `--tools read,grep,find,ls --no-mcp --no-extensions
 --no-session --no-skills --no-prompt-templates --no-context-files
@@ -237,7 +237,11 @@ so a pass sees only the context it was given. Both strategies share one finding 
 (`contracts/severity-bars.md`); CI fails if a prompt drifts from them.
 
 Design notes and measurements behind these choices live in
-[docs/design/](https://github.com/akholod/consensus-review/tree/main/docs/design). Releasing: [docs/RELEASING.md](https://github.com/akholod/consensus-review/blob/main/docs/RELEASING.md).
+[docs/design/](https://github.com/akholod/consensus-review/tree/main/docs/design).
+The tests and architecture dimensions are measured on seeded fixtures,
+each with a key proven by running the seeded code and scored blind:
+[test-review](https://github.com/akholod/consensus-review/blob/main/docs/design/test-review-measurements.md),
+[arch-review](https://github.com/akholod/consensus-review/blob/main/docs/design/arch-review-measurements.md). Releasing: [docs/RELEASING.md](https://github.com/akholod/consensus-review/blob/main/docs/RELEASING.md).
 
 ## License
 
