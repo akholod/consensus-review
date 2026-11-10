@@ -2,7 +2,9 @@
 
 Full notes for each release: [GitHub releases](https://github.com/akholod/consensus-review/releases).
 
-## Unreleased
+## 0.14.0
+
+Plan review before code exists, a rebuilt tests dimension, lenses selected by name in user and built-in layers, exact and safer PR diffs without `gh`, and the architecture dimension measured on seeded fixtures. Changed behaviour: an uncommitted lens no longer applies; see below.
 
 - **Fixed — a finding with several sites keeps all of them in the report.**
   The finding schema holds one `file`/`line`, so §6 kept a single location

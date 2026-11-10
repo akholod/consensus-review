@@ -29,6 +29,7 @@ Record each release's result here.
 | 2026-10-18 | 0.11.0 | 2.1.302 | green — all 6 checks passed, with `--json-schema` |
 | 2026-10-18 | 0.12.0 | 2.1.302 | green — all 6 checks passed |
 | 2026-11-06 | 0.13.0 | 2.1.319 | green — all 6 checks passed |
+| 2026-11-10 | 0.14.0 | 2.1.322 | green — all 6 checks passed |
 
 ## 2026-08-19 — why the probe changed
 
