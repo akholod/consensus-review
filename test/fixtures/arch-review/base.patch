@@ -1,0 +1,749 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..4928cc3
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,13 @@
++name: ci
++on: [push, pull_request]
++jobs:
++  check:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-node@v4
++        with:
++          node-version: 22
++      - run: npm install
++      - run: npm run lint
++      - run: npm test
+diff --git a/config/shop.json b/config/shop.json
+new file mode 100644
+index 0000000..0877655
+--- /dev/null
++++ b/config/shop.json
+@@ -0,0 +1,4 @@
++{
++  "maxItems": 50,
++  "currency": "EUR"
++}
+diff --git a/docs/api.md b/docs/api.md
+new file mode 100644
+index 0000000..7abd676
+--- /dev/null
++++ b/docs/api.md
+@@ -0,0 +1,30 @@
++# Public HTTP API, v1
++
++Consumed by the mobile app. The contract rules are in `docs/architecture.md`.
++
++Every field has one shape: a list is always an array, even with one element or none.
++
++## GET /v1/orders/:id
++
++| Field | Type | Meaning |
++|---|---|---|
++| `id` | string | order id, `ord_…` |
++| `status` | string | payment state: `unpaid`, `paid` or `refunded` |
++| `total` | integer | order total in cents |
++| `items` | array | `{ sku, qty, priceCents }` |
++
++## GET /v1/products/:sku
++
++| Field | Type | Meaning |
++|---|---|---|
++| `sku` | string | |
++| `name` | string | |
++| `priceCents` | integer | price in cents |
++| `tags` | array of strings | may be empty |
++
++## GET /v1/customers/:id
++
++| Field | Type | Meaning |
++|---|---|---|
++| `id` | string | customer id, `cus_…` |
++| `name` | string | full name |
+diff --git a/docs/architecture.md b/docs/architecture.md
+new file mode 100644
+index 0000000..8293394
+--- /dev/null
++++ b/docs/architecture.md
+@@ -0,0 +1,42 @@
++# Architecture
++
++shopfront is one repository with two runtimes:
++
++- `src/ui/` runs in the browser.
++- Everything else under `src/` runs on the server: `src/api/` (HTTP handlers), the modules
++  `orders`, `billing`, `payments`, `catalog`, `checkout`, `shipping`, `customers` and
++  `reports`, and `src/infra/` (database, event bus, HTTP client, configuration).
++
++## Rules
++
++1. **Browser code.** `src/ui/` talks to the server only through the generated client in
++   `src/generated/`, and passes every response through its `parse*` function before use. It never
++   imports `src/infra/` or a server module. Enforced by `no-restricted-imports` in
++   `eslint.config.js`; CI runs `npm run lint`.
++2. **Modules.** A module is used only through its `index.js`. `index.js` exports operations and
++   constants, and never hands out the module's own state (a cache, a map, a live object), directly
++   or through a function. Every other file in the module directory, `internal/` included, is
++   private: other modules do not import it, and they do not read fields whose name starts with
++   `_`. Enforced in review.
++3. **Dependency direction.** `src/api/` may import any module. Between modules only these edges
++   exist: `checkout → orders, payments, catalog, shipping`; `payments → billing`;
++   `billing → customers`; `reports → billing`. A module never imports a module that depends on it,
++   directly or through another module. A module that has to react to another one subscribes to an
++   event from `docs/events.md`.
++4. **Data ownership.** Each table belongs to one module: `orders` → orders, `invoices` → billing,
++   `products` → catalog, `customers` → customers. Other modules call the owner's `index.js`; they
++   never query its table.
++5. **Units.** Money is integer cents everywhere. A duration's name ends in `Ms` and its value is in
++   milliseconds.
++
++## Contracts
++
++- The public HTTP API (`docs/api.md`) is consumed by the mobile app, which ships on its own
++  schedule. Version 1 only grows: removing or renaming a field, or changing what it means, needs
++  `/v2`.
++- Events (`docs/events.md`) are consumed inside this repository and by the data warehouse. A
++  payload field keeps its name and meaning; a change bumps `version`, and consumers of the previous
++  version keep working.
++- `config/shop.json` is the development default. Production values are written by the ops deploy
++  repository with the same keys, so the keys are a contract: a rename keeps the old key readable.
++- `src/generated/` is produced by `npm run gen` from `openapi.yaml` and is never edited by hand.
+diff --git a/docs/events.md b/docs/events.md
+new file mode 100644
+index 0000000..ebde8dd
+--- /dev/null
++++ b/docs/events.md
+@@ -0,0 +1,10 @@
++# Events
++
++Published on the in-process bus (`src/infra/bus.js`) and forwarded to the data warehouse.
++Every payload carries `version`.
++
++| Event | Version | Publisher | Payload | Consumers |
++|---|---|---|---|---|
++| `order.placed` | 1 | orders | `orderId`, `customerId` (account id, `cus_…`), `total` (cents) | billing, warehouse |
++| `order.updated` | 1 | orders | `orderId`, `status` (payment state: `unpaid`, `paid`, `refunded`) | billing, warehouse |
++| `invoice.issued` | 1 | billing | `invoiceId`, `orderId`, `customerId` (account id) | warehouse |
+diff --git a/eslint.config.js b/eslint.config.js
+new file mode 100644
+index 0000000..635a22f
+--- /dev/null
++++ b/eslint.config.js
+@@ -0,0 +1,16 @@
++// Browser-code boundary from docs/architecture.md, rule 1. CI runs `npm run lint`.
++const SERVER_MODULES = ["orders", "billing", "payments", "catalog", "checkout", "shipping", "customers", "reports"]
++
++export default [
++  {
++    files: ["src/ui/**/*.js"],
++    rules: {
++      "no-restricted-imports": ["error", {
++        patterns: [
++          { group: ["**/infra/**"], message: "Browser code never imports server infrastructure." },
++          { group: SERVER_MODULES.map((m) => `**/${m}/**`), message: "Browser code talks to the server only through src/generated." },
++        ],
++      }],
++    },
++  },
++]
+diff --git a/openapi.yaml b/openapi.yaml
+new file mode 100644
+index 0000000..733c0ed
+--- /dev/null
++++ b/openapi.yaml
+@@ -0,0 +1,33 @@
++openapi: 3.1.0
++info:
++  title: shopfront
++  version: "1"
++paths:
++  /v1/orders/{id}:
++    get:
++      operationId: fetchOrder
++      parameters:
++        - { name: id, in: path, required: true, schema: { type: string } }
++      responses:
++        "200":
++          content:
++            application/json:
++              schema: { $ref: "#/components/schemas/Order" }
++components:
++  schemas:
++    Order:
++      type: object
++      required: [id, status, total, items]
++      properties:
++        id: { type: string }
++        status: { type: string, enum: [unpaid, paid, refunded] }
++        total: { type: integer, description: Order total in cents. }
++        items:
++          type: array
++          items:
++            type: object
++            required: [sku, qty, priceCents]
++            properties:
++              sku: { type: string }
++              qty: { type: integer }
++              priceCents: { type: integer }
+diff --git a/package.json b/package.json
+new file mode 100644
+index 0000000..b0c49db
+--- /dev/null
++++ b/package.json
+@@ -0,0 +1,14 @@
++{
++  "name": "shopfront",
++  "version": "1.4.0",
++  "private": true,
++  "type": "module",
++  "scripts": {
++    "gen": "openapi-gen openapi.yaml --out src/generated",
++    "lint": "eslint .",
++    "test": "node --test"
++  },
++  "devDependencies": {
++    "eslint": "^9.12.0"
++  }
++}
+diff --git a/src/api/customers-handler.js b/src/api/customers-handler.js
+new file mode 100644
+index 0000000..72b9448
+--- /dev/null
++++ b/src/api/customers-handler.js
+@@ -0,0 +1,7 @@
++import { getCustomer } from "../customers/index.js"
++
++export function getCustomerHandler(req) {
++  const customer = getCustomer(req.params.id)
++  if (!customer) return { status: 404, body: { error: "not_found" } }
++  return { status: 200, body: { id: customer.id, name: customer.name } }
++}
+diff --git a/src/api/orders-handler.js b/src/api/orders-handler.js
+new file mode 100644
+index 0000000..fad1619
+--- /dev/null
++++ b/src/api/orders-handler.js
+@@ -0,0 +1,15 @@
++import { getOrder } from "../orders/index.js"
++
++export function getOrderHandler(req) {
++  const order = getOrder(req.params.id)
++  if (!order) return { status: 404, body: { error: "not_found" } }
++  return {
++    status: 200,
++    body: {
++      id: order.id,
++      status: order.status,
++      total: order.total,
++      items: order.items.map((i) => ({ sku: i.sku, qty: i.qty, priceCents: i.priceCents })),
++    },
++  }
++}
+diff --git a/src/api/products-handler.js b/src/api/products-handler.js
+new file mode 100644
+index 0000000..ad11ad6
+--- /dev/null
++++ b/src/api/products-handler.js
+@@ -0,0 +1,10 @@
++import { getProduct } from "../catalog/index.js"
++
++export function getProductHandler(req) {
++  const product = getProduct(req.params.sku)
++  if (!product) return { status: 404, body: { error: "not_found" } }
++  return {
++    status: 200,
++    body: { sku: product.sku, name: product.name, priceCents: product.priceCents, tags: product.tags },
++  }
++}
+diff --git a/src/billing/index.js b/src/billing/index.js
+new file mode 100644
+index 0000000..99a132b
+--- /dev/null
++++ b/src/billing/index.js
+@@ -0,0 +1,22 @@
++import { subscribe } from "../infra/bus.js"
++import { ledgerFor } from "./internal/ledger.js"
++import { findInvoice, issueInvoice, trackOrder } from "./issue.js"
++
++subscribe("order.placed", ({ orderId, customerId, total }) => {
++  trackOrder(orderId, customerId)
++  ledgerFor(customerId).add({ orderId, amount: total })
++})
++
++subscribe("order.updated", ({ orderId, status }) => {
++  if (status === "paid" && !findInvoice(orderId)) issueInvoice(orderId)
++})
++
++export { findInvoice, issueInvoice }
++
++export function balanceOf(customerId) {
++  return ledgerFor(customerId).balance()
++}
++
++export function voidCharge(customerId, orderId) {
++  ledgerFor(customerId).void(orderId)
++}
+diff --git a/src/billing/internal/ledger.js b/src/billing/internal/ledger.js
+new file mode 100644
+index 0000000..1877f84
+--- /dev/null
++++ b/src/billing/internal/ledger.js
+@@ -0,0 +1,24 @@
++class Ledger {
++  constructor() {
++    this._entries = []
++  }
++
++  add(entry) {
++    this._entries.push({ ...entry, voided: false })
++  }
++
++  void(orderId) {
++    for (const entry of this._entries) if (entry.orderId === orderId) entry.voided = true
++  }
++
++  balance() {
++    return this._entries.filter((e) => !e.voided).reduce((sum, e) => sum + e.amount, 0)
++  }
++}
++
++const ledgers = new Map()
++
++export function ledgerFor(customerId) {
++  if (!ledgers.has(customerId)) ledgers.set(customerId, new Ledger())
++  return ledgers.get(customerId)
++}
+diff --git a/src/billing/issue.js b/src/billing/issue.js
+new file mode 100644
+index 0000000..11bb07d
+--- /dev/null
++++ b/src/billing/issue.js
+@@ -0,0 +1,22 @@
++import { getCustomer } from "../customers/index.js"
++import { publish } from "../infra/bus.js"
++import { insert, query } from "../infra/db.js"
++
++const customerOf = new Map()
++
++export function trackOrder(orderId, customerId) {
++  customerOf.set(orderId, customerId)
++}
++
++export function findInvoice(orderId) {
++  return query("invoices", { orderId })[0] ?? null
++}
++
++export function issueInvoice(orderId) {
++  const customerId = customerOf.get(orderId)
++  const customer = getCustomer(customerId)
++  const invoiceId = `inv_${query("invoices").length + 1}`
++  insert("invoices", { invoiceId, orderId, customerId, email: customer?.email ?? null, voided: false })
++  publish("invoice.issued", { version: 1, invoiceId, orderId, customerId })
++  return invoiceId
++}
+diff --git a/src/catalog/index.js b/src/catalog/index.js
+new file mode 100644
+index 0000000..3d21ab7
+--- /dev/null
++++ b/src/catalog/index.js
+@@ -0,0 +1,18 @@
++import { query } from "../infra/db.js"
++
++const cache = new Map()
++
++/** Price of a product in cents. */
++export function getPrice(sku) {
++  if (!cache.has(sku)) {
++    const [row] = query("products", { sku })
++    if (!row) throw new Error(`unknown sku ${sku}`)
++    cache.set(sku, row.priceCents)
++  }
++  return cache.get(sku)
++}
++
++export function getProduct(sku) {
++  const [row] = query("products", { sku })
++  return row ? { sku: row.sku, name: row.name, priceCents: getPrice(sku), tags: [...row.tags] } : null
++}
+diff --git a/src/checkout/index.js b/src/checkout/index.js
+new file mode 100644
+index 0000000..4029113
+--- /dev/null
++++ b/src/checkout/index.js
+@@ -0,0 +1,14 @@
++import { getPrice } from "../catalog/index.js"
++import { placeOrder } from "../orders/index.js"
++import { charge } from "../payments/index.js"
++import { quote } from "../shipping/index.js"
++import { validateCart } from "./validate.js"
++
++export async function checkout({ customerId, items, country }) {
++  validateCart(items)
++  const priced = items.map((i) => ({ ...i, priceCents: getPrice(i.sku) }))
++  const total = priced.reduce((sum, i) => sum + i.priceCents * i.qty, 0) + quote(country, items)
++  const orderId = placeOrder({ customerId, items: priced, total })
++  const { authorizationId, amount } = await charge(customerId)
++  return { orderId, authorizationId, paidCents: amount }
++}
+diff --git a/src/checkout/validate.js b/src/checkout/validate.js
+new file mode 100644
+index 0000000..5315bed
+--- /dev/null
++++ b/src/checkout/validate.js
+@@ -0,0 +1,6 @@
++import { settings } from "../infra/settings.js"
++
++export function validateCart(items) {
++  if (!items.length) throw new Error("empty cart")
++  if (items.length > settings.maxItems) throw new Error(`a cart holds at most ${settings.maxItems} lines`)
++}
+diff --git a/src/customers/index.js b/src/customers/index.js
+new file mode 100644
+index 0000000..2f043f9
+--- /dev/null
++++ b/src/customers/index.js
+@@ -0,0 +1,17 @@
++import { insert, query } from "../infra/db.js"
++import { normaliseEmail, profileCache } from "./internal/profiles.js"
++
++export function createCustomer({ name, email }) {
++  const id = `cus_${query("customers").length + 1}`
++  insert("customers", { id, name, email: normaliseEmail(email) })
++  return id
++}
++
++export function getCustomer(id) {
++  if (!profileCache.has(id)) {
++    const [row] = query("customers", { id })
++    if (!row) return null
++    profileCache.set(id, { id: row.id, name: row.name, email: row.email })
++  }
++  return { ...profileCache.get(id) }
++}
+diff --git a/src/customers/internal/profiles.js b/src/customers/internal/profiles.js
+new file mode 100644
+index 0000000..c13904d
+--- /dev/null
++++ b/src/customers/internal/profiles.js
+@@ -0,0 +1,5 @@
++export const profileCache = new Map()
++
++export function normaliseEmail(email) {
++  return String(email).trim().toLowerCase()
++}
+diff --git a/src/generated/orders-client.js b/src/generated/orders-client.js
+new file mode 100644
+index 0000000..0f61f4e
+--- /dev/null
++++ b/src/generated/orders-client.js
+@@ -0,0 +1,29 @@
++// Generated by `npm run gen` from openapi.yaml. Do not edit.
++
++/**
++ * @typedef {object} Order
++ * @property {string} id
++ * @property {"unpaid" | "paid" | "refunded"} status
++ * @property {number} total Order total in cents.
++ * @property {{ sku: string, qty: number, priceCents: number }[]} items
++ */
++
++export async function fetchOrder(id, { baseUrl = "" } = {}) {
++  const res = await fetch(`${baseUrl}/v1/orders/${encodeURIComponent(id)}`)
++  if (!res.ok) throw new Error(`GET /v1/orders/${id}: ${res.status}`)
++  return res.json()
++}
++
++/** @returns {Order} */
++export function parseOrder(json) {
++  if (typeof json?.id !== "string") throw new TypeError("Order.id: expected a string")
++  if (!["unpaid", "paid", "refunded"].includes(json.status)) throw new TypeError(`Order.status: unexpected ${json.status}`)
++  if (!Number.isInteger(json.total)) throw new TypeError("Order.total: expected integer cents")
++  if (!Array.isArray(json.items)) throw new TypeError("Order.items: expected an array")
++  return {
++    id: json.id,
++    status: json.status,
++    total: json.total,
++    items: json.items.map((i) => ({ sku: i.sku, qty: i.qty, priceCents: i.priceCents })),
++  }
++}
+diff --git a/src/infra/bus.js b/src/infra/bus.js
+new file mode 100644
+index 0000000..c86e38a
+--- /dev/null
++++ b/src/infra/bus.js
+@@ -0,0 +1,10 @@
++const handlers = new Map()
++
++export function subscribe(type, handler) {
++  if (!handlers.has(type)) handlers.set(type, [])
++  handlers.get(type).push(handler)
++}
++
++export function publish(type, payload) {
++  for (const handler of handlers.get(type) ?? []) handler(payload)
++}
+diff --git a/src/infra/config.js b/src/infra/config.js
+new file mode 100644
+index 0000000..541e9a9
+--- /dev/null
++++ b/src/infra/config.js
+@@ -0,0 +1,5 @@
++// Service constants. Deploy-specific values are read from config/shop.json by settings.js.
++export const config = {
++  paymentGatewayUrl: "https://pay.example.com/v2",
++  paymentTimeoutMs: 30000,
++}
+diff --git a/src/infra/db.js b/src/infra/db.js
+new file mode 100644
+index 0000000..738d682
+--- /dev/null
++++ b/src/infra/db.js
+@@ -0,0 +1,22 @@
++// In-memory tables; production swaps this module for the Postgres client with the same exports.
++const tables = new Map()
++
++const table = (name) => {
++  if (!tables.has(name)) tables.set(name, [])
++  return tables.get(name)
++}
++
++const matches = (row, where) => Object.entries(where).every(([key, value]) => row[key] === value)
++
++export function insert(name, row) {
++  table(name).push({ ...row })
++  return row
++}
++
++export function query(name, where = {}) {
++  return table(name).filter((row) => matches(row, where)).map((row) => ({ ...row }))
++}
++
++export function update(name, where, patch) {
++  for (const row of table(name)) if (matches(row, where)) Object.assign(row, patch)
++}
+diff --git a/src/infra/http.js b/src/infra/http.js
+new file mode 100644
+index 0000000..88f402c
+--- /dev/null
++++ b/src/infra/http.js
+@@ -0,0 +1,10 @@
++export async function request(url, { method = "GET", body, timeoutMs = 10000 } = {}) {
++  const res = await fetch(url, {
++    method,
++    headers: body ? { "content-type": "application/json" } : {},
++    body: body ? JSON.stringify(body) : undefined,
++    signal: AbortSignal.timeout(timeoutMs),
++  })
++  if (!res.ok) throw new Error(`${method} ${url}: ${res.status}`)
++  return res.json()
++}
+diff --git a/src/infra/settings.js b/src/infra/settings.js
+new file mode 100644
+index 0000000..e498ed2
+--- /dev/null
++++ b/src/infra/settings.js
+@@ -0,0 +1,9 @@
++import { readFileSync } from "node:fs"
++
++const path = process.env.SHOP_CONFIG ?? new URL("../../config/shop.json", import.meta.url)
++const raw = JSON.parse(readFileSync(path, "utf8"))
++
++export const settings = {
++  maxItems: raw.maxItems,
++  currency: raw.currency,
++}
+diff --git a/src/orders/index.js b/src/orders/index.js
+new file mode 100644
+index 0000000..e0083aa
+--- /dev/null
++++ b/src/orders/index.js
+@@ -0,0 +1,41 @@
++import { publish } from "../infra/bus.js"
++import { holdStock } from "./reserve.js"
++import { findByCustomer, findOrder, patchOrder, saveOrder } from "./store.js"
++
++class OrderView {
++  constructor(row) {
++    this._row = row
++  }
++  get id() { return this._row.id }
++  get status() { return this._row.status }
++  get total() { return this._row.total }
++  get items() { return this._row.items.map((i) => ({ ...i })) }
++}
++
++let seq = 0
++
++export function placeOrder({ customerId, items, total }) {
++  const id = `ord_${++seq}`
++  saveOrder({ id, customerId, items, total, status: "unpaid", deletedAt: null })
++  holdStock(id, items)
++  publish("order.placed", { version: 1, orderId: id, customerId, total })
++  return id
++}
++
++export function getOrder(id) {
++  const row = findOrder(id)
++  return row && !row.deletedAt ? new OrderView(row) : null
++}
++
++export function listOrders(customerId) {
++  return findByCustomer(customerId).filter((row) => !row.deletedAt).map((row) => new OrderView(row))
++}
++
++export function updateStatus(id, status) {
++  patchOrder(id, { status })
++  publish("order.updated", { version: 1, orderId: id, status })
++}
++
++export function deleteOrder(id) {
++  patchOrder(id, { deletedAt: new Date().toISOString() })
++}
+diff --git a/src/orders/reserve.js b/src/orders/reserve.js
+new file mode 100644
+index 0000000..6eb8f61
+--- /dev/null
++++ b/src/orders/reserve.js
+@@ -0,0 +1,13 @@
++import { config } from "../infra/config.js"
++
++const holds = new Map()
++
++/** Holds the items while the payment is authorised; the hold lapses with the payment timeout. */
++export function holdStock(orderId, items) {
++  holds.set(orderId, items)
++  setTimeout(() => holds.delete(orderId), config.paymentTimeoutMs).unref()
++}
++
++export function heldItems(orderId) {
++  return holds.get(orderId) ?? []
++}
+diff --git a/src/orders/store.js b/src/orders/store.js
+new file mode 100644
+index 0000000..a5bda87
+--- /dev/null
++++ b/src/orders/store.js
+@@ -0,0 +1,6 @@
++import { insert, query, update } from "../infra/db.js"
++
++export const saveOrder = (row) => insert("orders", row)
++export const findOrder = (id) => query("orders", { id })[0] ?? null
++export const findByCustomer = (customerId) => query("orders", { customerId })
++export const patchOrder = (id, patch) => update("orders", { id }, patch)
+diff --git a/src/payments/gateway.js b/src/payments/gateway.js
+new file mode 100644
+index 0000000..4fb6ae8
+--- /dev/null
++++ b/src/payments/gateway.js
+@@ -0,0 +1,10 @@
++import { config } from "../infra/config.js"
++import { request } from "../infra/http.js"
++
++export function authorize({ customerId, amount }) {
++  return request(`${config.paymentGatewayUrl}/authorize`, {
++    method: "POST",
++    body: { customerId, amountCents: amount },
++    timeoutMs: config.paymentTimeoutMs,
++  })
++}
+diff --git a/src/payments/index.js b/src/payments/index.js
+new file mode 100644
+index 0000000..ce7e59e
+--- /dev/null
++++ b/src/payments/index.js
+@@ -0,0 +1,11 @@
++import { balanceOf } from "../billing/index.js"
++import { authorize } from "./gateway.js"
++
++export const FEES = { refundCents: 50 }
++
++/** Charges the customer's open balance. `amount` is the charged amount in cents. */
++export async function charge(customerId) {
++  const amount = balanceOf(customerId)
++  const { authorizationId } = await authorize({ customerId, amount })
++  return { authorizationId, amount }
++}
+diff --git a/src/payments/refund.js b/src/payments/refund.js
+new file mode 100644
+index 0000000..077f188
+--- /dev/null
++++ b/src/payments/refund.js
+@@ -0,0 +1,7 @@
++import { balanceOf } from "../billing/index.js"
++import { FEES } from "./index.js"
++
++/** What a refund pays out: the open balance minus the refund fee, never below zero. */
++export function refundableCents(customerId) {
++  return Math.max(0, balanceOf(customerId) - FEES.refundCents)
++}
+diff --git a/src/shipping/index.js b/src/shipping/index.js
+new file mode 100644
+index 0000000..2f142c1
+--- /dev/null
++++ b/src/shipping/index.js
+@@ -0,0 +1,7 @@
++import { rateFor } from "./internal/rates.js"
++
++/** Shipping cost in cents: one parcel per five units. */
++export function quote(country, items) {
++  const units = items.reduce((n, i) => n + i.qty, 0)
++  return rateFor(country) * Math.ceil(units / 5)
++}
+diff --git a/src/shipping/internal/rates.js b/src/shipping/internal/rates.js
+new file mode 100644
+index 0000000..ef537bc
+--- /dev/null
++++ b/src/shipping/internal/rates.js
+@@ -0,0 +1,11 @@
++const RATES = [
++  { country: "DE", cents: 490 },
++  { country: "FR", cents: 690 },
++  { country: "NL", cents: 590 },
++]
++
++export function rateFor(country) {
++  const rate = RATES.find((r) => r.country === country)
++  if (!rate) throw new Error(`no shipping to ${country}`)
++  return rate.cents
++}
+diff --git a/src/ui/format.js b/src/ui/format.js
+new file mode 100644
+index 0000000..27776de
+--- /dev/null
++++ b/src/ui/format.js
+@@ -0,0 +1 @@
++export const formatCents = (cents) => (cents / 100).toFixed(2)
+diff --git a/src/ui/order-page.js b/src/ui/order-page.js
+new file mode 100644
+index 0000000..21de638
+--- /dev/null
++++ b/src/ui/order-page.js
+@@ -0,0 +1,8 @@
++import { fetchOrder, parseOrder } from "../generated/orders-client.js"
++import { formatCents } from "./format.js"
++
++export async function renderOrderPage(id) {
++  const order = parseOrder(await fetchOrder(id))
++  const lines = order.items.map((i) => `<li>${i.sku} × ${i.qty}</li>`)
++  return `<h1>Order ${order.id}</h1><p>${order.status}</p><ul>${lines.join("")}</ul><p>Total ${formatCents(order.total)}</p>`
++}
+diff --git a/test/shipping.test.js b/test/shipping.test.js
+new file mode 100644
+index 0000000..b9f9967
+--- /dev/null
++++ b/test/shipping.test.js
+@@ -0,0 +1,11 @@
++import assert from "node:assert/strict"
++import { test } from "node:test"
++import { quote } from "../src/shipping/index.js"
++
++test("ships one parcel per five units", () => {
++  assert.equal(quote("DE", [{ sku: "a", qty: 6 }]), 980)
++})
++
++test("refuses a country it does not ship to", () => {
++  assert.throws(() => quote("XX", [{ sku: "a", qty: 1 }]), /no shipping to XX/)
++})

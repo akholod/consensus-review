@@ -1,0 +1,88 @@
+diff --git a/openapi.yaml b/openapi.yaml
+index d24b5ad..ec1f386 100644
+--- a/openapi.yaml
++++ b/openapi.yaml
+@@ -3,6 +3,15 @@ info:
+   title: meterly
+   version: "1"
+ paths:
++  /v1/admin/subscriptions.csv:
++    get:
++      operationId: exportActiveSubscriptions
++      responses:
++        "200":
++          description: billed subscriptions as CSV
++          content:
++            text/csv:
++              schema: { type: string }
+   /v1/accounts/{id}:
+     patch:
+       operationId: patchAccount
+diff --git a/src/admin/export.js b/src/admin/export.js
+new file mode 100644
+index 0000000..db5abca
+--- /dev/null
++++ b/src/admin/export.js
+@@ -0,0 +1,9 @@
++import { toCsv } from "../infra/csv.js"
++import { allSubscriptions } from "../subscriptions/repository.js"
++
++const COLUMNS = ["id", "accountId", "planId", "status", "renewsAt", "graceUntil"]
++
++/** CSV of the subscriptions customers are currently billed for, for the finance team. */
++export function exportActiveCsv() {
++  return toCsv(allSubscriptions().filter((row) => row.status === "active"), COLUMNS)
++}
+diff --git a/src/admin/index.js b/src/admin/index.js
+index 6bedfa8..f8abf92 100644
+--- a/src/admin/index.js
++++ b/src/admin/index.js
+@@ -7,3 +7,5 @@ export function accountOverview(accountId) {
+   if (!account) return null
+   return { account, subscriptions: listActive(accountId), invoices: invoicesFor(accountId) }
+ }
++
++export { exportActiveCsv } from "./export.js"
+diff --git a/src/api/admin-handler.js b/src/api/admin-handler.js
+new file mode 100644
+index 0000000..a54e2c9
+--- /dev/null
++++ b/src/api/admin-handler.js
+@@ -0,0 +1,10 @@
++import { exportActiveCsv } from "../admin/index.js"
++import { toResponse } from "./errors.js"
++
++export function getActiveExportHandler() {
++  try {
++    return { status: 200, headers: { "content-type": "text/csv" }, body: exportActiveCsv() }
++  } catch (err) {
++    return toResponse(err)
++  }
++}
+diff --git a/src/infra/csv.js b/src/infra/csv.js
+new file mode 100644
+index 0000000..2343157
+--- /dev/null
++++ b/src/infra/csv.js
+@@ -0,0 +1,8 @@
++const cell = (value) => {
++  const text = String(value ?? "")
++  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
++}
++
++export function toCsv(rows, columns) {
++  return [columns.join(","), ...rows.map((row) => columns.map((c) => cell(row[c])).join(","))].join("\n")
++}
+diff --git a/test/admin.test.js b/test/admin.test.js
+new file mode 100644
+index 0000000..55c134d
+--- /dev/null
++++ b/test/admin.test.js
+@@ -0,0 +1,7 @@
++import assert from "node:assert/strict"
++import { test } from "node:test"
++import { toCsv } from "../src/infra/csv.js"
++
++test("quotes cells that hold a comma or a quote", () => {
++  assert.equal(toCsv([{ a: "x,y", b: 'say "hi"' }], ["a", "b"]), 'a,b\n"x,y","say ""hi"""')
++})

@@ -1,9 +1,11 @@
-// The test-review fixture: a small node:test package stored as two patches, so a bare
-// `node --test` at the repo root never runs it. materialize() turns it into a git repo with the
-// base committed and the change staged; applyCheck() applies one answer-key check to that tree;
-// childEnv() is the environment a nested `node --test` needs to report honestly.
+// Seeded review fixtures under test/fixtures/<name>/: a small package stored as two patches, so a
+// bare `node --test` at the repo root never runs it. materialize() turns one into a git repo with
+// the base committed and the change staged; applyCheck() applies one test-review key check to that
+// tree; childEnv() is the environment a nested `node --test` needs to report honestly.
 //
-// CLI: node testkit/review-fixture.mjs [dir]   materialises into dir (default: a new temp dir)
+// CLI: node testkit/review-fixture.mjs [dir] [name] [change]   materialises fixture `name`
+// (default test-review) with its `change` patch (default change.patch) into dir (default: a new
+// temp dir)
 
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -12,28 +14,44 @@ import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 const HERE = fileURLToPath(new URL(".", import.meta.url))
-const FIXTURE_DIR = resolve(HERE, "../test/fixtures/test-review")
-export const KEY_PATH = join(FIXTURE_DIR, "answer-key.json")
+const fixtureDir = (name) => resolve(HERE, "../test/fixtures", name)
+export const keyPath = (name = "test-review") => join(fixtureDir(name), "answer-key.json")
+export const KEY_PATH = keyPath()
 const PIN = join(HERE, "pin-clock.mjs")
 
 /** The fixture's own clock: the date the suite is green as committed. */
 const FIXTURE_NOW = "2026-11-08T00:00:00Z"
 
+/** The base commit's author and subject. arch-review's reviewer reads `git log`, so it looks real. */
+const BASE_COMMIT = {
+  "test-review": { name: "fixture", email: "fixture@example.com", subject: "base" },
+  "arch-review": { name: "Dana Kim", email: "dana@shopfront.dev", subject: "Release 1.4.0" },
+  "arch-review-hard": { name: "Sam Okafor", email: "sam@meterly.dev", subject: "Release 2.3.0" },
+}
+
 const git = (dir, ...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
 
-/** git init; apply and commit base.patch; apply change.patch and stage it, uncommitted. */
-export function materialize(dir) {
+/**
+ * git init; apply and commit base.patch; apply the change (`change`, default change.patch) and
+ * stage it, uncommitted. With `include`, only the change's hunks for those paths are applied (none
+ * for an empty list).
+ */
+export function materialize(dir, { fixture = "test-review", change = "change.patch", include } = {}) {
   mkdirSync(dir, { recursive: true })
   if (readdirSync(dir).length) throw new Error(`materialize: ${dir} is not empty`)
+  const commit = BASE_COMMIT[fixture]
+  if (!commit) throw new Error(`materialize: unknown fixture ${fixture}`)
   git(dir, "init", "-q")
-  git(dir, "config", "user.email", "fixture@example.com")
-  git(dir, "config", "user.name", "fixture")
+  git(dir, "config", "user.email", commit.email)
+  git(dir, "config", "user.name", commit.name)
   git(dir, "config", "commit.gpgsign", "false")
-  git(dir, "apply", join(FIXTURE_DIR, "base.patch"))
+  git(dir, "apply", join(fixtureDir(fixture), "base.patch"))
   git(dir, "add", "-A")
-  git(dir, "commit", "-qm", "base")
-  git(dir, "apply", join(FIXTURE_DIR, "change.patch"))
-  git(dir, "add", "-A")
+  git(dir, "commit", "-qm", commit.subject)
+  if (include?.length !== 0) {
+    git(dir, "apply", ...(include ?? []).map((path) => `--include=${path}`), join(fixtureDir(fixture), change))
+    git(dir, "add", "-A")
+  }
   return dir
 }
 
@@ -67,7 +85,8 @@ export function childEnv(base = process.env, { now = FIXTURE_NOW } = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const dir = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync(join(tmpdir(), "test-review-fixture-"))
-  materialize(dir)
+  const fixture = process.argv[3] ?? "test-review"
+  const dir = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync(join(tmpdir(), `${fixture}-fixture-`))
+  materialize(dir, { fixture, change: process.argv[4] })
   process.stdout.write(`${dir}\n`)
 }

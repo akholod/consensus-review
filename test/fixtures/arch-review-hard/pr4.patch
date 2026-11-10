@@ -1,0 +1,41 @@
+diff --git a/src/accounts/index.js b/src/accounts/index.js
+index 08deebc..3b5b7bf 100644
+--- a/src/accounts/index.js
++++ b/src/accounts/index.js
+@@ -17,12 +17,11 @@ export function getAccount(id) {
+ 
+ export function getSettings(id) {
+   if (!settingsCache.has(id)) settingsCache.set(id, findAccount(id)?.settings ?? null)
+-  const settings = settingsCache.get(id)
+-  return settings && { ...settings, channels: [...settings.channels] }
++  return settingsCache.get(id)
+ }
+ 
+ export function updateAccount(id, patch) {
+   patchAccount(id, patch)
+   settingsCache.delete(id)
+-  publish("account.updated", { account: getAccount(id) })
++  publish("account.updated", { accountId: id, changes: Object.keys(patch) })
+ }
+diff --git a/src/notifications/index.js b/src/notifications/index.js
+index 6dd89ff..21a16c4 100644
+--- a/src/notifications/index.js
++++ b/src/notifications/index.js
+@@ -15,3 +15,4 @@ on("subscription.cancelled", ({ accountId }) => {
+ })
+ 
+ export { sent } from "./mailer.js"
++export { enableSms } from "./preferences.js"
+diff --git a/src/notifications/preferences.js b/src/notifications/preferences.js
+new file mode 100644
+index 0000000..f8adaa7
+--- /dev/null
++++ b/src/notifications/preferences.js
+@@ -0,0 +1,7 @@
++import { getSettings } from "../accounts/index.js"
++
++/** Opts the account into SMS notifications as well as email. */
++export function enableSms(accountId) {
++  const settings = getSettings(accountId)
++  if (!settings.channels.includes("sms")) settings.channels.push("sms")
++}

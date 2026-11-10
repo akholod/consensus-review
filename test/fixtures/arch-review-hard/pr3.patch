@@ -1,0 +1,87 @@
+diff --git a/src/api/usage-handler.js b/src/api/usage-handler.js
+index b8e619f..716816c 100644
+--- a/src/api/usage-handler.js
++++ b/src/api/usage-handler.js
+@@ -1,10 +1,9 @@
+-import { overLimit, record } from "../usage/index.js"
+-import { HttpError, toResponse } from "./errors.js"
++import { meter } from "../usage/index.js"
++import { toResponse } from "./errors.js"
+ 
+ export function postUsageHandler(req) {
+   try {
+-    if (overLimit(req.params.id)) throw new HttpError(429, "usage_limit")
+-    record(req.params.id, req.body.units)
++    meter(req.params.id, req.body.units)
+     return { status: 204, body: null }
+   } catch (err) {
+     return toResponse(err)
+diff --git a/src/plans/index.js b/src/plans/index.js
+index 30a80ca..7eb034f 100644
+--- a/src/plans/index.js
++++ b/src/plans/index.js
+@@ -1,6 +1,14 @@
+ import { query } from "../infra/db.js"
++import { unitsUsed } from "../usage/index.js"
+ 
+-const view = (row) => ({ id: row.id, name: row.name, priceCents: row.priceCents, interval: row.interval })
++const view = (row) => ({
++  id: row.id,
++  name: row.name,
++  priceCents: row.priceCents,
++  interval: row.interval,
++  includedUnits: row.includedUnits ?? 0,
++  unitCents: row.unitCents ?? 0,
++})
+ 
+ export function getPlan(id) {
+   const [row] = query("plans", { id })
+@@ -10,3 +18,9 @@ export function getPlan(id) {
+ export function listPlans() {
+   return query("plans").map(view)
+ }
++
++/** Price of the current period: the plan price plus every metered unit beyond the included ones. */
++export function periodPrice(planId, subscriptionId) {
++  const plan = getPlan(planId)
++  return plan.priceCents + Math.max(0, unitsUsed(subscriptionId) - plan.includedUnits) * plan.unitCents
++}
+diff --git a/src/usage/index.js b/src/usage/index.js
+index d43bcdb..02b399f 100644
+--- a/src/usage/index.js
++++ b/src/usage/index.js
+@@ -1,3 +1,4 @@
++import { HttpError } from "../api/errors.js"
+ import { on } from "../infra/bus.js"
+ import { config } from "../infra/config.js"
+ import { insert, query, update } from "../infra/db.js"
+@@ -19,3 +20,9 @@ export function unitsUsed(subscriptionId) {
+ export function overLimit(subscriptionId) {
+   return unitsUsed(subscriptionId) >= config.usageLimitPerPeriod
+ }
++
++/** Records metered units, refusing them once the period's limit is reached. */
++export function meter(subscriptionId, units) {
++  if (overLimit(subscriptionId)) throw new HttpError(429, "usage_limit")
++  record(subscriptionId, units)
++}
+diff --git a/test/plans.test.js b/test/plans.test.js
+new file mode 100644
+index 0000000..4b9f45a
+--- /dev/null
++++ b/test/plans.test.js
+@@ -0,0 +1,14 @@
++import assert from "node:assert/strict"
++import { test } from "node:test"
++import { createAccount } from "../src/accounts/index.js"
++import { periodPrice } from "../src/plans/index.js"
++import { startSubscription } from "../src/subscriptions/index.js"
++import { record } from "../src/usage/index.js"
++import { NOW, seedPlan } from "./helpers.js"
++
++test("charges metered units beyond the included ones", () => {
++  const planId = seedPlan({ id: "metered", includedUnits: 100, unitCents: 2 })
++  const id = startSubscription(createAccount({ name: "Cy", email: "cy@example.com" }), planId, NOW)
++  record(id, 150)
++  assert.equal(periodPrice(planId, id), 2000)
++})

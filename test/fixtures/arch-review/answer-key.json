@@ -1,0 +1,986 @@
+{
+  "fixture": "test/fixtures/arch-review",
+  "rules": "docs/architecture.md",
+  "entries": [
+    {
+      "id": "S1",
+      "set": "original",
+      "kind": "seed",
+      "family": "layer",
+      "files": [
+        "src/ui/order-history.js"
+      ],
+      "changed": {
+        "src/ui/order-history.js": [
+          "1-8"
+        ]
+      },
+      "also": [
+        "src/infra/db.js",
+        "src/orders/index.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 14,
+        "text": "imports `src/infra/` or a server module."
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P0",
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "browser code (`src/ui/`) imports the server database module `src/infra/db.js` and queries the `orders` table itself, against the browser-code rule (server only through the generated client) or the table-ownership rule",
+        "consequences": [
+          "the browser has no database, so the history cannot show real orders, or the server DB client is shipped to the browser",
+          "the client picks `customerId` and reads orders directly, with no server-side check",
+          "the query skips the orders module's `deletedAt` filter"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/ui/order-history.js",
+          "line": 1,
+          "text": "import { query } from \"../infra/db.js\""
+        },
+        {
+          "file": "src/ui/order-history.js",
+          "line": 5,
+          "text": "const rows = query(\"orders\", { customerId })"
+        }
+      ]
+    },
+    {
+      "id": "S2",
+      "set": "original",
+      "kind": "seed",
+      "family": "internals-in",
+      "files": [
+        "src/payments/refund.js"
+      ],
+      "changed": {
+        "src/payments/refund.js": [
+          "2",
+          "9-15"
+        ]
+      },
+      "also": [
+        "src/billing/internal/ledger.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 18,
+        "text": "or through a function. Every other file in the module directory, `internal/` included, is"
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P0",
+          "P1"
+        ]
+      },
+      "match": {
+        "mechanism": "payments imports billing's private `internal/ledger.js` and reads the ledger's `_entries`, bypassing billing's `index.js`",
+        "consequences": [
+          "the breakdown counts voided entries that `balance()` excludes, so the payout includes money already voided",
+          "payments now depends on billing's internal data structure, so a change inside billing breaks refunds"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/payments/refund.js",
+          "line": 2,
+          "text": "import { ledgerFor } from \"../billing/internal/ledger.js\""
+        },
+        {
+          "file": "src/payments/refund.js",
+          "line": 12,
+          "text": "const lines = ledgerFor(customerId)._entries.map((e) => ({ orderId: e.orderId, cents: e.amount }))"
+        },
+        {
+          "file": "src/billing/internal/ledger.js",
+          "line": 15,
+          "text": "return this._entries.filter((e) => !e.voided).reduce((sum, e) => sum + e.amount, 0)",
+          "base": "present"
+        }
+      ]
+    },
+    {
+      "id": "S3",
+      "set": "original",
+      "kind": "seed",
+      "family": "internals-out",
+      "files": [
+        "src/catalog/index.js",
+        "src/checkout/promo.js",
+        "src/checkout/index.js"
+      ],
+      "changed": {
+        "src/catalog/index.js": [
+          "19-23"
+        ],
+        "src/checkout/promo.js": [
+          "1-7"
+        ],
+        "src/checkout/index.js": [
+          "15-16"
+        ]
+      },
+      "also": [
+        "src/api/products-handler.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 17,
+        "text": "constants, and never hands out the module's own state (a cache, a map, a live object), directly"
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P0",
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "catalog hands out its private price cache (`priceTable()` returns the live Map) and checkout writes sale prices into it, so catalog's internal state is mutated from outside",
+        "consequences": [
+          "prices change only in a per-process cache that the `products` table and other server instances never see",
+          "every later caller of `getPrice`/`getProduct` gets the sale price, with no way to end the sale; starting it twice compounds the discount",
+          "catalog can no longer change or invalidate its cache without breaking checkout"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/catalog/index.js",
+          "line": 21,
+          "text": "export function priceTable() {"
+        },
+        {
+          "file": "src/checkout/index.js",
+          "line": 16,
+          "text": "export { startFlashSale } from \"./promo.js\""
+        },
+        {
+          "file": "src/checkout/promo.js",
+          "line": 6,
+          "text": "for (const sku of skus) prices.set(sku, Math.round((getPrice(sku) * (100 - percentOff)) / 100))"
+        }
+      ]
+    },
+    {
+      "id": "S4",
+      "set": "original",
+      "kind": "seed",
+      "family": "barrier",
+      "files": [
+        "eslint.config.js"
+      ],
+      "changed": {
+        "eslint.config.js": [
+          "8"
+        ]
+      },
+      "also": [
+        ".github/workflows/ci.yml",
+        "package.json"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 14,
+        "text": "imports `src/infra/` or a server module. Enforced by `no-restricted-imports` in"
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "the browser-code boundary rule in `eslint.config.js` is demoted from `error` to `warn`",
+        "consequences": [
+          "CI runs `eslint .` without `--max-warnings`, so a forbidden import from `src/ui/` no longer fails CI and the documented boundary is no longer enforced",
+          "the forbidden imports in this same change (`src/ui/order-history.js`, `src/ui/price-badge.js`) pass lint"
+        ]
+      },
+      "facts": [
+        {
+          "file": "eslint.config.js",
+          "line": 8,
+          "text": "\"no-restricted-imports\": [\"warn\", {"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 12,
+          "text": "- run: npm run lint",
+          "base": "present"
+        },
+        {
+          "file": "package.json",
+          "line": 8,
+          "text": "\"lint\": \"eslint .\",",
+          "base": "present"
+        }
+      ]
+    },
+    {
+      "id": "S5",
+      "set": "original",
+      "kind": "seed",
+      "family": "direction",
+      "files": [
+        "src/billing/index.js"
+      ],
+      "changed": {
+        "src/billing/index.js": [
+          "2",
+          "24-29"
+        ]
+      },
+      "also": [
+        "src/payments/index.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 23,
+        "text": "`billing → customers`; `reports → billing`. A module never imports a module that depends on it,"
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "billing now imports `payments` while payments already imports billing: an import cycle against the documented direction (`payments → billing` only)",
+        "consequences": [
+          "the two modules can no longer change, be tested or be loaded independently",
+          "a future top-level use of a `payments` export in billing fails on load order (ESM cycle)"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/billing/index.js",
+          "line": 2,
+          "text": "import { FEES } from \"../payments/index.js\""
+        },
+        {
+          "file": "src/payments/index.js",
+          "line": 1,
+          "text": "import { balanceOf } from \"../billing/index.js\"",
+          "base": "present"
+        }
+      ]
+    },
+    {
+      "id": "S6",
+      "set": "original",
+      "kind": "seed",
+      "family": "semantic",
+      "files": [
+        "src/infra/config.js",
+        "src/payments/gateway.js"
+      ],
+      "changed": {
+        "src/infra/config.js": [
+          "4"
+        ],
+        "src/payments/gateway.js": [
+          "8"
+        ]
+      },
+      "also": [
+        "src/orders/reserve.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 29,
+        "text": "A duration's name ends in `Ms` and its value is in"
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "`paymentTimeoutMs` keeps its name but now holds seconds (30), against the `…Ms` = milliseconds rule; only the gateway was changed to multiply by 1000",
+        "consequences": [
+          "`orders/reserve.js` still reads it as milliseconds, so the stock hold lapses after 30 ms instead of 30 s",
+          "every other reader of `paymentTimeoutMs` silently gets a 1000× shorter duration"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/infra/config.js",
+          "line": 4,
+          "text": "paymentTimeoutMs: 30,"
+        },
+        {
+          "file": "src/payments/gateway.js",
+          "line": 8,
+          "text": "timeoutMs: config.paymentTimeoutMs * 1000,"
+        },
+        {
+          "file": "src/orders/reserve.js",
+          "line": 8,
+          "text": "setTimeout(() => holds.delete(orderId), config.paymentTimeoutMs).unref()",
+          "base": "present"
+        }
+      ]
+    },
+    {
+      "id": "S7",
+      "set": "original",
+      "kind": "seed",
+      "family": "breaking",
+      "files": [
+        "src/api/orders-handler.js"
+      ],
+      "changed": {
+        "src/api/orders-handler.js": [
+          "11"
+        ]
+      },
+      "also": [
+        "docs/api.md",
+        "openapi.yaml",
+        "src/generated/orders-client.js",
+        "src/ui/order-page.js",
+        "src/ui/receipt.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 35,
+        "text": "schedule. Version 1 only grows"
+      },
+      "severity": {
+        "key": "P0",
+        "accepted": [
+          "P0",
+          "P1"
+        ]
+      },
+      "match": {
+        "mechanism": "`GET /v1/orders/:id` renames `total` to `totalCents` inside v1, a breaking change to the public API with no `/v2`",
+        "consequences": [
+          "the separately released mobile app, which reads `total` (`docs/api.md`), breaks",
+          "the response no longer matches `openapi.yaml`, where `total` is required, so the generated `parseOrder` throws and the web order page fails on every order"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/api/orders-handler.js",
+          "line": 11,
+          "text": "totalCents: order.total,"
+        },
+        {
+          "file": "docs/api.md",
+          "line": 13,
+          "text": "| `total` | integer | order total in cents |",
+          "base": "present"
+        }
+      ]
+    },
+    {
+      "id": "S8",
+      "set": "original",
+      "kind": "seed",
+      "family": "semantic",
+      "files": [
+        "src/orders/index.js"
+      ],
+      "changed": {
+        "src/orders/index.js": [
+          "17-18",
+          "20-21",
+          "23"
+        ]
+      },
+      "also": [
+        "docs/events.md",
+        "src/billing/index.js",
+        "src/billing/issue.js",
+        "src/checkout/confirmation.js"
+      ],
+      "anchor": {
+        "file": "docs/events.md",
+        "line": 8,
+        "text": "`orderId`, `customerId` (account id, `cus_…`), `total` (cents)"
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P0",
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "for guest orders, `customerId` in the stored order and in the `order.placed` event now carries the checkout session id, not the account id the event contract documents, with `version` still 1",
+        "consequences": [
+          "billing keys ledgers and invoices by a value that is not an account id",
+          "the data warehouse receives session ids as customer ids, which breaks its per-customer data"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/orders/index.js",
+          "line": 20,
+          "text": "const buyer = customerId ?? sessionId"
+        },
+        {
+          "file": "src/orders/index.js",
+          "line": 23,
+          "text": "publish(\"order.placed\", { version: 1, orderId: id, customerId: buyer, total })"
+        }
+      ]
+    },
+    {
+      "id": "S9",
+      "set": "original",
+      "kind": "seed",
+      "family": "boundary-contract",
+      "files": [
+        "src/ui/receipt.js"
+      ],
+      "changed": {
+        "src/ui/receipt.js": [
+          "1-16"
+        ]
+      },
+      "also": [
+        "src/generated/orders-client.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 13,
+        "text": "`src/generated/`, and passes every response through its `parse*` function before use."
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "the receipt uses the raw API response without `parseOrder` and types it with a hand-written `ReceiptOrder` instead of the generated `Order`",
+        "consequences": [
+          "the local type invents `items[].price`, which the API does not send (`priceCents`), so every line amount renders as NaN",
+          "a malformed or changed response reaches the UI unvalidated"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/ui/receipt.js",
+          "line": 13,
+          "text": "const order = await fetchOrder(id)"
+        },
+        {
+          "file": "src/ui/receipt.js",
+          "line": 8,
+          "text": " * @property {{ sku: string, qty: number, price: number }[]} items"
+        }
+      ]
+    },
+    {
+      "id": "H1",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "layer",
+      "files": [
+        "src/ui/price-badge.js"
+      ],
+      "changed": {
+        "src/ui/price-badge.js": [
+          "1-6"
+        ]
+      },
+      "also": [
+        "src/catalog/index.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 14,
+        "text": "imports `src/infra/` or a server module."
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "browser code imports the server module `catalog` instead of going through the generated client",
+        "consequences": [
+          "server code that queries the database is pulled into the browser, where `getPrice` has no database to read",
+          "the browser now depends on a server module, so catalog cannot change without breaking the UI"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/ui/price-badge.js",
+          "line": 1,
+          "text": "import { getPrice } from \"../catalog/index.js\""
+        }
+      ]
+    },
+    {
+      "id": "H2",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "internals-in",
+      "files": [
+        "src/checkout/confirmation.js"
+      ],
+      "changed": {
+        "src/checkout/confirmation.js": [
+          "1-8"
+        ]
+      },
+      "also": [
+        "src/orders/index.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 19,
+        "text": "private: other modules do not import it, and they do not read fields whose name starts with"
+      },
+      "severity": {
+        "key": "P2",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "checkout reads `order._row.customerId`, the private row behind orders' `OrderView`, instead of a getter orders would need to expose",
+        "consequences": [
+          "checkout now depends on orders' storage shape, so a change to `OrderView` or the row breaks the confirmation"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/checkout/confirmation.js",
+          "line": 6,
+          "text": "const guest = order._row.customerId.startsWith(\"sess_\")"
+        }
+      ]
+    },
+    {
+      "id": "H3",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "internals-out",
+      "files": [
+        "src/customers/index.js",
+        "test/customers.test.js"
+      ],
+      "changed": {
+        "src/customers/index.js": [
+          "18-19"
+        ],
+        "test/customers.test.js": [
+          "1-9"
+        ]
+      },
+      "also": [
+        "src/customers/internal/profiles.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 17,
+        "text": "constants, and never hands out the module's own state (a cache, a map, a live object), directly"
+      },
+      "severity": {
+        "key": "P2",
+        "accepted": [
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "customers re-exports its private mutable `profileCache` from `index.js` (as `__profileCache`, for a test), handing out the module's own state",
+        "consequences": [
+          "the cache becomes part of the module's public API, so any importer can read or change cached profiles",
+          "the cache can no longer change without breaking the test and any other importer"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/customers/index.js",
+          "line": 19,
+          "text": "export { profileCache as __profileCache }"
+        },
+        {
+          "file": "test/customers.test.js",
+          "line": 8,
+          "text": "assert.equal(__profileCache.get(id).email, \"ada@example.com\")"
+        }
+      ]
+    },
+    {
+      "id": "H4",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "breaking",
+      "files": [
+        "src/billing/issue.js"
+      ],
+      "changed": {
+        "src/billing/issue.js": [
+          "20"
+        ]
+      },
+      "also": [
+        "docs/events.md"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 38,
+        "text": "payload field keeps its name and meaning; a change bumps `version`"
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P0",
+          "P1"
+        ]
+      },
+      "match": {
+        "mechanism": "the `invoice.issued` payload renames `customerId` to `accountId` with `version` still 1",
+        "consequences": [
+          "a breaking event-contract change for the data warehouse, which reads `customerId` (`docs/events.md`)"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/billing/issue.js",
+          "line": 20,
+          "text": "publish(\"invoice.issued\", { version: 1, invoiceId, orderId, accountId: customerId })"
+        },
+        {
+          "file": "docs/events.md",
+          "line": 10,
+          "text": "| `invoice.issued` | 1 | billing | `invoiceId`, `orderId`, `customerId` (account id) | warehouse |"
+        }
+      ]
+    },
+    {
+      "id": "H5",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "semantic",
+      "files": [
+        "src/payments/index.js"
+      ],
+      "changed": {
+        "src/payments/index.js": [
+          "6",
+          "8-10"
+        ]
+      },
+      "also": [
+        "src/checkout/index.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 29,
+        "text": "**Units.** Money is integer cents everywhere."
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P0",
+          "P1"
+        ]
+      },
+      "match": {
+        "mechanism": "`charge()` keeps the field `amount` but now returns euros (`cents / 100`) instead of integer cents, against the cents rule",
+        "consequences": [
+          "checkout still stores it as `paidCents`, so the recorded payment is 100 times too small"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/payments/index.js",
+          "line": 10,
+          "text": "return { authorizationId, amount: cents / 100 }"
+        },
+        {
+          "file": "src/checkout/index.js",
+          "line": 13,
+          "text": "return { orderId, authorizationId, paidCents: amount }",
+          "base": "present"
+        }
+      ]
+    },
+    {
+      "id": "H6",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "breaking",
+      "files": [
+        "config/shop.json",
+        "src/infra/settings.js",
+        "src/checkout/validate.js"
+      ],
+      "changed": {
+        "config/shop.json": [
+          "2"
+        ],
+        "src/infra/settings.js": [
+          "7"
+        ],
+        "src/checkout/validate.js": [
+          "5"
+        ]
+      },
+      "also": [],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 41,
+        "text": "so the keys are a contract: a rename keeps the old key readable."
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P0",
+          "P1"
+        ]
+      },
+      "match": {
+        "mechanism": "the config key `maxItems` is renamed to `itemLimit` with no fallback to the old key, against the config-keys contract",
+        "consequences": [
+          "production config, written by the ops repository, still sets `maxItems`, so `settings.itemLimit` is undefined and the cart-size limit silently stops applying"
+        ]
+      },
+      "facts": [
+        {
+          "file": "config/shop.json",
+          "line": 2,
+          "text": "\"itemLimit\": 50,"
+        },
+        {
+          "file": "src/infra/settings.js",
+          "line": 7,
+          "text": "itemLimit: raw.itemLimit,"
+        },
+        {
+          "file": "src/checkout/validate.js",
+          "line": 5,
+          "text": "if (items.length > settings.itemLimit) throw new Error(`a cart holds at most ${settings.itemLimit} lines`)"
+        }
+      ]
+    },
+    {
+      "id": "H7",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "shape",
+      "files": [
+        "src/api/products-handler.js"
+      ],
+      "changed": {
+        "src/api/products-handler.js": [
+          "8-13"
+        ]
+      },
+      "also": [
+        "docs/api.md"
+      ],
+      "anchor": {
+        "file": "docs/api.md",
+        "line": 5,
+        "text": "Every field has one shape"
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P0",
+          "P1"
+        ]
+      },
+      "match": {
+        "mechanism": "`tags` in `GET /v1/products/:sku` becomes a string when there is exactly one tag and stays an array otherwise: a union shape the API contract forbids",
+        "consequences": [
+          "mobile code that reads `tags` as an array breaks for single-tag products"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/api/products-handler.js",
+          "line": 12,
+          "text": "tags: product.tags.length === 1 ? product.tags[0] : product.tags,"
+        }
+      ]
+    },
+    {
+      "id": "H8",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "ownership",
+      "files": [
+        "src/reports/index.js"
+      ],
+      "changed": {
+        "src/reports/index.js": [
+          "1-6"
+        ]
+      },
+      "also": [
+        "src/billing/issue.js"
+      ],
+      "anchor": {
+        "file": "docs/architecture.md",
+        "line": 26,
+        "text": "**Data ownership.** Each table belongs to one module"
+      },
+      "severity": {
+        "key": "P2",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "reports queries billing's `invoices` table directly instead of going through billing's `index.js` (the documented `reports → billing` edge) or its events",
+        "consequences": [
+          "reports depends on billing's storage, so a change to the `invoices` table breaks the account report"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/reports/index.js",
+          "line": 5,
+          "text": "return query(\"invoices\", { customerId }).length"
+        }
+      ]
+    },
+    {
+      "id": "C1",
+      "set": "original",
+      "kind": "control",
+      "family": "additive",
+      "files": [
+        "src/api/customers-handler.js",
+        "docs/api.md"
+      ],
+      "changed": {
+        "src/api/customers-handler.js": [
+          "3-4",
+          "8"
+        ],
+        "docs/api.md": [
+          "31"
+        ]
+      },
+      "note": "adds `initials`, always a string, and documents it: an additive v1 change",
+      "facts": [
+        {
+          "file": "src/api/customers-handler.js",
+          "line": 8,
+          "text": "return { status: 200, body: { id: customer.id, name: customer.name, initials: initials(customer.name) } }"
+        },
+        {
+          "file": "docs/api.md",
+          "line": 31,
+          "text": "| `initials` | string | first letters of the name, for the avatar |"
+        }
+      ]
+    },
+    {
+      "id": "C2",
+      "set": "original",
+      "kind": "control",
+      "family": "internal-refactor",
+      "files": [
+        "src/shipping/internal/rates.js"
+      ],
+      "changed": {
+        "src/shipping/internal/rates.js": [
+          "1-5",
+          "8-10"
+        ]
+      },
+      "note": "the rate table becomes a Map behind an unchanged `rateFor`; same results, same error",
+      "facts": [
+        {
+          "file": "src/shipping/internal/rates.js",
+          "line": 8,
+          "text": "const cents = RATES.get(country)"
+        }
+      ]
+    },
+    {
+      "id": "C3",
+      "set": "original",
+      "kind": "control",
+      "family": "allowed-edge",
+      "files": [
+        "src/checkout/gift-card.js"
+      ],
+      "changed": {
+        "src/checkout/gift-card.js": [
+          "1-7"
+        ]
+      },
+      "note": "checkout → catalog through `index.js`, an edge rule 3 lists",
+      "facts": [
+        {
+          "file": "src/checkout/gift-card.js",
+          "line": 1,
+          "text": "import { getProduct } from \"../catalog/index.js\""
+        }
+      ]
+    },
+    {
+      "id": "C4",
+      "set": "holdout",
+      "kind": "control",
+      "family": "versioned-event",
+      "files": [
+        "src/shipping/index.js",
+        "src/shipping/internal/carriers.js",
+        "docs/events.md"
+      ],
+      "changed": {
+        "src/shipping/index.js": [
+          "1-2",
+          "10-16"
+        ],
+        "src/shipping/internal/carriers.js": [
+          "1-7"
+        ],
+        "docs/events.md": [
+          "11"
+        ]
+      },
+      "note": "a new event with `version: 1`, documented, and an import of the module's own `internal/`",
+      "facts": [
+        {
+          "file": "src/shipping/index.js",
+          "line": 14,
+          "text": "publish(\"shipment.created\", { version: 1, orderId, country, carrier })"
+        },
+        {
+          "file": "src/shipping/index.js",
+          "line": 2,
+          "text": "import { carrierFor } from \"./internal/carriers.js\""
+        },
+        {
+          "file": "docs/events.md",
+          "line": 11,
+          "text": "| `shipment.created` | 1 | shipping | `orderId`, `country`, `carrier` | warehouse |"
+        }
+      ]
+    }
+  ]
+}

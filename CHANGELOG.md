@@ -4,6 +4,20 @@ Full notes for each release: [GitHub releases](https://github.com/akholod/consen
 
 ## Unreleased
 
+- **Fixed — a finding with several sites keeps all of them in the report.**
+  The finding schema holds one `file`/`line`, so §6 kept a single location
+  when an agent named several (for example a lint rule demoted to `warn`
+  and the two imports it lets through). The other sites now open the
+  rationale as `Also at: …`. Measured in
+  `docs/design/arch-review-measurements.md`.
+
+- **Added — seeded fixtures for the architecture dimension**:
+  `test/fixtures/arch-review` (rules written down, 17 seeds, 4 controls)
+  and `test/fixtures/arch-review-hard` (no written rules, six independent
+  PRs, 8 seeds, a clean PR), each with a validator that proves the key by
+  running the seeded code. The baseline and the measured results are in
+  `docs/design/arch-review-measurements.md`.
+
 - **Added — `/consensus-review:plan-review <path>`**
   ([#4](https://github.com/akholod/consensus-review/issues/4)): review of
   one plan, spec or design doc before code exists, across five document

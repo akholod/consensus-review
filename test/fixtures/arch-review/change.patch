@@ -1,0 +1,429 @@
+diff --git a/config/shop.json b/config/shop.json
+index 0877655..dda302c 100644
+--- a/config/shop.json
++++ b/config/shop.json
+@@ -1,4 +1,4 @@
+ {
+-  "maxItems": 50,
++  "itemLimit": 50,
+   "currency": "EUR"
+ }
+diff --git a/docs/api.md b/docs/api.md
+index 7abd676..7bcbc8d 100644
+--- a/docs/api.md
++++ b/docs/api.md
+@@ -28,3 +28,4 @@ Every field has one shape: a list is always an array, even with one element or n
+ |---|---|---|
+ | `id` | string | customer id, `cus_…` |
+ | `name` | string | full name |
++| `initials` | string | first letters of the name, for the avatar |
+diff --git a/docs/events.md b/docs/events.md
+index ebde8dd..1ac4aef 100644
+--- a/docs/events.md
++++ b/docs/events.md
+@@ -8,3 +8,4 @@ Every payload carries `version`.
+ | `order.placed` | 1 | orders | `orderId`, `customerId` (account id, `cus_…`), `total` (cents) | billing, warehouse |
+ | `order.updated` | 1 | orders | `orderId`, `status` (payment state: `unpaid`, `paid`, `refunded`) | billing, warehouse |
+ | `invoice.issued` | 1 | billing | `invoiceId`, `orderId`, `customerId` (account id) | warehouse |
++| `shipment.created` | 1 | shipping | `orderId`, `country`, `carrier` | warehouse |
+diff --git a/eslint.config.js b/eslint.config.js
+index 635a22f..a8c3047 100644
+--- a/eslint.config.js
++++ b/eslint.config.js
+@@ -5,7 +5,7 @@ export default [
+   {
+     files: ["src/ui/**/*.js"],
+     rules: {
+-      "no-restricted-imports": ["error", {
++      "no-restricted-imports": ["warn", {
+         patterns: [
+           { group: ["**/infra/**"], message: "Browser code never imports server infrastructure." },
+           { group: SERVER_MODULES.map((m) => `**/${m}/**`), message: "Browser code talks to the server only through src/generated." },
+diff --git a/src/api/customers-handler.js b/src/api/customers-handler.js
+index 72b9448..110afed 100644
+--- a/src/api/customers-handler.js
++++ b/src/api/customers-handler.js
+@@ -1,7 +1,9 @@
+ import { getCustomer } from "../customers/index.js"
+ 
++const initials = (name) => name.split(/\s+/).filter(Boolean).map((part) => part[0].toUpperCase()).join("")
++
+ export function getCustomerHandler(req) {
+   const customer = getCustomer(req.params.id)
+   if (!customer) return { status: 404, body: { error: "not_found" } }
+-  return { status: 200, body: { id: customer.id, name: customer.name } }
++  return { status: 200, body: { id: customer.id, name: customer.name, initials: initials(customer.name) } }
+ }
+diff --git a/src/api/orders-handler.js b/src/api/orders-handler.js
+index fad1619..5f8d60b 100644
+--- a/src/api/orders-handler.js
++++ b/src/api/orders-handler.js
+@@ -8,7 +8,7 @@ export function getOrderHandler(req) {
+     body: {
+       id: order.id,
+       status: order.status,
+-      total: order.total,
++      totalCents: order.total,
+       items: order.items.map((i) => ({ sku: i.sku, qty: i.qty, priceCents: i.priceCents })),
+     },
+   }
+diff --git a/src/api/products-handler.js b/src/api/products-handler.js
+index ad11ad6..c930465 100644
+--- a/src/api/products-handler.js
++++ b/src/api/products-handler.js
+@@ -5,6 +5,11 @@ export function getProductHandler(req) {
+   if (!product) return { status: 404, body: { error: "not_found" } }
+   return {
+     status: 200,
+-    body: { sku: product.sku, name: product.name, priceCents: product.priceCents, tags: product.tags },
++    body: {
++      sku: product.sku,
++      name: product.name,
++      priceCents: product.priceCents,
++      tags: product.tags.length === 1 ? product.tags[0] : product.tags,
++    },
+   }
+ }
+diff --git a/src/billing/index.js b/src/billing/index.js
+index 99a132b..e3d2ad1 100644
+--- a/src/billing/index.js
++++ b/src/billing/index.js
+@@ -1,4 +1,5 @@
+ import { subscribe } from "../infra/bus.js"
++import { FEES } from "../payments/index.js"
+ import { ledgerFor } from "./internal/ledger.js"
+ import { findInvoice, issueInvoice, trackOrder } from "./issue.js"
+ 
+@@ -20,3 +21,9 @@ export function balanceOf(customerId) {
+ export function voidCharge(customerId, orderId) {
+   ledgerFor(customerId).void(orderId)
+ }
++
++/** Cancels an order's charge and books the refund fee in its place. */
++export function creditNote(customerId, orderId) {
++  ledgerFor(customerId).void(orderId)
++  ledgerFor(customerId).add({ orderId: `${orderId}-fee`, amount: FEES.refundCents })
++}
+diff --git a/src/billing/issue.js b/src/billing/issue.js
+index 11bb07d..f835363 100644
+--- a/src/billing/issue.js
++++ b/src/billing/issue.js
+@@ -17,6 +17,6 @@ export function issueInvoice(orderId) {
+   const customer = getCustomer(customerId)
+   const invoiceId = `inv_${query("invoices").length + 1}`
+   insert("invoices", { invoiceId, orderId, customerId, email: customer?.email ?? null, voided: false })
+-  publish("invoice.issued", { version: 1, invoiceId, orderId, customerId })
++  publish("invoice.issued", { version: 1, invoiceId, orderId, accountId: customerId })
+   return invoiceId
+ }
+diff --git a/src/catalog/index.js b/src/catalog/index.js
+index 3d21ab7..473d0e6 100644
+--- a/src/catalog/index.js
++++ b/src/catalog/index.js
+@@ -16,3 +16,8 @@ export function getProduct(sku) {
+   const [row] = query("products", { sku })
+   return row ? { sku: row.sku, name: row.name, priceCents: getPrice(sku), tags: [...row.tags] } : null
+ }
++
++/** The current price table, sku → cents. */
++export function priceTable() {
++  return cache
++}
+diff --git a/src/checkout/confirmation.js b/src/checkout/confirmation.js
+new file mode 100644
+index 0000000..4c583e3
+--- /dev/null
++++ b/src/checkout/confirmation.js
+@@ -0,0 +1,8 @@
++import { getOrder } from "../orders/index.js"
++
++export function confirmationText(orderId) {
++  const order = getOrder(orderId)
++  if (!order) return null
++  const guest = order._row.customerId.startsWith("sess_")
++  return guest ? `Order ${order.id} confirmed. Create an account to track it.` : `Order ${order.id} confirmed.`
++}
+diff --git a/src/checkout/gift-card.js b/src/checkout/gift-card.js
+new file mode 100644
+index 0000000..ba110a8
+--- /dev/null
++++ b/src/checkout/gift-card.js
+@@ -0,0 +1,7 @@
++import { getProduct } from "../catalog/index.js"
++
++export function giftCardLine(sku, recipientEmail) {
++  const product = getProduct(sku)
++  if (!product?.tags.includes("gift-card")) throw new Error(`${sku} is not a gift card`)
++  return { sku, qty: 1, recipientEmail }
++}
+diff --git a/src/checkout/index.js b/src/checkout/index.js
+index 4029113..0a8ad78 100644
+--- a/src/checkout/index.js
++++ b/src/checkout/index.js
+@@ -12,3 +12,5 @@ export async function checkout({ customerId, items, country }) {
+   const { authorizationId, amount } = await charge(customerId)
+   return { orderId, authorizationId, paidCents: amount }
+ }
++
++export { startFlashSale } from "./promo.js"
+diff --git a/src/checkout/promo.js b/src/checkout/promo.js
+new file mode 100644
+index 0000000..3445ea4
+--- /dev/null
++++ b/src/checkout/promo.js
+@@ -0,0 +1,7 @@
++import { getPrice, priceTable } from "../catalog/index.js"
++
++/** Starts a flash sale: the listed products cost `percentOff` percent less from now on. */
++export function startFlashSale(skus, percentOff) {
++  const prices = priceTable()
++  for (const sku of skus) prices.set(sku, Math.round((getPrice(sku) * (100 - percentOff)) / 100))
++}
+diff --git a/src/checkout/validate.js b/src/checkout/validate.js
+index 5315bed..f2089fd 100644
+--- a/src/checkout/validate.js
++++ b/src/checkout/validate.js
+@@ -2,5 +2,5 @@ import { settings } from "../infra/settings.js"
+ 
+ export function validateCart(items) {
+   if (!items.length) throw new Error("empty cart")
+-  if (items.length > settings.maxItems) throw new Error(`a cart holds at most ${settings.maxItems} lines`)
++  if (items.length > settings.itemLimit) throw new Error(`a cart holds at most ${settings.itemLimit} lines`)
+ }
+diff --git a/src/customers/index.js b/src/customers/index.js
+index 2f043f9..031a216 100644
+--- a/src/customers/index.js
++++ b/src/customers/index.js
+@@ -15,3 +15,5 @@ export function getCustomer(id) {
+   }
+   return { ...profileCache.get(id) }
+ }
++
++export { profileCache as __profileCache }
+diff --git a/src/infra/config.js b/src/infra/config.js
+index 541e9a9..9db3862 100644
+--- a/src/infra/config.js
++++ b/src/infra/config.js
+@@ -1,5 +1,5 @@
+ // Service constants. Deploy-specific values are read from config/shop.json by settings.js.
+ export const config = {
+   paymentGatewayUrl: "https://pay.example.com/v2",
+-  paymentTimeoutMs: 30000,
++  paymentTimeoutMs: 30,
+ }
+diff --git a/src/infra/settings.js b/src/infra/settings.js
+index e498ed2..193965d 100644
+--- a/src/infra/settings.js
++++ b/src/infra/settings.js
+@@ -4,6 +4,6 @@ const path = process.env.SHOP_CONFIG ?? new URL("../../config/shop.json", import
+ const raw = JSON.parse(readFileSync(path, "utf8"))
+ 
+ export const settings = {
+-  maxItems: raw.maxItems,
++  itemLimit: raw.itemLimit,
+   currency: raw.currency,
+ }
+diff --git a/src/orders/index.js b/src/orders/index.js
+index e0083aa..0e4ba39 100644
+--- a/src/orders/index.js
++++ b/src/orders/index.js
+@@ -14,11 +14,13 @@ class OrderView {
+ 
+ let seq = 0
+ 
+-export function placeOrder({ customerId, items, total }) {
++/** Guests have no account yet: their orders are keyed by the checkout session id. */
++export function placeOrder({ customerId, sessionId, items, total }) {
+   const id = `ord_${++seq}`
+-  saveOrder({ id, customerId, items, total, status: "unpaid", deletedAt: null })
++  const buyer = customerId ?? sessionId
++  saveOrder({ id, customerId: buyer, items, total, status: "unpaid", deletedAt: null })
+   holdStock(id, items)
+-  publish("order.placed", { version: 1, orderId: id, customerId, total })
++  publish("order.placed", { version: 1, orderId: id, customerId: buyer, total })
+   return id
+ }
+ 
+diff --git a/src/payments/gateway.js b/src/payments/gateway.js
+index 4fb6ae8..19d1c93 100644
+--- a/src/payments/gateway.js
++++ b/src/payments/gateway.js
+@@ -5,6 +5,6 @@ export function authorize({ customerId, amount }) {
+   return request(`${config.paymentGatewayUrl}/authorize`, {
+     method: "POST",
+     body: { customerId, amountCents: amount },
+-    timeoutMs: config.paymentTimeoutMs,
++    timeoutMs: config.paymentTimeoutMs * 1000,
+   })
+ }
+diff --git a/src/payments/index.js b/src/payments/index.js
+index ce7e59e..e418095 100644
+--- a/src/payments/index.js
++++ b/src/payments/index.js
+@@ -3,9 +3,9 @@ import { authorize } from "./gateway.js"
+ 
+ export const FEES = { refundCents: 50 }
+ 
+-/** Charges the customer's open balance. `amount` is the charged amount in cents. */
++/** Charges the customer's open balance. `amount` is the charged amount in euros, as receipts show it. */
+ export async function charge(customerId) {
+-  const amount = balanceOf(customerId)
+-  const { authorizationId } = await authorize({ customerId, amount })
+-  return { authorizationId, amount }
++  const cents = balanceOf(customerId)
++  const { authorizationId } = await authorize({ customerId, amount: cents })
++  return { authorizationId, amount: cents / 100 }
+ }
+diff --git a/src/payments/refund.js b/src/payments/refund.js
+index 077f188..f0419ea 100644
+--- a/src/payments/refund.js
++++ b/src/payments/refund.js
+@@ -1,7 +1,15 @@
+ import { balanceOf } from "../billing/index.js"
++import { ledgerFor } from "../billing/internal/ledger.js"
+ import { FEES } from "./index.js"
+ 
+ /** What a refund pays out: the open balance minus the refund fee, never below zero. */
+ export function refundableCents(customerId) {
+   return Math.max(0, balanceOf(customerId) - FEES.refundCents)
+ }
++
++/** Per-order refund breakdown for the support console. */
++export function refundBreakdown(customerId) {
++  const lines = ledgerFor(customerId)._entries.map((e) => ({ orderId: e.orderId, cents: e.amount }))
++  const total = lines.reduce((sum, line) => sum + line.cents, 0)
++  return { lines, payoutCents: Math.max(0, total - FEES.refundCents) }
++}
+diff --git a/src/reports/index.js b/src/reports/index.js
+new file mode 100644
+index 0000000..0b442e2
+--- /dev/null
++++ b/src/reports/index.js
+@@ -0,0 +1,6 @@
++import { query } from "../infra/db.js"
++
++/** Invoices issued to a customer, for the monthly account report. */
++export function invoiceCount(customerId) {
++  return query("invoices", { customerId }).length
++}
+diff --git a/src/shipping/index.js b/src/shipping/index.js
+index 2f142c1..70f253d 100644
+--- a/src/shipping/index.js
++++ b/src/shipping/index.js
+@@ -1,3 +1,5 @@
++import { publish } from "../infra/bus.js"
++import { carrierFor } from "./internal/carriers.js"
+ import { rateFor } from "./internal/rates.js"
+ 
+ /** Shipping cost in cents: one parcel per five units. */
+@@ -5,3 +7,10 @@ export function quote(country, items) {
+   const units = items.reduce((n, i) => n + i.qty, 0)
+   return rateFor(country) * Math.ceil(units / 5)
+ }
++
++/** Hands the order to the country's carrier and announces the shipment. */
++export function ship(orderId, country) {
++  const carrier = carrierFor(country)
++  publish("shipment.created", { version: 1, orderId, country, carrier })
++  return carrier
++}
+diff --git a/src/shipping/internal/carriers.js b/src/shipping/internal/carriers.js
+new file mode 100644
+index 0000000..148a1b6
+--- /dev/null
++++ b/src/shipping/internal/carriers.js
+@@ -0,0 +1,7 @@
++const CARRIERS = { DE: "dhl", FR: "colissimo", NL: "postnl" }
++
++export function carrierFor(country) {
++  const carrier = CARRIERS[country]
++  if (!carrier) throw new Error(`no carrier for ${country}`)
++  return carrier
++}
+diff --git a/src/shipping/internal/rates.js b/src/shipping/internal/rates.js
+index ef537bc..bf5db60 100644
+--- a/src/shipping/internal/rates.js
++++ b/src/shipping/internal/rates.js
+@@ -1,11 +1,11 @@
+-const RATES = [
+-  { country: "DE", cents: 490 },
+-  { country: "FR", cents: 690 },
+-  { country: "NL", cents: 590 },
+-]
++const RATES = new Map([
++  ["DE", 490],
++  ["FR", 690],
++  ["NL", 590],
++])
+ 
+ export function rateFor(country) {
+-  const rate = RATES.find((r) => r.country === country)
+-  if (!rate) throw new Error(`no shipping to ${country}`)
+-  return rate.cents
++  const cents = RATES.get(country)
++  if (cents === undefined) throw new Error(`no shipping to ${country}`)
++  return cents
+ }
+diff --git a/src/ui/order-history.js b/src/ui/order-history.js
+new file mode 100644
+index 0000000..5c8f7d5
+--- /dev/null
++++ b/src/ui/order-history.js
+@@ -0,0 +1,8 @@
++import { query } from "../infra/db.js"
++import { formatCents } from "./format.js"
++
++export function renderOrderHistory(customerId) {
++  const rows = query("orders", { customerId })
++  const items = rows.map((o) => `<li>${o.id}: ${formatCents(o.total)} (${o.status})</li>`)
++  return `<h2>Your orders</h2><ul>${items.join("")}</ul>`
++}
+diff --git a/src/ui/price-badge.js b/src/ui/price-badge.js
+new file mode 100644
+index 0000000..4deac6e
+--- /dev/null
++++ b/src/ui/price-badge.js
+@@ -0,0 +1,6 @@
++import { getPrice } from "../catalog/index.js"
++import { formatCents } from "./format.js"
++
++export function priceBadge(sku) {
++  return `<span class="price">${formatCents(getPrice(sku))}</span>`
++}
+diff --git a/src/ui/receipt.js b/src/ui/receipt.js
+new file mode 100644
+index 0000000..029da5e
+--- /dev/null
++++ b/src/ui/receipt.js
+@@ -0,0 +1,16 @@
++import { fetchOrder } from "../generated/orders-client.js"
++import { formatCents } from "./format.js"
++
++/**
++ * @typedef {object} ReceiptOrder
++ * @property {string} id
++ * @property {number} total
++ * @property {{ sku: string, qty: number, price: number }[]} items
++ */
++
++export async function renderReceipt(id) {
++  /** @type {ReceiptOrder} */
++  const order = await fetchOrder(id)
++  const lines = order.items.map((i) => `<li>${i.sku} × ${i.qty}: ${formatCents(i.price * i.qty)}</li>`)
++  return `<ul>${lines.join("")}</ul><p>Total ${formatCents(order.total)}</p>`
++}
+diff --git a/test/customers.test.js b/test/customers.test.js
+new file mode 100644
+index 0000000..35e2d24
+--- /dev/null
++++ b/test/customers.test.js
+@@ -0,0 +1,9 @@
++import assert from "node:assert/strict"
++import { test } from "node:test"
++import { __profileCache, createCustomer, getCustomer } from "../src/customers/index.js"
++
++test("caches the profile with a normalised email", () => {
++  const id = createCustomer({ name: "Ada Lovelace", email: " ADA@example.com " })
++  getCustomer(id)
++  assert.equal(__profileCache.get(id).email, "ada@example.com")
++})

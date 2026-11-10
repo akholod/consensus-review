@@ -1,0 +1,84 @@
+diff --git a/openapi.yaml b/openapi.yaml
+index d24b5ad..dc756e7 100644
+--- a/openapi.yaml
++++ b/openapi.yaml
+@@ -3,6 +3,25 @@ info:
+   title: meterly
+   version: "1"
+ paths:
++  /v1/plans:
++    get:
++      operationId: getPlans
++      responses:
++        "200":
++          description: the plans, cheapest per month first
++          content:
++            application/json:
++              schema:
++                type: array
++                items:
++                  type: object
++                  required: [id, name, priceCents, interval, monthlyCents]
++                  properties:
++                    id: { type: string }
++                    name: { type: string }
++                    priceCents: { type: integer }
++                    interval: { type: integer, description: Days per billing period. }
++                    monthlyCents: { type: integer, description: Price per 30 days in cents. }
+   /v1/accounts/{id}:
+     patch:
+       operationId: patchAccount
+diff --git a/src/api/plans-handler.js b/src/api/plans-handler.js
+new file mode 100644
+index 0000000..c79c7cd
+--- /dev/null
++++ b/src/api/plans-handler.js
+@@ -0,0 +1,10 @@
++import { comparePlans, listPlans } from "../plans/index.js"
++import { toResponse } from "./errors.js"
++
++export function getPlansHandler() {
++  try {
++    return { status: 200, body: comparePlans(listPlans()) }
++  } catch (err) {
++    return toResponse(err)
++  }
++}
+diff --git a/src/plans/compare.js b/src/plans/compare.js
+new file mode 100644
+index 0000000..62237f6
+--- /dev/null
++++ b/src/plans/compare.js
+@@ -0,0 +1,6 @@
++/** The plans from cheapest to dearest per month, each with its price per 30 days in cents. */
++export function comparePlans(plans) {
++  return plans
++    .map((plan) => ({ ...plan, monthlyCents: Math.round((plan.priceCents * 30) / plan.interval) }))
++    .sort((a, b) => a.monthlyCents - b.monthlyCents)
++}
+diff --git a/src/plans/index.js b/src/plans/index.js
+index 30a80ca..76601ac 100644
+--- a/src/plans/index.js
++++ b/src/plans/index.js
+@@ -10,3 +10,5 @@ export function getPlan(id) {
+ export function listPlans() {
+   return query("plans").map(view)
+ }
++
++export { comparePlans } from "./compare.js"
+diff --git a/test/plans-compare.test.js b/test/plans-compare.test.js
+new file mode 100644
+index 0000000..30107ce
+--- /dev/null
++++ b/test/plans-compare.test.js
+@@ -0,0 +1,10 @@
++import assert from "node:assert/strict"
++import { test } from "node:test"
++import { comparePlans, listPlans } from "../src/plans/index.js"
++import { seedPlan } from "./helpers.js"
++
++test("orders plans by price per 30 days", () => {
++  seedPlan({ id: "monthly", priceCents: 1900, interval: 30 })
++  seedPlan({ id: "yearly", priceCents: 19000, interval: 365 })
++  assert.deepEqual(comparePlans(listPlans()).map((p) => [p.id, p.monthlyCents]), [["yearly", 1562], ["monthly", 1900]])
++})

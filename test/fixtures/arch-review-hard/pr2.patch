@@ -1,0 +1,44 @@
+diff --git a/README.md b/README.md
+index 5e0b953..c6dbe95 100644
+--- a/README.md
++++ b/README.md
+@@ -12,3 +12,5 @@ jobs in `src/jobs/`, and shared infrastructure in `src/infra/`. `src/app.js` wir
+ - `admin`: back-office views
+ 
+ `npm test` runs the suite.
++
++`RENEWAL_GRACE_HOURS` sets how long a subscription stays usable after a failed renewal (default 72).
+diff --git a/src/infra/config.js b/src/infra/config.js
+index 2364865..eed6f96 100644
+--- a/src/infra/config.js
++++ b/src/infra/config.js
+@@ -1,5 +1,5 @@
+ export const config = {
+-  // Days a subscription stays usable after a failed renewal charge.
+-  renewalGrace: 3,
++  // Hours a subscription stays usable after a failed renewal charge. RENEWAL_GRACE_HOURS overrides it per deploy.
++  renewalGrace: Number(process.env.RENEWAL_GRACE_HOURS ?? 72),
+   usageLimitPerPeriod: 10000,
+ }
+diff --git a/src/subscriptions/index.js b/src/subscriptions/index.js
+index f630583..6fb0d36 100644
+--- a/src/subscriptions/index.js
++++ b/src/subscriptions/index.js
+@@ -1,7 +1,7 @@
+ import { getAccount } from "../accounts/index.js"
+ import { publish } from "../infra/bus.js"
+ import { config } from "../infra/config.js"
+-import { DAY } from "../infra/time.js"
++import { DAY, HOUR } from "../infra/time.js"
+ import { getPlan } from "../plans/index.js"
+ import { allSubscriptions, findByAccount, findSubscription, patchSubscription, saveSubscription } from "./repository.js"
+ 
+@@ -39,7 +39,7 @@ export function markRenewed(id, now = Date.now()) {
+ }
+ 
+ export function markPastDue(id, now = Date.now()) {
+-  patchSubscription(id, { status: "past_due", graceUntil: now + config.renewalGrace * DAY })
++  patchSubscription(id, { status: "past_due", graceUntil: now + config.renewalGrace * HOUR })
+ }
+ 
+ export function cancel(id) {

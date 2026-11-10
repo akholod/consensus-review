@@ -1,0 +1,646 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..4928cc3
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,13 @@
++name: ci
++on: [push, pull_request]
++jobs:
++  check:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-node@v4
++        with:
++          node-version: 22
++      - run: npm install
++      - run: npm run lint
++      - run: npm test
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..5e0b953
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,14 @@
++# meterly
++
++Subscription billing service. Modules live in `src/<module>/`, HTTP handlers in `src/api/`, scheduled
++jobs in `src/jobs/`, and shared infrastructure in `src/infra/`. `src/app.js` wires the service together.
++
++- `accounts`: customer accounts and their settings
++- `plans`: the plan catalogue and prices
++- `subscriptions`: who is on which plan, renewals and cancellation
++- `usage`: metered usage per subscription period
++- `invoicing`: invoices, charging and dunning
++- `notifications`: emails sent on account and billing events
++- `admin`: back-office views
++
++`npm test` runs the suite.
+diff --git a/eslint.config.js b/eslint.config.js
+new file mode 100644
+index 0000000..fa316e5
+--- /dev/null
++++ b/eslint.config.js
+@@ -0,0 +1,6 @@
++import js from "@eslint/js"
++
++export default [
++  js.configs.recommended,
++  { languageOptions: { globals: { fetch: "readonly", AbortSignal: "readonly", process: "readonly", console: "readonly", setInterval: "readonly", structuredClone: "readonly" } } },
++]
+diff --git a/openapi.yaml b/openapi.yaml
+new file mode 100644
+index 0000000..d24b5ad
+--- /dev/null
++++ b/openapi.yaml
+@@ -0,0 +1,54 @@
++openapi: 3.1.0
++info:
++  title: meterly
++  version: "1"
++paths:
++  /v1/accounts/{id}:
++    patch:
++      operationId: patchAccount
++      parameters:
++        - { name: id, in: path, required: true, schema: { type: string } }
++      requestBody:
++        content:
++          application/json:
++            schema: { type: object, properties: { name: { type: string }, email: { type: string } } }
++      responses:
++        "200":
++          description: the updated account
++          content:
++            application/json:
++              schema:
++                type: object
++                required: [id, name, email]
++                properties: { id: { type: string }, name: { type: string }, email: { type: string } }
++        "404": { description: no such account }
++  /v1/subscriptions/{id}:
++    get:
++      operationId: getSubscription
++      parameters:
++        - { name: id, in: path, required: true, schema: { type: string } }
++      responses:
++        "200":
++          description: the subscription
++          content:
++            application/json:
++              schema:
++                type: object
++                required: [id, planId, status, renewsAt]
++                properties:
++                  id: { type: string }
++                  planId: { type: string }
++                  status: { type: string, enum: [active, past_due, cancelled] }
++                  renewsAt: { type: string, format: date-time }
++  /v1/subscriptions/{id}/usage:
++    post:
++      operationId: postUsage
++      parameters:
++        - { name: id, in: path, required: true, schema: { type: string } }
++      requestBody:
++        content:
++          application/json:
++            schema: { type: object, required: [units], properties: { units: { type: integer } } }
++      responses:
++        "204": { description: recorded }
++        "429": { description: usage limit reached }
+diff --git a/package.json b/package.json
+new file mode 100644
+index 0000000..65ddff0
+--- /dev/null
++++ b/package.json
+@@ -0,0 +1,14 @@
++{
++  "name": "meterly",
++  "version": "2.3.0",
++  "private": true,
++  "type": "module",
++  "scripts": {
++    "lint": "eslint .",
++    "test": "node --test"
++  },
++  "devDependencies": {
++    "@eslint/js": "^9.12.0",
++    "eslint": "^9.12.0"
++  }
++}
+diff --git a/src/accounts/index.js b/src/accounts/index.js
+new file mode 100644
+index 0000000..08deebc
+--- /dev/null
++++ b/src/accounts/index.js
+@@ -0,0 +1,28 @@
++import { publish } from "../infra/bus.js"
++import { findAccount, patchAccount, saveAccount } from "./repository.js"
++
++const settingsCache = new Map()
++let seq = 0
++
++export function createAccount({ name, email }) {
++  const id = `acc_${++seq}`
++  saveAccount({ id, name, email, settings: { channels: ["email"], locale: "en" } })
++  return id
++}
++
++export function getAccount(id) {
++  const row = findAccount(id)
++  return row ? { id: row.id, name: row.name, email: row.email } : null
++}
++
++export function getSettings(id) {
++  if (!settingsCache.has(id)) settingsCache.set(id, findAccount(id)?.settings ?? null)
++  const settings = settingsCache.get(id)
++  return settings && { ...settings, channels: [...settings.channels] }
++}
++
++export function updateAccount(id, patch) {
++  patchAccount(id, patch)
++  settingsCache.delete(id)
++  publish("account.updated", { account: getAccount(id) })
++}
+diff --git a/src/accounts/repository.js b/src/accounts/repository.js
+new file mode 100644
+index 0000000..055c811
+--- /dev/null
++++ b/src/accounts/repository.js
+@@ -0,0 +1,5 @@
++import { insert, query, update } from "../infra/db.js"
++
++export const saveAccount = (row) => insert("accounts", row)
++export const findAccount = (id) => query("accounts", { id })[0] ?? null
++export const patchAccount = (id, patch) => update("accounts", { id }, patch)
+diff --git a/src/admin/index.js b/src/admin/index.js
+new file mode 100644
+index 0000000..6bedfa8
+--- /dev/null
++++ b/src/admin/index.js
+@@ -0,0 +1,9 @@
++import { getAccount } from "../accounts/index.js"
++import { invoicesFor } from "../invoicing/index.js"
++import { listActive } from "../subscriptions/index.js"
++
++export function accountOverview(accountId) {
++  const account = getAccount(accountId)
++  if (!account) return null
++  return { account, subscriptions: listActive(accountId), invoices: invoicesFor(accountId) }
++}
+diff --git a/src/api/accounts-handler.js b/src/api/accounts-handler.js
+new file mode 100644
+index 0000000..a83b0a5
+--- /dev/null
++++ b/src/api/accounts-handler.js
+@@ -0,0 +1,13 @@
++import { getAccount, updateAccount } from "../accounts/index.js"
++import { HttpError, toResponse } from "./errors.js"
++
++export function patchAccountHandler(req) {
++  try {
++    if (!getAccount(req.params.id)) throw new HttpError(404, "not_found")
++    const patch = Object.fromEntries(Object.entries({ name: req.body.name, email: req.body.email }).filter(([, v]) => v !== undefined))
++    updateAccount(req.params.id, patch)
++    return { status: 200, body: getAccount(req.params.id) }
++  } catch (err) {
++    return toResponse(err)
++  }
++}
+diff --git a/src/api/errors.js b/src/api/errors.js
+new file mode 100644
+index 0000000..603aee7
+--- /dev/null
++++ b/src/api/errors.js
+@@ -0,0 +1,11 @@
++export class HttpError extends Error {
++  constructor(status, code) {
++    super(code)
++    this.status = status
++    this.code = code
++  }
++}
++
++export function toResponse(err) {
++  return err instanceof HttpError ? { status: err.status, body: { error: err.code } } : { status: 500, body: { error: "internal" } }
++}
+diff --git a/src/api/subscriptions-handler.js b/src/api/subscriptions-handler.js
+new file mode 100644
+index 0000000..baf18c8
+--- /dev/null
++++ b/src/api/subscriptions-handler.js
+@@ -0,0 +1,12 @@
++import { getSubscription } from "../subscriptions/index.js"
++import { HttpError, toResponse } from "./errors.js"
++
++export function getSubscriptionHandler(req) {
++  try {
++    const sub = getSubscription(req.params.id)
++    if (!sub) throw new HttpError(404, "not_found")
++    return { status: 200, body: { id: sub.id, planId: sub.planId, status: sub.status, renewsAt: new Date(sub.renewsAt).toISOString() } }
++  } catch (err) {
++    return toResponse(err)
++  }
++}
+diff --git a/src/api/usage-handler.js b/src/api/usage-handler.js
+new file mode 100644
+index 0000000..b8e619f
+--- /dev/null
++++ b/src/api/usage-handler.js
+@@ -0,0 +1,12 @@
++import { overLimit, record } from "../usage/index.js"
++import { HttpError, toResponse } from "./errors.js"
++
++export function postUsageHandler(req) {
++  try {
++    if (overLimit(req.params.id)) throw new HttpError(429, "usage_limit")
++    record(req.params.id, req.body.units)
++    return { status: 204, body: null }
++  } catch (err) {
++    return toResponse(err)
++  }
++}
+diff --git a/src/app.js b/src/app.js
+new file mode 100644
+index 0000000..39fa45b
+--- /dev/null
++++ b/src/app.js
+@@ -0,0 +1,8 @@
++import { provide } from "./infra/registry.js"
++import * as stripe from "./infra/stripe.js"
++import { startRenewals } from "./jobs/renewals.js"
++import "./notifications/index.js"
++import "./usage/index.js"
++
++provide("payments", stripe)
++startRenewals()
+diff --git a/src/infra/bus.js b/src/infra/bus.js
+new file mode 100644
+index 0000000..5de3044
+--- /dev/null
++++ b/src/infra/bus.js
+@@ -0,0 +1,10 @@
++const handlers = new Map()
++
++export function on(type, handler) {
++  if (!handlers.has(type)) handlers.set(type, [])
++  handlers.get(type).push(handler)
++}
++
++export function publish(type, payload) {
++  for (const handler of handlers.get(type) ?? []) handler(payload)
++}
+diff --git a/src/infra/config.js b/src/infra/config.js
+new file mode 100644
+index 0000000..2364865
+--- /dev/null
++++ b/src/infra/config.js
+@@ -0,0 +1,5 @@
++export const config = {
++  // Days a subscription stays usable after a failed renewal charge.
++  renewalGrace: 3,
++  usageLimitPerPeriod: 10000,
++}
+diff --git a/src/infra/db.js b/src/infra/db.js
+new file mode 100644
+index 0000000..c291102
+--- /dev/null
++++ b/src/infra/db.js
+@@ -0,0 +1,22 @@
++// In-memory tables; production swaps this module for the Postgres client with the same exports.
++const tables = new Map()
++
++const table = (name) => {
++  if (!tables.has(name)) tables.set(name, [])
++  return tables.get(name)
++}
++
++const matches = (row, where) => Object.entries(where).every(([key, value]) => row[key] === value)
++
++export function insert(name, row) {
++  table(name).push(structuredClone(row))
++  return row
++}
++
++export function query(name, where = {}) {
++  return table(name).filter((row) => matches(row, where)).map((row) => structuredClone(row))
++}
++
++export function update(name, where, patch) {
++  for (const row of table(name)) if (matches(row, where)) Object.assign(row, structuredClone(patch))
++}
+diff --git a/src/infra/http.js b/src/infra/http.js
+new file mode 100644
+index 0000000..88f402c
+--- /dev/null
++++ b/src/infra/http.js
+@@ -0,0 +1,10 @@
++export async function request(url, { method = "GET", body, timeoutMs = 10000 } = {}) {
++  const res = await fetch(url, {
++    method,
++    headers: body ? { "content-type": "application/json" } : {},
++    body: body ? JSON.stringify(body) : undefined,
++    signal: AbortSignal.timeout(timeoutMs),
++  })
++  if (!res.ok) throw new Error(`${method} ${url}: ${res.status}`)
++  return res.json()
++}
+diff --git a/src/infra/registry.js b/src/infra/registry.js
+new file mode 100644
+index 0000000..8189750
+--- /dev/null
++++ b/src/infra/registry.js
+@@ -0,0 +1,12 @@
++// Named providers, wired in src/app.js, so a module can depend on a capability, not a vendor.
++const providers = new Map()
++
++export function provide(name, impl) {
++  providers.set(name, impl)
++}
++
++export function use(name) {
++  const impl = providers.get(name)
++  if (!impl) throw new Error(`no provider for ${name}`)
++  return impl
++}
+diff --git a/src/infra/stripe.js b/src/infra/stripe.js
+new file mode 100644
+index 0000000..f248dac
+--- /dev/null
++++ b/src/infra/stripe.js
+@@ -0,0 +1,10 @@
++import { request } from "./http.js"
++
++/** Charges the account through Stripe. Resolves to `{ id, status }`, `status` being "succeeded" or "failed". */
++export async function charge({ accountId, amountCents }) {
++  const res = await request("https://api.stripe.example/v1/charges", {
++    method: "POST",
++    body: { customer: accountId, amount: amountCents, currency: "eur" },
++  })
++  return { id: res.id, status: res.status }
++}
+diff --git a/src/infra/time.js b/src/infra/time.js
+new file mode 100644
+index 0000000..17a8452
+--- /dev/null
++++ b/src/infra/time.js
+@@ -0,0 +1,2 @@
++export const HOUR = 60 * 60 * 1000
++export const DAY = 24 * HOUR
+diff --git a/src/invoicing/dunning.js b/src/invoicing/dunning.js
+new file mode 100644
+index 0000000..c9ee4e6
+--- /dev/null
++++ b/src/invoicing/dunning.js
+@@ -0,0 +1,8 @@
++import { config } from "../infra/config.js"
++import { DAY } from "../infra/time.js"
++
++/** Reminder times after a failed renewal: halfway through the grace period, and one day before it ends. */
++export function reminderTimes(failedAt) {
++  const grace = config.renewalGrace * DAY
++  return [failedAt + grace / 2, failedAt + grace - DAY]
++}
+diff --git a/src/invoicing/index.js b/src/invoicing/index.js
+new file mode 100644
+index 0000000..5c14d71
+--- /dev/null
++++ b/src/invoicing/index.js
+@@ -0,0 +1,32 @@
++import { publish } from "../infra/bus.js"
++import { insert, query, update } from "../infra/db.js"
++import { use } from "../infra/registry.js"
++import { getPlan } from "../plans/index.js"
++import { dueForRenewal, markPastDue, markRenewed } from "../subscriptions/index.js"
++import { reminderTimes } from "./dunning.js"
++
++let seq = 0
++
++export async function renewDue(now = Date.now()) {
++  const results = []
++  for (const sub of dueForRenewal(now)) {
++    const { priceCents } = getPlan(sub.planId)
++    const invoiceId = `inv_${++seq}`
++    insert("invoices", { id: invoiceId, subscriptionId: sub.id, accountId: sub.accountId, amountCents: priceCents, status: "open" })
++    const charge = await use("payments").charge({ accountId: sub.accountId, amountCents: priceCents })
++    if (charge.status === "succeeded") {
++      update("invoices", { id: invoiceId }, { status: "paid", chargeId: charge.id })
++      markRenewed(sub.id, now)
++      publish("invoice.paid", { invoiceId, accountId: sub.accountId, amountCents: priceCents })
++    } else {
++      update("invoices", { id: invoiceId }, { status: "failed", remindAt: reminderTimes(now) })
++      markPastDue(sub.id, now)
++    }
++    results.push({ invoiceId, status: charge.status })
++  }
++  return results
++}
++
++export function invoicesFor(accountId) {
++  return query("invoices", { accountId }).map((row) => ({ id: row.id, amountCents: row.amountCents, status: row.status, remindAt: row.remindAt ?? null }))
++}
+diff --git a/src/jobs/renewals.js b/src/jobs/renewals.js
+new file mode 100644
+index 0000000..437e1b9
+--- /dev/null
++++ b/src/jobs/renewals.js
+@@ -0,0 +1,7 @@
++import { HOUR } from "../infra/time.js"
++import { renewDue } from "../invoicing/index.js"
++
++/** Renews every due subscription once an hour. */
++export function startRenewals(every = HOUR) {
++  return setInterval(() => renewDue().catch((err) => console.error("renewals", err)), every).unref()
++}
+diff --git a/src/notifications/index.js b/src/notifications/index.js
+new file mode 100644
+index 0000000..6dd89ff
+--- /dev/null
++++ b/src/notifications/index.js
+@@ -0,0 +1,17 @@
++import { getAccount } from "../accounts/index.js"
++import { on } from "../infra/bus.js"
++import { send } from "./mailer.js"
++
++on("account.updated", ({ account }) => send(account.email, "Your account details changed"))
++
++on("invoice.paid", ({ accountId, amountCents }) => {
++  const account = getAccount(accountId)
++  if (account) send(account.email, `Payment received: ${(amountCents / 100).toFixed(2)} EUR`)
++})
++
++on("subscription.cancelled", ({ accountId }) => {
++  const account = getAccount(accountId)
++  if (account) send(account.email, "Your subscription was cancelled")
++})
++
++export { sent } from "./mailer.js"
+diff --git a/src/notifications/mailer.js b/src/notifications/mailer.js
+new file mode 100644
+index 0000000..34974df
+--- /dev/null
++++ b/src/notifications/mailer.js
+@@ -0,0 +1,9 @@
++const outbox = []
++
++export function send(to, subject) {
++  outbox.push({ to, subject })
++}
++
++export function sent() {
++  return outbox.map((mail) => ({ ...mail }))
++}
+diff --git a/src/plans/index.js b/src/plans/index.js
+new file mode 100644
+index 0000000..30a80ca
+--- /dev/null
++++ b/src/plans/index.js
+@@ -0,0 +1,12 @@
++import { query } from "../infra/db.js"
++
++const view = (row) => ({ id: row.id, name: row.name, priceCents: row.priceCents, interval: row.interval })
++
++export function getPlan(id) {
++  const [row] = query("plans", { id })
++  return row ? view(row) : null
++}
++
++export function listPlans() {
++  return query("plans").map(view)
++}
+diff --git a/src/subscriptions/index.js b/src/subscriptions/index.js
+new file mode 100644
+index 0000000..f630583
+--- /dev/null
++++ b/src/subscriptions/index.js
+@@ -0,0 +1,49 @@
++import { getAccount } from "../accounts/index.js"
++import { publish } from "../infra/bus.js"
++import { config } from "../infra/config.js"
++import { DAY } from "../infra/time.js"
++import { getPlan } from "../plans/index.js"
++import { allSubscriptions, findByAccount, findSubscription, patchSubscription, saveSubscription } from "./repository.js"
++
++let seq = 0
++const view = (row) => ({ id: row.id, accountId: row.accountId, planId: row.planId, status: row.status, renewsAt: row.renewsAt })
++
++export function startSubscription(accountId, planId, now = Date.now()) {
++  if (!getAccount(accountId)) throw new Error(`unknown account ${accountId}`)
++  const plan = getPlan(planId)
++  if (!plan) throw new Error(`unknown plan ${planId}`)
++  const id = `sub_${++seq}`
++  saveSubscription({ id, accountId, planId, status: "active", renewsAt: now + plan.interval * DAY, graceUntil: null })
++  return id
++}
++
++export function getSubscription(id) {
++  const row = findSubscription(id)
++  return row ? view(row) : null
++}
++
++/** Subscriptions the account is still billed for: active ones and those inside their grace period. */
++export function listActive(accountId) {
++  return findByAccount(accountId).filter((row) => row.status === "active" || row.status === "past_due").map(view)
++}
++
++export function dueForRenewal(now = Date.now()) {
++  return allSubscriptions().filter((row) => row.status === "active" && row.renewsAt <= now).map(view)
++}
++
++export function markRenewed(id, now = Date.now()) {
++  const row = findSubscription(id)
++  const renewsAt = now + getPlan(row.planId).interval * DAY
++  patchSubscription(id, { status: "active", renewsAt, graceUntil: null })
++  publish("subscription.renewed", { subscriptionId: id, accountId: row.accountId, periodEnd: renewsAt })
++}
++
++export function markPastDue(id, now = Date.now()) {
++  patchSubscription(id, { status: "past_due", graceUntil: now + config.renewalGrace * DAY })
++}
++
++export function cancel(id) {
++  const row = findSubscription(id)
++  patchSubscription(id, { status: "cancelled" })
++  publish("subscription.cancelled", { subscriptionId: id, accountId: row.accountId })
++}
+diff --git a/src/subscriptions/repository.js b/src/subscriptions/repository.js
+new file mode 100644
+index 0000000..1a86ed0
+--- /dev/null
++++ b/src/subscriptions/repository.js
+@@ -0,0 +1,7 @@
++import { insert, query, update } from "../infra/db.js"
++
++export const saveSubscription = (row) => insert("subscriptions", row)
++export const findSubscription = (id) => query("subscriptions", { id })[0] ?? null
++export const findByAccount = (accountId) => query("subscriptions", { accountId })
++export const allSubscriptions = () => query("subscriptions")
++export const patchSubscription = (id, patch) => update("subscriptions", { id }, patch)
+diff --git a/src/usage/index.js b/src/usage/index.js
+new file mode 100644
+index 0000000..d43bcdb
+--- /dev/null
++++ b/src/usage/index.js
+@@ -0,0 +1,21 @@
++import { on } from "../infra/bus.js"
++import { config } from "../infra/config.js"
++import { insert, query, update } from "../infra/db.js"
++import { getSubscription } from "../subscriptions/index.js"
++
++on("subscription.renewed", ({ subscriptionId }) => update("usage", { subscriptionId }, { units: 0 }))
++
++export function record(subscriptionId, units) {
++  if (getSubscription(subscriptionId)?.status !== "active") throw new Error(`subscription ${subscriptionId} is not active`)
++  const [row] = query("usage", { subscriptionId })
++  if (row) update("usage", { subscriptionId }, { units: row.units + units })
++  else insert("usage", { subscriptionId, units })
++}
++
++export function unitsUsed(subscriptionId) {
++  return query("usage", { subscriptionId })[0]?.units ?? 0
++}
++
++export function overLimit(subscriptionId) {
++  return unitsUsed(subscriptionId) >= config.usageLimitPerPeriod
++}
+diff --git a/test/helpers.js b/test/helpers.js
+new file mode 100644
+index 0000000..6327cf1
+--- /dev/null
++++ b/test/helpers.js
+@@ -0,0 +1,9 @@
++import { insert } from "../src/infra/db.js"
++
++export const NOW = Date.UTC(2026, 10, 1)
++
++export function seedPlan(row = {}) {
++  const plan = { id: "basic", name: "Basic", priceCents: 1900, interval: 30, ...row }
++  insert("plans", plan)
++  return plan.id
++}
+diff --git a/test/subscriptions.test.js b/test/subscriptions.test.js
+new file mode 100644
+index 0000000..e78a71c
+--- /dev/null
++++ b/test/subscriptions.test.js
+@@ -0,0 +1,19 @@
++import assert from "node:assert/strict"
++import { test } from "node:test"
++import { createAccount } from "../src/accounts/index.js"
++import { getSubscription, listActive, markPastDue, startSubscription } from "../src/subscriptions/index.js"
++import { NOW, seedPlan } from "./helpers.js"
++
++const planId = seedPlan()
++
++test("a new subscription renews one plan interval later", () => {
++  const id = startSubscription(createAccount({ name: "Ada", email: "ada@example.com" }), planId, NOW)
++  assert.equal(getSubscription(id).renewsAt, NOW + 30 * 24 * 60 * 60 * 1000)
++})
++
++test("a past-due subscription is still listed as billed", () => {
++  const accountId = createAccount({ name: "Bo", email: "bo@example.com" })
++  const id = startSubscription(accountId, planId, NOW)
++  markPastDue(id, NOW)
++  assert.deepEqual(listActive(accountId).map((s) => s.status), ["past_due"])
++})

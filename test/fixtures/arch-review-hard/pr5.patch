@@ -1,0 +1,56 @@
+diff --git a/src/app.js b/src/app.js
+index 39fa45b..e39f1c7 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -1,8 +1,8 @@
++import * as adyen from "./infra/adyen.js"
+ import { provide } from "./infra/registry.js"
+-import * as stripe from "./infra/stripe.js"
+ import { startRenewals } from "./jobs/renewals.js"
+ import "./notifications/index.js"
+ import "./usage/index.js"
+ 
+-provide("payments", stripe)
++provide("payments", adyen)
+ startRenewals()
+diff --git a/src/infra/adyen.js b/src/infra/adyen.js
+new file mode 100644
+index 0000000..5b76ce8
+--- /dev/null
++++ b/src/infra/adyen.js
+@@ -0,0 +1,10 @@
++import { request } from "./http.js"
++
++/** Charges the account through Adyen. Resolves to `{ pspReference, resultCode }`. */
++export async function charge({ accountId, amountCents }) {
++  const res = await request("https://checkout.adyen.example/v71/payments", {
++    method: "POST",
++    body: { shopperReference: accountId, amount: { value: amountCents, currency: "EUR" } },
++  })
++  return { pspReference: res.pspReference, resultCode: res.resultCode }
++}
+diff --git a/src/invoicing/index.js b/src/invoicing/index.js
+index 5c14d71..18d5363 100644
+--- a/src/invoicing/index.js
++++ b/src/invoicing/index.js
+@@ -30,3 +30,5 @@ export async function renewDue(now = Date.now()) {
+ export function invoicesFor(accountId) {
+   return query("invoices", { accountId }).map((row) => ({ id: row.id, amountCents: row.amountCents, status: row.status, remindAt: row.remindAt ?? null }))
+ }
++
++export { voidInvoice } from "./voids.js"
+diff --git a/src/invoicing/voids.js b/src/invoicing/voids.js
+new file mode 100644
+index 0000000..fba8b8d
+--- /dev/null
++++ b/src/invoicing/voids.js
+@@ -0,0 +1,9 @@
++import { query, update } from "../infra/db.js"
++
++/** Voids an invoice that was never paid, and ends the subscription it billed. */
++export function voidInvoice(invoiceId) {
++  const [invoice] = query("invoices", { id: invoiceId })
++  if (!invoice || invoice.status === "paid") throw new Error(`invoice ${invoiceId} cannot be voided`)
++  update("invoices", { id: invoiceId }, { status: "void" })
++  update("subscriptions", { id: invoice.subscriptionId }, { status: "cancelled" })
++}

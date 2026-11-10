@@ -1,0 +1,617 @@
+{
+  "fixture": "test/fixtures/arch-review-hard",
+  "rules": "none written: the anchors are patterns in the base code",
+  "entries": [
+    {
+      "id": "K1",
+      "pr": "pr1",
+      "set": "original",
+      "kind": "seed",
+      "family": "internals-in",
+      "files": [
+        "src/admin/export.js"
+      ],
+      "changed": {
+        "src/admin/export.js": [
+          "1-9"
+        ]
+      },
+      "also": [
+        "src/subscriptions/repository.js",
+        "src/subscriptions/index.js",
+        "src/admin/index.js",
+        "src/api/admin-handler.js",
+        "openapi.yaml"
+      ],
+      "anchor": {
+        "file": "src/admin/index.js",
+        "line": 3,
+        "text": "import { listActive } from \"../subscriptions/index.js\""
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "admin imports subscriptions' `repository.js` (`allSubscriptions`) instead of the module's `index.js`, which every other cross-module import in the repository goes through",
+        "consequences": [
+          "the export applies its own `status === \"active\"` filter, so past-due subscriptions, which `listActive` counts as still billed, are missing from the finance export",
+          "admin now depends on subscriptions' storage rows, and the internal `graceUntil` field leaks into the CSV",
+          "a change to subscriptions' repository or row shape breaks the export"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/admin/export.js",
+          "line": 2,
+          "text": "import { allSubscriptions } from \"../subscriptions/repository.js\""
+        },
+        {
+          "file": "src/admin/export.js",
+          "line": 8,
+          "text": "return toCsv(allSubscriptions().filter((row) => row.status === \"active\"), COLUMNS)"
+        },
+        {
+          "file": "src/subscriptions/index.js",
+          "line": 27,
+          "text": "return findByAccount(accountId).filter((row) => row.status === \"active\" || row.status === \"past_due\").map(view)",
+          "base": "present"
+        }
+      ]
+    },
+    {
+      "id": "C1",
+      "pr": "pr1",
+      "set": "original",
+      "kind": "control",
+      "family": "pr-benign",
+      "files": [
+        "openapi.yaml",
+        "src/admin/index.js",
+        "src/api/admin-handler.js",
+        "src/infra/csv.js",
+        "test/admin.test.js"
+      ],
+      "changed": {
+        "openapi.yaml": [
+          "6-14"
+        ],
+        "src/admin/index.js": [
+          "10-11"
+        ],
+        "src/api/admin-handler.js": [
+          "1-10"
+        ],
+        "src/infra/csv.js": [
+          "1-8"
+        ],
+        "test/admin.test.js": [
+          "1-7"
+        ]
+      },
+      "note": "follows the base patterns: a shared helper in `src/infra/` (tests import infra directly, as `test/helpers.js` does), the module's public surface re-exported from its `index.js`, a handler with the `try`/`toResponse` shape of the base handlers, and the endpoint in `openapi.yaml` like every other",
+      "facts": [
+        {
+          "file": "src/api/admin-handler.js",
+          "line": 8,
+          "text": "return toResponse(err)"
+        }
+      ]
+    },
+    {
+      "id": "K2",
+      "pr": "pr2",
+      "set": "original",
+      "kind": "seed",
+      "family": "semantic",
+      "files": [
+        "src/infra/config.js",
+        "src/subscriptions/index.js"
+      ],
+      "changed": {
+        "src/infra/config.js": [
+          "2-3"
+        ],
+        "src/subscriptions/index.js": [
+          "4",
+          "42"
+        ]
+      },
+      "also": [
+        "src/invoicing/dunning.js",
+        "src/invoicing/index.js",
+        "README.md",
+        "src/admin/index.js"
+      ],
+      "anchor": {
+        "file": "src/infra/config.js",
+        "line": 2,
+        "text": "// Days a subscription stays usable after a failed renewal charge."
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "`config.renewalGrace` keeps its name but its unit changes from days (3) to hours (72); subscriptions now multiplies by `HOUR`, but `invoicing/dunning.js` still multiplies it by `DAY`",
+        "consequences": [
+          "`renewDue` schedules dunning reminders with `reminderTimes`, which still reads `renewalGrace` as days: after a failed renewal the reminders fall 36 and 71 days later, long after the 72-hour grace period has ended",
+          "the readers of `renewalGrace` now silently disagree about its unit"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/infra/config.js",
+          "line": 3,
+          "text": "renewalGrace: Number(process.env.RENEWAL_GRACE_HOURS ?? 72),"
+        },
+        {
+          "file": "src/subscriptions/index.js",
+          "line": 42,
+          "text": "graceUntil: now + config.renewalGrace * HOUR })"
+        },
+        {
+          "file": "src/invoicing/dunning.js",
+          "line": 6,
+          "text": "const grace = config.renewalGrace * DAY",
+          "base": "present"
+        }
+      ]
+    },
+    {
+      "id": "C2",
+      "pr": "pr2",
+      "set": "original",
+      "kind": "control",
+      "family": "pr-benign",
+      "files": [
+        "README.md"
+      ],
+      "changed": {
+        "README.md": [
+          "15-16"
+        ]
+      },
+      "note": "documents the new environment variable in the README, which already describes the service",
+      "facts": [
+        {
+          "file": "README.md",
+          "line": 16,
+          "text": "`RENEWAL_GRACE_HOURS` sets how long a subscription stays usable after a failed renewal (default 72)."
+        }
+      ]
+    },
+    {
+      "id": "K3",
+      "pr": "pr3",
+      "set": "original",
+      "kind": "seed",
+      "family": "direction",
+      "files": [
+        "src/plans/index.js"
+      ],
+      "changed": {
+        "src/plans/index.js": [
+          "2",
+          "4-11",
+          "21-26"
+        ]
+      },
+      "also": [
+        "src/usage/index.js",
+        "src/subscriptions/index.js"
+      ],
+      "anchor": {
+        "file": "src/subscriptions/index.js",
+        "line": 5,
+        "text": "import { getPlan } from \"../plans/index.js\""
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "plans now imports `usage`, while usage imports subscriptions and subscriptions imports plans: an import cycle plans → usage → subscriptions → plans through a third module",
+        "consequences": [
+          "plans, a leaf module that subscriptions and invoicing build on, now depends on metered usage, so none of the three can change, be tested or be loaded alone",
+          "a top-level use of a binding inside the plans → usage → subscriptions → plans cycle fails on load order (an ESM cycle)"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/plans/index.js",
+          "line": 2,
+          "text": "import { unitsUsed } from \"../usage/index.js\""
+        },
+        {
+          "file": "src/usage/index.js",
+          "line": 5,
+          "text": "import { getSubscription } from \"../subscriptions/index.js\"",
+          "base": "present"
+        }
+      ]
+    },
+    {
+      "id": "K4",
+      "pr": "pr3",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "layer",
+      "files": [
+        "src/usage/index.js"
+      ],
+      "changed": {
+        "src/usage/index.js": [
+          "1",
+          "23-28"
+        ]
+      },
+      "also": [
+        "src/api/errors.js",
+        "src/api/usage-handler.js"
+      ],
+      "anchor": {
+        "file": "src/api/usage-handler.js",
+        "line": 6,
+        "text": "if (overLimit(req.params.id)) throw new HttpError(429, \"usage_limit\")"
+      },
+      "severity": {
+        "key": "P2",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "the usage module imports `HttpError` from `src/api/` and throws an HTTP 429 itself: a domain module now depends on the HTTP layer above it, where every other module throws plain errors and only `src/api/` maps them to HTTP",
+        "consequences": [
+          "usage can no longer be used outside a request (a job, an import) without HTTP semantics leaking in",
+          "the dependency direction is inverted: `src/api/` and `usage` now import each other's files"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/usage/index.js",
+          "line": 1,
+          "text": "import { HttpError } from \"../api/errors.js\""
+        },
+        {
+          "file": "src/usage/index.js",
+          "line": 26,
+          "text": "if (overLimit(subscriptionId)) throw new HttpError(429, \"usage_limit\")"
+        }
+      ]
+    },
+    {
+      "id": "C3",
+      "pr": "pr3",
+      "set": "original",
+      "kind": "control",
+      "family": "pr-benign",
+      "files": [
+        "src/api/usage-handler.js",
+        "test/plans.test.js"
+      ],
+      "changed": {
+        "src/api/usage-handler.js": [
+          "1-2",
+          "6"
+        ],
+        "test/plans.test.js": [
+          "1-14"
+        ]
+      },
+      "note": "the handler keeps the base `try`/`toResponse` shape and the same 204/429 responses, now through usage's `index.js`; a test of `periodPrice` through the modules' index files",
+      "facts": [
+        {
+          "file": "src/api/usage-handler.js",
+          "line": 6,
+          "text": "meter(req.params.id, req.body.units)"
+        }
+      ]
+    },
+    {
+      "id": "K5",
+      "pr": "pr4",
+      "set": "original",
+      "kind": "seed",
+      "family": "breaking",
+      "files": [
+        "src/accounts/index.js"
+      ],
+      "changed": {
+        "src/accounts/index.js": [
+          "26"
+        ]
+      },
+      "also": [
+        "src/notifications/index.js",
+        "src/api/accounts-handler.js",
+        "openapi.yaml"
+      ],
+      "anchor": {
+        "file": "src/notifications/index.js",
+        "line": 5,
+        "text": "on(\"account.updated\", ({ account }) => send(account.email, \"Your account details changed\"))"
+      },
+      "severity": {
+        "key": "P0",
+        "accepted": [
+          "P0",
+          "P1"
+        ]
+      },
+      "match": {
+        "mechanism": "the `account.updated` payload changes from `{ account }` to `{ accountId, changes }`, while its subscriber in `notifications` still destructures `account`",
+        "consequences": [
+          "the notifications handler reads `account.email` of undefined and throws inside `publish`, so every `updateAccount` call fails once notifications is loaded: `PATCH /v1/accounts/:id` saves the patch and then returns 500",
+          "the profile-change email is no longer sent"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/accounts/index.js",
+          "line": 26,
+          "text": "publish(\"account.updated\", { accountId: id, changes: Object.keys(patch) })"
+        }
+      ]
+    },
+    {
+      "id": "K6",
+      "pr": "pr4",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "internals-out",
+      "files": [
+        "src/accounts/index.js",
+        "src/notifications/preferences.js"
+      ],
+      "changed": {
+        "src/accounts/index.js": [
+          "20"
+        ],
+        "src/notifications/preferences.js": [
+          "1-7"
+        ]
+      },
+      "also": [
+        "src/notifications/index.js"
+      ],
+      "anchor": {
+        "file": "src/accounts/index.js",
+        "line": 21,
+        "text": "return settings && { ...settings, channels: [...settings.channels] }"
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "`getSettings` now returns accounts' cached settings object itself instead of a copy, and notifications' `enableSms` pushes into its `channels`: another module mutates accounts' internal cache",
+        "consequences": [
+          "the SMS opt-in exists only in this process's cache and is never saved: it is lost on restart, missing on other instances, and dropped by the next `updateAccount`, which clears the cache",
+          "any caller of `getSettings` can now change what every later caller sees"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/accounts/index.js",
+          "line": 20,
+          "text": "  return settingsCache.get(id)"
+        },
+        {
+          "file": "src/notifications/preferences.js",
+          "line": 6,
+          "text": "if (!settings.channels.includes(\"sms\")) settings.channels.push(\"sms\")"
+        }
+      ]
+    },
+    {
+      "id": "C4",
+      "pr": "pr4",
+      "set": "original",
+      "kind": "control",
+      "family": "pr-benign",
+      "files": [
+        "src/notifications/index.js"
+      ],
+      "changed": {
+        "src/notifications/index.js": [
+          "18"
+        ]
+      },
+      "note": "re-exports `enableSms` from notifications' `index.js`, the base pattern for a module's public surface",
+      "facts": [
+        {
+          "file": "src/notifications/index.js",
+          "line": 18,
+          "text": "export { enableSms } from \"./preferences.js\""
+        }
+      ]
+    },
+    {
+      "id": "K7",
+      "pr": "pr5",
+      "set": "original",
+      "kind": "seed",
+      "family": "breaking",
+      "files": [
+        "src/infra/adyen.js",
+        "src/app.js"
+      ],
+      "changed": {
+        "src/infra/adyen.js": [
+          "1-10"
+        ],
+        "src/app.js": [
+          "1",
+          "7"
+        ]
+      },
+      "also": [
+        "src/invoicing/index.js",
+        "src/infra/stripe.js",
+        "src/infra/registry.js",
+        "src/jobs/renewals.js"
+      ],
+      "anchor": {
+        "file": "src/infra/stripe.js",
+        "line": 3,
+        "text": "Resolves to `{ id, status }`, `status` being \"succeeded\" or \"failed\"."
+      },
+      "severity": {
+        "key": "P0",
+        "accepted": [
+          "P0",
+          "P1"
+        ]
+      },
+      "match": {
+        "mechanism": "the `payments` provider is swapped for an Adyen adapter that resolves to `{ pspReference, resultCode }`, not the `{ id, status }` contract the Stripe adapter documents and `invoicing` relies on through `use(\"payments\")`",
+        "consequences": [
+          "`renewDue` checks `charge.status === \"succeeded\"`, now always false: every renewal marks the invoice failed and the subscription past due and schedules dunning, although the charge went through",
+          "`invoice.paid` is never published, so no payment receipt is sent"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/infra/adyen.js",
+          "line": 9,
+          "text": "return { pspReference: res.pspReference, resultCode: res.resultCode }"
+        },
+        {
+          "file": "src/app.js",
+          "line": 7,
+          "text": "provide(\"payments\", adyen)"
+        },
+        {
+          "file": "src/invoicing/index.js",
+          "line": 17,
+          "text": "if (charge.status === \"succeeded\") {",
+          "base": "present"
+        }
+      ]
+    },
+    {
+      "id": "K8",
+      "pr": "pr5",
+      "set": "holdout",
+      "kind": "seed",
+      "family": "ownership",
+      "files": [
+        "src/invoicing/voids.js"
+      ],
+      "changed": {
+        "src/invoicing/voids.js": [
+          "1-9"
+        ]
+      },
+      "also": [
+        "src/subscriptions/index.js",
+        "src/notifications/index.js",
+        "src/invoicing/index.js"
+      ],
+      "anchor": {
+        "file": "src/subscriptions/index.js",
+        "line": 48,
+        "text": "publish(\"subscription.cancelled\", { subscriptionId: id, accountId: row.accountId })"
+      },
+      "severity": {
+        "key": "P1",
+        "accepted": [
+          "P0",
+          "P1",
+          "P2"
+        ]
+      },
+      "match": {
+        "mechanism": "invoicing writes the `subscriptions` table directly to cancel a subscription instead of calling subscriptions' `cancel`, although that table belongs to subscriptions",
+        "consequences": [
+          "no `subscription.cancelled` event is published, so the cancellation email is never sent",
+          "invoicing now depends on subscriptions' storage, so a change to that table breaks `voidInvoice`"
+        ]
+      },
+      "facts": [
+        {
+          "file": "src/invoicing/voids.js",
+          "line": 8,
+          "text": "update(\"subscriptions\", { id: invoice.subscriptionId }, { status: \"cancelled\" })"
+        }
+      ]
+    },
+    {
+      "id": "C5",
+      "pr": "pr5",
+      "set": "original",
+      "kind": "control",
+      "family": "pr-benign",
+      "files": [
+        "src/invoicing/index.js"
+      ],
+      "changed": {
+        "src/invoicing/index.js": [
+          "33-34"
+        ]
+      },
+      "note": "re-exports `voidInvoice` from invoicing's `index.js`, the base pattern for a module's public surface",
+      "facts": [
+        {
+          "file": "src/invoicing/index.js",
+          "line": 34,
+          "text": "export { voidInvoice } from \"./voids.js\""
+        }
+      ]
+    },
+    {
+      "id": "C6",
+      "pr": "pr6",
+      "set": "original",
+      "kind": "control",
+      "family": "clean-pr",
+      "files": [
+        "openapi.yaml",
+        "src/api/plans-handler.js",
+        "src/plans/compare.js",
+        "src/plans/index.js",
+        "test/plans-compare.test.js"
+      ],
+      "changed": {
+        "openapi.yaml": [
+          "6-24"
+        ],
+        "src/api/plans-handler.js": [
+          "1-10"
+        ],
+        "src/plans/compare.js": [
+          "1-6"
+        ],
+        "src/plans/index.js": [
+          "13-14"
+        ],
+        "test/plans-compare.test.js": [
+          "1-10"
+        ]
+      },
+      "note": "a pure helper inside plans, re-exported from plans' `index.js`; a handler through plans' index with the base `try`/`toResponse` shape; the endpoint documented in `openapi.yaml` with a description; a test through the index. The whole PR is clean",
+      "facts": [
+        {
+          "file": "src/plans/index.js",
+          "line": 14,
+          "text": "export { comparePlans } from \"./compare.js\""
+        }
+      ]
+    }
+  ]
+}
