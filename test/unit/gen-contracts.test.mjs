@@ -174,23 +174,10 @@ test("--check passes on the committed tree", () => {
   assert.match(out, /in sync \(7 generated blocks, projection verified\)/)
 })
 
+// On a copy: editing the repository's own file raced doctor.test.mjs, which runs --check on it in parallel.
 test("--check fails when a generated block is edited by hand", () => {
-  const path = "prompts/loop-review/verify.md"
-  const original = readFileSync(path, "utf8")
-  try {
-    execFileSync("node", ["-e", `
-      const fs = require("fs")
-      fs.writeFileSync(${JSON.stringify(path)}, fs.readFileSync(${JSON.stringify(path)}, "utf8")
-        .replace('"verified": bool', '"verified": str'))
-    `])
-    assert.throws(
-      () => execFileSync("node", ["scripts/gen-contracts.mjs", "--check"], { encoding: "utf8", stdio: "pipe" }),
-      /OUT OF SYNC/
-    )
-  } finally {
-    execFileSync("node", ["-e", `require("fs").writeFileSync(${JSON.stringify(path)}, ${JSON.stringify(original)})`])
-  }
-  assert.equal(readFileSync(path, "utf8"), original, "the test must leave the tree as it found it")
+  const err = checkCopy((path) => editCopy(path, "prompts/loop-review/verify.md", '"verified": bool', '"verified": str'))
+  assert.match(err ?? "", /prompts\/loop-review\/verify\.md is OUT OF SYNC/)
 })
 
 /** Run `--check` on a copy of the repo after `mutate(path)`; returns the error output, or null on success. */
