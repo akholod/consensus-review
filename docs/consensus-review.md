@@ -328,7 +328,9 @@ is logged.
 - findings by severity, each with location, failure scenario, agreement
   badge and confidence;
 - a summary per dimension;
-- the *Unconfirmed*, *Unverified* and *Dropped* sections.
+- the *Unconfirmed*, *Unverified* and *Dropped* sections;
+- *Open questions (ungraded)*: what the dimension agents suspected but
+  could not ground, one line each. They are never verified or counted.
 
 `Totals` always counts every finding, whatever the P2 grouping rolls up.
 

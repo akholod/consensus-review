@@ -461,3 +461,23 @@ not say what happens to their `Also at:` lists. §7 Dedup now says: "A merged fi
 `commands/consensus-review.md` is now 59061 bytes, sha256
 `bf2e92a6192a8ed27428467ceb873aaf85cff563650da304df606349aadd6371`. The SITES runs above used
 `4858bf96…`, without this clause.
+
+## Agent questions in the report (2026-11-10)
+
+**Change.** `commands/consensus-review.md`:
+- §6 copies every item of a dimension agent's question section into `$WD/questions.json`.
+- §9 lists them under `## Open questions (ungraded)`: unverified and not counted in Totals.
+
+**Runs.** E2E with `dims=architecture deep`, in auto mode. For each run, the items in
+`arch-reviewer`'s own `Open Questions / Hypotheses` are compared with the report section.
+
+| Run | Fixture | Rule wording | Agent items | In the report |
+|---|---|---|---|---|
+| Q-1 | first fixture | "keep every item" | 5 | 5 |
+| Q-pr1 | hard pr1 | "keep every item" | 4 | 3: the arbiter dropped the routing question |
+| Q2-pr1 | hard pr1 | "copy every item, however minor; never drop, merge or reword one away" | 4 | 4 |
+
+The K1 suspicion reached the report in both pr1 runs: the export leaves out `past_due` although
+those subscriptions are still billed. Only the architecture lane ran in these runs; the questions
+of the other dimension agents go through the same rule but were not measured. Cost: $4.92 for 3
+sessions.

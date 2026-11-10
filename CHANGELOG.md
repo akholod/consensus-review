@@ -2,6 +2,15 @@
 
 Full notes for each release: [GitHub releases](https://github.com/akholod/consensus-review/releases).
 
+## Unreleased
+
+- **Added — `## Open questions (ungraded)` in the `/consensus-review`
+  report.** The dimension agents park what they cannot ground in their
+  own question sections, and §6 used to keep only the Findings table, so
+  those hypotheses never reached the report. §6 now collects them into
+  `$WD/questions.json`, and §9 lists them, one line each, unverified and
+  not counted in Totals.
+
 ## 0.14.0
 
 Plan review before code exists, a rebuilt tests dimension, lenses selected by name in user and built-in layers, exact and safer PR diffs without `gh`, and the architecture dimension measured on seeded fixtures. Changed behaviour: an uncommitted lens no longer applies; see below.

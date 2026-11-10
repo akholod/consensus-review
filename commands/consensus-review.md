@@ -330,6 +330,7 @@ node "$H" decide --wd "$WD" --phase review --lanes <name>[,<name>…]   # every 
 ## 6. Collect and normalize
 - dimension agents: take their structured findings, normalize to the common schema (the `dimension` field is known from the agent), `source = claude`.
 - **Several sites.** The schema holds one `file`/`line`. When a finding names more than one site (`eslint.config.js:8`, `src/ui/a.js:1`), keep the first as `file`/`line` and begin `rationale` with `Also at: <every other site>`, so no site drops out of the report.
+- **Agent questions.** Each dimension agent's question section (`Questions`, `Open Questions`, `Open Questions / Hypotheses`) holds what it could not ground. Copy every item, however minor it looks, as one line (never drop, merge or reword one away): `<dimension>: <file:line, when it gives one> — <the question or hypothesis>`, and write them with the Write tool to `$WD/questions.json` as `{"questions": [...]}`. They are not findings: no id, no severity, never sent to the sceptic, never counted in Totals.
 - consultants: read `$WD/review.decision.json` — `lanes.<name>` is each lane's status (`status`, `display`, `attempts[]`, and for pi `provider`/`model`); top-level `family.<name>` is the lane's model family (`openai`, `anthropic`, `zhipu`, … or `unknown`) and top-level `independence.<name>` is `model | context | unknown`; plus `allExternalDown`, `extraSameEngine` and `refuters` (keyed `<name>-refuter`). Read findings from `$WD/<name>.json` **only when that lane's `status` is `ok`**; the file exists only then. A missing or unreadable file is never "zero findings" — the lane's `display` says why (`degraded (timeout; failed: <reason>)`, `failed: <config reason>`, `failed: helper error (…)`). Treat `null` in `line`/`failure_scenario`/`suggested_fix` as "not provided". A `failed: <reason>` without retry is a config bug to fix (bad auth, rejected schema), not a clean review.
 - pi: `$WD/pi.json` is already parsed from the markers. Report pi's actual `provider`/`model` from its status in section 9 and apply the independence check from section 0.
 - claude-cli: with `--json-schema` a refusal comes back as empty findings, so an empty `claude-cli` result is weak evidence — covered by the context-independent note (§9), never a clean bill.
@@ -461,6 +462,9 @@ Totals: P0=<n> P1=<n> P2=<n>
 
 ## Unverified — needs confirmation
 <P0s whose failure scenario was not concretely grounded (sceptic) — NOT counted as confirmed P0 in Totals>
+
+## Open questions (ungraded)
+<every item of `$WD/questions.json`, one line each, grouped by dimension: what the agents suspected but could not ground. Not verified, not counted in Totals; `None.` when there are none>
 
 ## Dropped / Downgraded (sceptic)
 <dropped P1/P2 + downgrades, each with the reason, and every `downgraded` vote (`F2 codex: EVIDENCE → CONCERN (cannot verify outside diff)`) — only when sceptic is on (basic or strict)>
