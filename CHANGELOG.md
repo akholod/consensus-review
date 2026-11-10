@@ -2,7 +2,9 @@
 
 Full notes for each release: [GitHub releases](https://github.com/akholod/consensus-review/releases).
 
-## Unreleased
+## 0.14.1
+
+The report now shows what the dimension agents suspected but could not ground.
 
 - **Added — `## Open questions (ungraded)` in the `/consensus-review`
   report.** The dimension agents park what they cannot ground in their
