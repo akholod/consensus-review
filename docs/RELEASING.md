@@ -31,6 +31,7 @@ Record each release's result here.
 | 2026-11-06 | 0.13.0 | 2.1.319 | green — all 6 checks passed |
 | 2026-11-10 | 0.14.0 | 2.1.322 | green — all 6 checks passed |
 | 2026-11-10 | 0.14.1 | 2.1.322 | green — all 6 checks passed |
+| 2026-11-15 | 0.14.2 | 2.1.325 | green — all 6 checks passed |
 
 ## 2026-08-19 — why the probe changed
 

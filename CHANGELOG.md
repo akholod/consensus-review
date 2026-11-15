@@ -2,6 +2,46 @@
 
 Full notes for each release: [GitHub releases](https://github.com/akholod/consensus-review/releases).
 
+## 0.14.2
+
+A feature spread over several repositories is reviewed as one change: a multi-repo folder, or several PRs, give one diff and one report. Arguments are read more leniently, and `/plan-review` takes a plan from the conversation.
+
+- **Added — workspace mode in `/consensus-review`.** Run from a folder of
+  several repositories (not itself a repository), the uncommitted changes
+  of all of them are one feature: `scripts/workspace-diff.mjs` builds one
+  diff with repository-prefixed paths, untracked files included, and the
+  review writes one report
+  instead of one per repository. A per-repository review is still there
+  when the prompt asks for it.
+- **Added — several PRs as one feature.** `/consensus-review acme/api#7
+  https://github.com/acme/web/pull/5` (and `/loop-review --pr=… --pr=…`)
+  reviews the PRs as one change: `scripts/feature-diff.mjs` diffs each PR
+  under its checkout's directory (or its repository name), and one report
+  covers them all. Before, the last target won and the first was ignored.
+  A bare `#N` among several, or two PRs of one repository, stops the run.
+  Without `gh` each PR comes over its public diff URL; `base=` is used
+  only when exactly one PR has a local checkout, since one branch cannot
+  be the base of several PRs. A PR without a checkout is reviewed under
+  `@<owner>/<repo>/…`, and one PR typed twice (`o/r#12` and its URL)
+  counts once.
+- **Fixed — `diff.noprefix` no longer strips the paths of a PR diffed
+  from a local clone**: `cloneDiff` passes explicit `a/` and `b/` prefixes.
+- **Fixed — `/loop-review`**: a bare `--pr` stops instead of reviewing the
+  working tree, and a failed final re-sample marks the run stale and
+  still writes the report instead of crashing.
+- **Added — workspace and feature mode in `/loop-review` and the
+  standalone `/arch-review`, `/impact-review`, `/quality-review` and
+  `/test-review`.** The shared logic lives in `scripts/lib/feature.mjs`.
+- **Changed — arguments are read more leniently.** Brackets, quotes and
+  commas around a token (`(lang=ru)`, `[deep]`, `deep,`) are dropped
+  instead of the token being ignored as unknown; a trailing comma closes
+  a list value (`dims=impact,`) instead of stopping the run. An
+  unbalanced closer only is trimmed, so `pi-model=$(x)` still stops.
+- **Changed — `/plan-review` needs no path for a plan from the
+  conversation.** The arbiter picks the document (or saves an in-chat
+  plan as `.plan-review/plan.md`) and passes it with the new
+  `settings.mjs resolve --doc`; free words around it are ignored.
+
 ## 0.14.1
 
 The report now shows what the dimension agents suspected but could not ground.
