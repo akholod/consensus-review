@@ -122,7 +122,7 @@ stop messages:
   **`malformed line <n>`**, **`duplicate key <key>`**, **`empty value for <key>`**,
   or a bad value such as `sceptic=strct: expected off|basic|strict`: fix
   the file and commit it.
-- **`profile=<name>: needs the repository (diff-only mode)`**: a
+- **`profile=<name>: needs the repository (diff-only, workspace or feature mode)`**: a
   diff-only review has no checkout to read a profile from; pass the
   settings as flags.
 - **`profile <name>: git check failed (git ls-tree exit 128)`**: git could

@@ -2,12 +2,12 @@
 // Resolves the /consensus-review arguments against one table of settings, so the arbiter reads
 // settings.json instead of interpreting flags in prose.
 //
-//   resolve --wd <WD> --args-file <file> [--mode doc]
+//   resolve --wd <WD> --args-file <file> [--mode doc [--doc <path>]]
 //   profile --wd <WD> [--repo <REPO>] [--mode uncommitted|doc]
 //   profile-edit --repo <REPO> --args-file <file>
 //   init --repo <REPO> --args-file <file>
 //
-// `resolve` splits the file on whitespace, writes <WD>/settings.json atomically and prints it, exit
+// `resolve` splits the file on whitespace (brackets, quotes and commas around a token are dropped), writes <WD>/settings.json atomically and prints it, exit
 // 0. A `profile=<name>` token leaves the profile pending: `profile`, run once the diff exists,
 // re-resolves <WD>/args.txt with the profile <name> (user, else .consensus-review/profiles/<name>.md,
 // else built-in) and rewrites settings.json. A repository profile is applied only when tracked and
@@ -27,12 +27,12 @@ import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 import {
-  LENS_NAME, PR_URL, checkSourcePath, isBranchName, layerEntries, parseDiff, readLayerFile, sourceRoots, trackedState,
+  LENS_NAME, PR_URL, checkSourcePath, isBranchName, layerEntries, parseDiff, parseScope, readLayerFile, sourceRoots, trackedState,
 } from "../src/loop-review/context.mjs"
 import { PI_MODEL_ID } from "./lib/lanes.mjs"
 
 const USAGE = [
-  "usage: settings.mjs resolve --wd <WD> --args-file <file> [--mode doc]",
+  "usage: settings.mjs resolve --wd <WD> --args-file <file> [--mode doc [--doc <path>]]",
   "       settings.mjs profile --wd <WD> [--repo <REPO>] [--mode uncommitted|doc]",
   "       settings.mjs profile-edit --repo <REPO> --args-file <file>",
   "       settings.mjs init --repo <REPO> --args-file <file>",
@@ -224,15 +224,50 @@ const parseProfileValues = (values, layer = "repo") => {
   return { parsed }
 }
 
+/** One PR's identity: `owner/repo#N` (a URL's host dropped), or the number alone for `#N`. */
+const prKey = (word) => {
+  const scope = parseScope(word)
+  return scope?.pr ? `${scope.repo ? scope.repo.split("/").slice(-2).join("/") : ""}#${scope.pr}` : word
+}
+
 const nameError = (raw) => `profile=${raw}: expected a profile name ([a-z0-9][a-z0-9_-], up to 64)`
+
+const OPENER = { ")": "(", "]": "[", "}": "{", ">": "<" }
+const tally = (text, char) => text.split(char).length - 1
+
+/**
+ * A token without the brackets, quotes and list punctuation typed around it: `(lang=ru)`, `[deep]`,
+ * `deep,` and `"plans/x.md"` read as `lang=ru`, `deep` and `plans/x.md`. Only the ends are trimmed:
+ * a pair wrapping the whole token, or an opener or closer whose partner is not in the token. So
+ * `out=reports/(draft).md`, `[2024]-plan.md`, `pi-model=$(x)` and `base=@{-1}` stay as typed;
+ * backticks are never trimmed.
+ */
+export function cleanToken(token) {
+  const CLOSER = Object.fromEntries(Object.entries(OPENER).map(([c, o]) => [o, c]))
+  const quote = (c) => c === '"' || c === "'"
+  let text = token
+  for (;;) {
+    const first = text[0]
+    const last = text.at(-1)
+    if (last === "," || last === ";") text = text.slice(0, -1)
+    else if (text.length > 1 && (CLOSER[first] === last || (quote(first) && first === last))) text = text.slice(1, -1)
+    else if (CLOSER[first] && tally(text, first) > tally(text, CLOSER[first])) text = text.slice(1)
+    else if (OPENER[last] && tally(text, OPENER[last]) < tally(text, last)) text = text.slice(0, -1)
+    else if (quote(first) && tally(text, first) % 2) text = text.slice(1)
+    else if (quote(last) && tally(text, last) % 2) text = text.slice(0, -1)
+    else return text
+  }
+}
 
 /**
  * Tokens are the whitespace-split arguments; `profile` is the loaded layer `{ name, file, values:
  * { key: raw } }` or null. Returns the resolved object or `{ error }`. The last token for a key
  * wins. A `profile=<name>` token without a layer returns the profile as pending. With `mode: "doc"`
- * the one path token is the target `{ kind: "doc", ref }`, and DOC_IGNORED keys are ignored.
+ * the one path token is the target `{ kind: "doc", ref }`, and DOC_IGNORED keys are ignored. With
+ * `docPath` (doc mode only) the arbiter has already picked the document: it is the target, a token
+ * equal to it is consumed, and every other non-setting token (prose) is ignored as unknown.
  */
-export function resolveSettings(tokens, { profile = null, mode = null } = {}) {
+export function resolveSettings(tokens, { profile = null, mode = null, docPath = null } = {}) {
   const doc = mode === "doc"
   const settings = {}
   for (const [key, { default: value }] of Object.entries(SETTINGS)) settings[key] = { value, source: "default" }
@@ -253,12 +288,21 @@ export function resolveSettings(tokens, { profile = null, mode = null } = {}) {
     }
   }
 
-  let target = doc ? null : { kind: "uncommitted", ref: null }
-  let targetToken = null
+  let target = doc ? (docPath ? { kind: "doc", ref: docPath } : null) : { kind: "uncommitted", ref: null }
+  const prRefs = []
+  const prKeys = []
   let profileName = null
   const tokenOf = {}
-  for (const token of tokens) {
+  for (const typed of tokens) {
+    const token = cleanToken(typed)
+    if (!token) continue
     const word = token.startsWith("--") ? token.slice(2) : token
+    const isSetting = word.indexOf("=") > 0 || Boolean(SHORTHANDS[word.toLowerCase()])
+    // The arbiter picked the document: any other free word is prose, even `#42` or a URL.
+    if (doc && docPath && (!isSetting || TARGET_LIKE.test(word) || TARGETS.some((re) => re.test(word)))) {
+      if (token !== docPath) ignored.push({ token, reason: "unknown" })
+      continue
+    }
     const isTarget = TARGETS.some((re) => re.test(word))
     if (doc && isTarget) return { error: `${token}: plan-review takes a document path, not a PR` }
     // In doc mode the path comes before TARGET_LIKE, so `notes#2.md` is a path.
@@ -268,9 +312,14 @@ export function resolveSettings(tokens, { profile = null, mode = null } = {}) {
       continue
     }
     if (isTarget) {
-      if (targetToken) ignored.push({ token: targetToken, reason: `overridden by ${token}` })
-      target = { kind: "pr", ref: word }
-      targetToken = token
+      // Several PRs are one feature across repositories (§1 feature mode); one PR typed twice, in
+      // any form (`o/r#12`, its URL, the URL with /files), counts once.
+      const key = prKey(word)
+      if (prKeys.includes(key)) ignored.push({ token, reason: "duplicate" })
+      else {
+        prKeys.push(key)
+        prRefs.push(word)
+      }
       continue
     }
     if (TARGET_LIKE.test(word)) return { error: `${token}: not a valid PR target (letters, digits and ._-/#=? only)` }
@@ -308,6 +357,8 @@ export function resolveSettings(tokens, { profile = null, mode = null } = {}) {
   }
 
   if (!target) return { error: "plan-review needs a document path" }
+  if (prRefs.length === 1) target = { kind: "pr", ref: prRefs[0] }
+  if (prRefs.length > 1) target = { kind: "prs", ref: null, refs: prRefs }
 
   const noPiLane = ["codex", "claude-cli"].includes(settings.consultant.value) && settings.extra.value === "off"
   if (noPiLane && settings["pi-model"].source === "flag") {
@@ -315,7 +366,7 @@ export function resolveSettings(tokens, { profile = null, mode = null } = {}) {
     settings["pi-model"] = { value: SETTINGS["pi-model"].default, source: "default" }
   }
 
-  if (settings.base.source === "flag" && target.kind !== "pr") {
+  if (settings.base.source === "flag" && target.kind !== "pr" && target.kind !== "prs") {
     ignored.push({ token: tokenOf.base, reason: "no PR target" })
     settings.base = { value: null, source: "default" }
   }
@@ -421,7 +472,7 @@ export function loadProfile({ repo = null, name, changed = [], run, sources = {}
     const profile = readLayerProfile(builtin, entry)
     return profile.error ? fail(profile.error) : profile
   }
-  if (!repo) return { error: `profile=${name}: needs the repository (diff-only mode)` }
+  if (!repo) return { error: `profile=${name}: needs the repository (diff-only, workspace or feature mode)` }
   const names = [...new Set([...fromUser.entries, ...(dir.entries ?? []), ...fromBuiltin.entries].map((e) => e.slice(0, -3)))]
     .filter((n) => LENS_NAME.test(n)).sort()
   return { error: `profile=${name}: no such profile (available: ${names.length ? names.join(", ") : "none"})` }
@@ -521,7 +572,9 @@ const applyProfile = ({ wd, repo, mode, run, sources }) => {
   if ((mode && mode !== "uncommitted" && mode !== "doc") || !existsSync(argsFile)) return fail(USAGE)
   const tokens = readTokens(argsFile)
   const docMode = mode === "doc" ? "doc" : null
-  const pending = resolveSettings(tokens, { mode: docMode })
+  // The document `resolve` settled on (possibly picked by the arbiter with --doc) stays the target.
+  const docPath = docMode ? readResolvedDoc(wd) : null
+  const pending = resolveSettings(tokens, { mode: docMode, docPath })
   if (pending.error) return fail(pending.error)
   if (!pending.profile) return fail("no profile=<name> in args.txt")
   const { name } = pending.profile
@@ -529,10 +582,20 @@ const applyProfile = ({ wd, repo, mode, run, sources }) => {
   const changed = repo ? parseDiff(readFileSync(diffFile, "utf8")).flatMap((s) => [s.path, s.oldPath]).filter(Boolean) : []
   const profile = loadProfile({ repo, name, changed, run, sources })
   if (profile.error) return fail(profile.error)
-  const resolved = resolveSettings(tokens, { profile, mode: docMode })
+  const resolved = resolveSettings(tokens, { profile, mode: docMode, docPath })
   if (resolved.error) return fail(resolved.error)
   process.stdout.write(writeSettings(wd, resolved))
   return 0
+}
+
+/** The doc target `resolve` wrote to <WD>/settings.json, or null. */
+const readResolvedDoc = (wd) => {
+  try {
+    const { target } = JSON.parse(readFileSync(join(wd, "settings.json"), "utf8"))
+    return target?.kind === "doc" && typeof target.ref === "string" ? target.ref : null
+  } catch {
+    return null
+  }
 }
 
 /** `[key, rendered]` pairs of a parsed-values Map, in SETTINGS order. */
@@ -786,6 +849,7 @@ export function main(argv, { run, sources } = {}) {
       args: argv,
       options: {
         wd: { type: "string" }, "args-file": { type: "string" }, repo: { type: "string" }, mode: { type: "string" },
+        doc: { type: "string" },
       },
       allowPositionals: true,
     }))
@@ -809,7 +873,9 @@ export function main(argv, { run, sources } = {}) {
   }
   if (positionals[0] !== "resolve" || !file || !existsSync(file)) return fail(USAGE)
   if (values.mode && values.mode !== "doc") return fail(USAGE)
-  const resolved = resolveSettings(readTokens(file), { mode: values.mode ?? null })
+  if (values.doc !== undefined && (values.mode !== "doc" || !cleanToken(values.doc))) return fail(USAGE)
+  const docPath = values.doc === undefined ? null : cleanToken(values.doc)
+  const resolved = resolveSettings(readTokens(file), { mode: values.mode ?? null, docPath })
   if (resolved.error) return fail(resolved.error)
   process.stdout.write(writeSettings(values.wd, resolved))
   return 0

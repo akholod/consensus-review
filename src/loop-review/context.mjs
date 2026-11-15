@@ -921,7 +921,8 @@ function cloneDiff({ repo, remote, pr, base, run }) {
   if (mb.status === 1) throw new Error(`no merge base between ${base} and the PR head`)
   if (mb.error || mb.status !== 0) throw new Error(failed("git merge-base", mb))
   const mergeBase = mb.stdout.trim()
-  return { diffText: git(["diff", "-M", mergeBase, headSha]), base: mergeBase, headSha, baseRef: base, mode: "clone" }
+  // Explicit prefixes: a user's diff.noprefix / mnemonicPrefix must not change the paths the parser reads.
+  return { diffText: git(["diff", "-M", "--src-prefix=a/", "--dst-prefix=b/", mergeBase, headSha]), base: mergeBase, headSha, baseRef: base, mode: "clone" }
 }
 
 /** The raw URL of remote `name`, or null: `remote get-url` expands insteadOf, which is the user's routing, not identity. */
@@ -931,7 +932,7 @@ function rawUrl(repo, name, run) {
 }
 
 /** The remote of `repo` whose raw URL names the PR's repository; `#N` means origin. Null when none does. */
-function prRemote(repo, scope, run) {
+export function prRemote(repo, scope, run) {
   if (!scope.repo) return rawUrl(repo, "origin", run) ? "origin" : null
   const listed = run("git", ["remote"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
   const names = listed.status === 0 ? listed.stdout.split("\n").filter(Boolean) : []

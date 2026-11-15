@@ -128,7 +128,7 @@ test("the arbiter writes the files the archive expects, with one id space", () =
   assert.match(section(md, 0), /print `work dir: <WD>`/)
   assert.match(section(md, 0), /INVOKE=/)
   assert.doesNotMatch(section(md, 1), /mktemp/, "§1 no longer creates the work dir")
-  assert.match(section(md, 3), /"mode": "PR\|uncommitted\|diff-only"/, "triage.json carries the mode for the archive meta")
+  assert.match(section(md, 3), /"mode": "PR\|uncommitted\|workspace\|feature\|diff-only"/, "triage.json carries the mode for the archive meta")
   assert.match(section(md, 3), /\$WD\/triage\.json/)
   assert.match(section(md, 6), /\$WD\/claude-findings\.json/)
   assert.match(section(md, 7), /\$WD\/synthesis\.json/)
@@ -181,7 +181,7 @@ test("SETTINGS, the argument-hint and the docs tables name the same keys", () =>
     "depth", "dims", "lenses", "sceptic", "lang", "out", "archive", "consultant", "extra", "pi-model", "timeout", "models", "effort", "base",
   ])
   const hint = command().match(/^argument-hint: "(.*)"$/m)?.[1]
-  assert.equal(hint, "[<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]")
+  assert.equal(hint, "[<PR-url|owner/repo#N|#N> …] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]")
   const docs = readFileSync(new URL("../../docs/consensus-review.md", import.meta.url), "utf8")
   const tables = docs.split(/^### Everyday$/m)[1].split(/^P2 findings/m)[0]
   const keys = new Set([...tables.matchAll(/^\| `([^`=]+)[=`]/gm)].map((m) => m[1]).filter((key) => key !== "Argument"))
@@ -229,7 +229,7 @@ test("§0 states the single-quote rule and the PR commands quote every pasted va
   assert.ok(s1.includes(`pr-diff.mjs" --wd '<literal WD>' --repo '<literal INVOKE>' --target '<target.ref>' [--base '<settings.base.value>']`), s1)
   assert.doesNotMatch(s1, /github\.com|FETCH_HEAD\b(?!`)|git fetch/, "the gh-less PR path lives in pr-diff.mjs, on the PR's own host")
   // Codex re-review, item 2: one PR diff path, so its empty-diff stop covers the gh source too.
-  const pr = s1.split("**PR mode:**")[1].split("**Uncommitted mode:**")[0]
+  const pr = s1.split("**PR mode:**")[1].split("**Feature mode**")[0]
   assert.equal(pr.split("scripts/pr-diff.mjs").length - 1, 1, "PR mode diffs through pr-diff.mjs exactly once")
   assert.ok(!/\bgh pr diff\b[^\n`]*>/.test(pr), "PR mode never redirects gh pr diff output itself")
   assert.ok(pr.includes("an **empty** diff) → print its stderr message and **stop**"), pr)
@@ -327,7 +327,7 @@ test("§8 runs decide in both modes, states one fallback rule and the four vote 
   assert.match(s8, /\*\*Decide — both modes\.\*\*/)
   assert.ok(s8.indexOf("**Decide — both modes.**") > strict, "decide comes after the strict branch, outside it")
   assert.match(s8, /basic passes `--lanes ""`/)
-  assert.match(s8, /Add `--repo` only when there is a clone, and `--head-sha` only when §1 recorded a non-empty `HEAD_SHA`; diff-only mode passes neither/)
+  assert.match(s8, /Add `--repo` only when there is a clone or a workspace root, and `--head-sha` only when §1 recorded a non-empty `HEAD_SHA`; diff-only and feature mode pass neither/)
   assert.match(s8, /read `\$WD\/sceptic\.decision\.json` \(both modes\)/)
   // exactly one fallback rule, and it never refutes
   assert.equal(s8.split("**Fallback — the one rule.**").length - 1, 1)
@@ -391,4 +391,14 @@ test("L4: the plan finding schema is the finding schema except the dimension and
   assert.deepEqual(items.owner.enum, ["feasibility", "completeness", "ambiguity", "scope", "testability", null])
   assert.doesNotThrow(() => assertStrictSchema(plan))
   assert.deepEqual(sortDeep(withoutEnums(contract("plan-finding.schema.json"))), sortDeep(withoutEnums(contract("finding.schema.json"))))
+})
+
+test("§1 feature and workspace mode: one script call each, literals single-quoted, one report", () => {
+  const s1 = section(command(), 1)
+  assert.ok(s1.includes(`feature-diff.mjs" --wd '<literal WD>' --invoke '<literal INVOKE>' --target '<refs[0]>' --target '<refs[1]>' […] [--base '<settings.base.value>']`), s1)
+  assert.ok(s1.includes(`workspace-diff.mjs" --wd '<literal WD>' --root '<literal INVOKE>'`), s1)
+  assert.match(s1, /\*\*one report\*\* — never a review per PR/)
+  assert.match(s1, /\*\*one report\*\* for the whole workspace — never a report per repository/)
+  assert.match(s1, /§1\.5 and §3\.6 get \*\*no\*\* `--repo`/)
+  assert.match(s1, /§8 passes neither `--repo` nor `--head-sha`/)
 })

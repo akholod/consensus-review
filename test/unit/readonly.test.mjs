@@ -12,6 +12,7 @@ const runtimeFiles = [
   "scripts/run-lane.mjs",
   "scripts/lib/lanes.mjs",
   "scripts/lib/archive.mjs",
+  "scripts/lib/feature.mjs",
   "scripts/archive-run.mjs", // created by a later story; skipped while absent
 ].filter((f) => f.endsWith(".mjs") && existsSync(join(ROOT, f)))
 

@@ -13,6 +13,7 @@ import { renderReport, summaryLine } from "../src/loop-review/report.mjs"
 import { TERMINAL, evaluateTerminal } from "../src/loop-review/schema.mjs"
 import { runId, canArchive, writeArchive } from "../scripts/lib/archive.mjs"
 import { sameRepository, selectLenses } from "../scripts/lenses.mjs"
+import { featureDiff, workTree, workspaceDiff } from "../scripts/lib/feature.mjs"
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const argv = process.argv.slice(2)
@@ -43,7 +44,14 @@ const noFile = Boolean(flag("no-file", false))
 const noArchive = Boolean(flag("no-archive", false))
 const jsonOut = Boolean(flag("json", false))
 const range = flag("range", null)
-const prTarget = flag("pr", null)
+// Every --pr: two or more are one feature across repositories (feature mode).
+const prTargets = argv.flatMap((a, i) => (a.startsWith("--pr=") ? [a.slice(5)] : a === "--pr" && argv[i + 1] && !argv[i + 1].startsWith("--") ? [argv[i + 1]] : []))
+const prTarget = prTargets.length === 1 ? prTargets[0] : null
+// A bare --pr (or --pr= with nothing) must not fall back to reviewing the working tree.
+if (argv.some((a, i) => a === "--pr=" || (a === "--pr" && (!argv[i + 1] || argv[i + 1].startsWith("--"))))) {
+  process.stderr.write("--pr needs a PR (a number, owner/repo#N or a URL)\n")
+  process.exit(2)
+}
 const base = flag("base", null)
 const outPath = flag("out", null)
 
@@ -57,26 +65,48 @@ const nonNegative = (name) => {
   return value
 }
 
-const mode = prTarget ? "pr" : range ? "range" : "uncommitted"
+// A folder of repositories that is not one itself: its uncommitted changes are one feature (workspace mode).
+const mode = prTargets.length > 1 ? "feature" : prTarget ? "pr" : range ? "range" : workTree(repo) ? "uncommitted" : "workspace"
 const workDir = mkdtempSync(join(tmpdir(), "loop-review-"))
 
 const log = (m) => process.stderr.write(`${m}\n`)
 
 const targetArgs = { repo, mode, range: String(range ?? ""), prTarget: String(prTarget ?? ""), workDir, base: base === null ? null : String(base) }
-const resolved = resolveTarget(targetArgs)
+// Workspace and feature diffs carry each repository's directory in their paths, relative to `root`;
+// they have no single base, so no originals are read.
+const resolveAny = () => {
+  if (mode === "workspace") {
+    const w = workspaceDiff(repo)
+    return { diffText: w.diffText, base: null, root: w.root, describe: `workspace ${repo} (${w.changed.join(", ") || "no changes"})` }
+  }
+  if (mode === "feature") {
+    const f = featureDiff({ invoke: repo, targets: prTargets, workDir, base: targetArgs.base })
+    return { diffText: f.diffText, base: null, root: f.root, describe: `feature: ${f.prs.map((p) => `${p.target} → ${p.path}`).join(", ")}` }
+  }
+  return { ...resolveTarget(targetArgs), root: repo }
+}
+let resolved
+try {
+  resolved = resolveAny()
+} catch (error) {
+  if (mode !== "workspace" && mode !== "feature") throw error
+  log(String(error?.message ?? error).split("\n")[0])
+  process.exit(2)
+}
 if (!resolved.diffText.trim()) {
   log("No changes to review.")
   process.exit(0)
 }
 
-const ctx = buildContext({ repo, target: resolved.describe, diffText: resolved.diffText, base: resolved.base })
+const ctx = buildContext({ repo: resolved.root, target: resolved.describe, diffText: resolved.diffText, base: resolved.base })
 log(`target: ${ctx.target} | files: ${ctx.files.length} | cells: ${ctx.cells.length} | trivial: ${ctx.trivial} | high-risk: ${ctx.highRisk}`)
 
 // Lenses go through the same checked path as /consensus-review, and only into the discovery
 // prompt: the static prefix is the verifier's too. A PR from another repository (or a target whose
 // repository cannot be told) reads no lenses from this checkout.
 const scope = mode === "pr" ? parseScope(String(prTarget)) : null
-const lensRepo = mode !== "pr" || (scope?.pr && sameRepository(repo, scope)) ? repo : null
+const multi = mode === "workspace" || mode === "feature"
+const lensRepo = multi ? null : mode !== "pr" || (scope?.pr && sameRepository(repo, scope)) ? repo : null
 let lenses
 try {
   lenses = selectLenses({ repo: lensRepo, diffText: resolved.diffText, mode: mode === "uncommitted" ? "uncommitted" : null, dims: ["architecture", "quality", "impact", "tests"] })
@@ -84,7 +114,7 @@ try {
   log(String(error?.message ?? error).split("\n")[0])
   process.exit(2)
 }
-if (!lensRepo) lenses.plan.note = "repo lenses: checkout is not the PR's repository"
+if (!lensRepo) lenses.plan.note = multi ? `repo lenses: not applied (${mode}: no single repository)` : "repo lenses: checkout is not the PR's repository"
 
 const discovery = [readFileSync(join(ROOT, "prompts/loop-review/discovery.md"), "utf8"), lenses.texts.consultant].filter(Boolean).join("\n\n")
 const verifyPrompt = readFileSync(join(ROOT, "prompts/loop-review/verify.md"), "utf8")
@@ -149,8 +179,15 @@ const run = await runLoop({
 
 // Sample the target again now that all model work is done: a tree that moved during the review
 // makes the run stale, and a stale run is never CLEAN.
-const finalDiff = resolveTarget(targetArgs)
-const finalHash = diffHash(finalDiff.diffText)
+// A source that fails now (gh or the network) leaves the run unverifiable: stale, never CLEAN, but
+// the report is still written.
+let finalHash
+try {
+  finalHash = diffHash(resolveAny().diffText)
+} catch (error) {
+  log(`re-sampling the diff failed: ${String(error?.message ?? error).split("\n")[0]}`)
+  finalHash = "unavailable"
+}
 if (finalHash !== ctx.diffHash) log(`diff changed during the run (${ctx.diffHash} -> ${finalHash})`)
 const terminal = evaluateTerminal(run, finalHash)
 run.terminal = terminal.state

@@ -8,7 +8,15 @@ code are never edited.
 ```
 /consensus-review:plan-review docs/plan.md
 /consensus-review:plan-review ~/notes/design.md sceptic=strict lang=ru
+/consensus-review:plan-review the plan we just discussed (sceptic=strict)
 ```
+
+The path is optional. Without one, the arbiter takes the plan from the
+conversation: the plan file it discussed or wrote, or, when the plan is
+only text in the chat, that text saved verbatim as `.plan-review/plan.md`
+(still checked against the current repository). With several candidates
+it asks which one. Brackets, quotes and commas around a token are
+dropped, as in `/consensus-review`.
 
 ## Settings
 

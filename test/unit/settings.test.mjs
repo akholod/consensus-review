@@ -11,7 +11,7 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { SETTINGS, main, parseProfileFile, parseValue, resolveSettings } from "../../scripts/settings.mjs"
+import { SETTINGS, cleanToken, main, parseProfileFile, parseValue, resolveSettings } from "../../scripts/settings.mjs"
 
 // The user lens and profile layer comes from $XDG_CONFIG_HOME: an empty one, so ~/.config never leaks in.
 process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "xdg-"))
@@ -87,7 +87,7 @@ const ERRORS = [
   ["out=", "out=: expected none or a path of letters, digits and ._/~+@,-"],
   ["out=a;b", "out=a;b: expected none or a path of letters, digits and ._/~+@,-"],
   ["out=reports/(draft).md", "out=reports/(draft).md: expected none or a path of letters, digits and ._/~+@,-"],
-  ["dims=impact,", "dims=impact,: empty dimension"],
+  ["dims=impact,,tests", "dims=impact,,tests: empty dimension"],
   ["archive=no", "archive=no: expected on|off"],
   ["consultant=claude", "consultant=claude: expected auto|codex|pi|claude-cli"],
   ["extra=codex", "extra=codex: expected off|pi"],
@@ -143,10 +143,14 @@ test("15: #N is a PR target", () => {
   assert.deepEqual(resolveSettings(["#42"]).target, { kind: "pr", ref: "#42" })
 })
 
-test("16: a second target wins and the first is listed", () => {
-  const r = resolveSettings(["o/r#7", "#9"])
-  assert.equal(r.target.ref, "#9")
-  assert.deepEqual(r.ignored, [{ token: "o/r#7", reason: "overridden by #9" }])
+test("16: two PR targets are one feature, in the order typed; a repeated one is listed once as duplicate", () => {
+  const r = resolveSettings(["o/r#7", "https://github.com/o/s/pull/9", "o/r#7"])
+  assert.deepEqual(r.target, { kind: "prs", ref: null, refs: ["o/r#7", "https://github.com/o/s/pull/9"] })
+  assert.deepEqual(r.ignored, [{ token: "o/r#7", reason: "duplicate" }])
+})
+
+test("16b: base= is kept with several PR targets", () => {
+  assert.equal(resolveSettings(["o/r#7", "o/s#9", "base=main"]).settings.base.value, "main")
 })
 
 for (const url of ["https://github.com/o/r/pull/12/files", "https://github.com/o/r/pull/12#discussion_r1", "https://github.com/o/r/pull/12#x=1", "https://github.com/o/r/pull/12?diff=split", "https://github.com/o/r/pull/12/files?diff=split#r1"]) {
@@ -317,13 +321,13 @@ const ROLE_MAP_ERRORS = [
   ["M4", "models=arch:opus", "models=arch:opus: unknown role arch (expected architecture|impact|quality|tests|plan|verifier)"],
   ["M4", "models=impact:gpt", "models=impact:gpt: unknown model gpt (expected opus|sonnet|haiku|fable)"],
   ["M4", "models=impact:opus,impact:sonnet", "models=impact:opus,impact:sonnet: duplicate role impact"],
-  ["M4", "models=impact:opus,", "models=impact:opus,: empty item"],
+  ["M4", "models=impact:opus,,quality:haiku", "models=impact:opus,,quality:haiku: empty item"],
   ["M4", "models=impact", "models=impact: item impact is not role:model"],
   ["M4", "models=", "models=: expected agent or role:model items"],
   ["E4", "effort=arch:high", "effort=arch:high: unknown role arch (expected architecture|impact|quality|tests|plan|verifier)"],
   ["E4", "effort=impact:huge", "effort=impact:huge: unknown effort huge (expected low|medium|high|xhigh|max)"],
   ["E4", "effort=impact:high,impact:low", "effort=impact:high,impact:low: duplicate role impact"],
-  ["E4", "effort=impact:high,", "effort=impact:high,: empty item"],
+  ["E4", "effort=impact:high,,quality:low", "effort=impact:high,,quality:low: empty item"],
   ["E4", "effort=impact", "effort=impact: item impact is not role:effort"],
   ["E4", "effort=", "effort=: expected agent or role:effort items"],
 ]
@@ -640,7 +644,7 @@ test("L16: no profiles directory", () => {
 })
 
 test("L17: no --repo and no user or built-in profile of that name is the diff-only stop", () => {
-  assertStops(applyProfile(profileRepo(), { args: "profile=zz", extra: [] }), "profile=zz: needs the repository (diff-only mode)")
+  assertStops(applyProfile(profileRepo(), { args: "profile=zz", extra: [] }), "profile=zz: needs the repository (diff-only, workspace or feature mode)")
 })
 
 test("L18: a bad value in a committed profile names the profile", () => {
@@ -1305,7 +1309,7 @@ test("S11: doc-only (no --repo) applies the built-in quick; a repo-only name is 
     { token: "depth=minimal", reason: "profile quick: not used by plan-review" },
     { token: "dims=+quality", reason: "profile quick: not used by plan-review" },
   ])
-  assertStops(docProfile("docs/p.md profile=ci"), "profile=ci: needs the repository (diff-only mode)")
+  assertStops(docProfile("docs/p.md profile=ci"), "profile=ci: needs the repository (diff-only, workspace or feature mode)")
 })
 
 test("CLI: resolve --mode doc writes the doc target; another mode is a usage error", () => {
@@ -1319,3 +1323,105 @@ test("CLI: resolve --mode doc writes the doc target; another mode is a usage err
   assert.equal(bad.status, 2)
   assert.match(bad.stderr, /^usage:/)
 })
+
+// ---------------------------------------------------------------------------------------------
+// Typed wrappers and the arbiter-picked document. Expected values come from the request "arguments
+// in brackets must not be rejected; plan-review must not demand a path for a plan discussed earlier".
+// ---------------------------------------------------------------------------------------------
+
+for (const [typed, key, value] of [
+  ["(lang=ru)", "lang", "ru"],
+  ["[deep]", "depth", "deep"],
+  ["deep,", "depth", "deep"],
+  ['"sceptic=off"', "sceptic", "off"],
+  ["[--dims=impact,tests];", "dims", { set: ["impact", "tests"] }],
+]) {
+  test(`W1: ${typed} is read as the setting it wraps, not ignored`, () => {
+    const r = resolveSettings([typed])
+    assert.deepEqual(r.settings[key], { value, source: "flag" })
+    assert.deepEqual(r.ignored, [])
+  })
+}
+
+test("W2: a bracket inside a value stays, so out=reports/(draft).md still stops", () => {
+  assert.deepEqual(resolveSettings(["out=reports/(draft).md"]), {
+    error: "out=reports/(draft).md: expected none or a path of letters, digits and ._/~+@,-",
+  })
+})
+
+test("W3: a bare bracket or comma token is dropped silently", () => {
+  assert.deepEqual(resolveSettings(["(", ",", "]"]).ignored, [])
+})
+
+test("W4: a parenthesised doc path is the path", () => {
+  assert.deepEqual(doc(["(docs/p.md)"]).target, { kind: "doc", ref: "docs/p.md" })
+})
+
+test("W5: with docPath, free text is ignored as unknown and the settings still apply", () => {
+  const r = doc(["review", "the", "plan", "(sceptic=strict)"], { docPath: "/abs/plan.md" })
+  assert.deepEqual(r.target, { kind: "doc", ref: "/abs/plan.md" })
+  assert.deepEqual(r.settings.sceptic, { value: "strict", source: "flag" })
+  assert.deepEqual(r.ignored.map((i) => i.token), ["review", "the", "plan"])
+})
+
+test("W6: with docPath, the same path typed in the args is consumed, not ignored", () => {
+  const r = doc(["docs/p.md", "lang=ru"], { docPath: "docs/p.md" })
+  assert.deepEqual(r.target, { kind: "doc", ref: "docs/p.md" })
+  assert.deepEqual(r.ignored, [])
+})
+
+test("W7: CLI resolve --doc with no path in the args, then profile keeps that document", () => {
+  const wd = mkdtempSync(join(tmpdir(), "settings-doc-"))
+  dirs.push(wd)
+  writeFileSync(join(wd, "args.txt"), "the plan we discussed profile=quick\n")
+  const first = spawnSync(process.execPath, [SCRIPT, "resolve", "--wd", wd, "--args-file", join(wd, "args.txt"), "--mode", "doc", "--doc", "/abs/plan.md"], { encoding: "utf8" })
+  assert.equal(first.status, 0, first.stderr)
+  const run = spawnSync(process.execPath, [SCRIPT, "profile", "--wd", wd, "--mode", "doc"], { encoding: "utf8" })
+  assert.equal(run.status, 0, run.stderr)
+  const saved = JSON.parse(readFileSync(join(wd, "settings.json"), "utf8"))
+  assert.deepEqual(saved.target, { kind: "doc", ref: "/abs/plan.md" })
+  assert.equal(saved.profile.name, "quick")
+})
+
+test("W8: CLI --doc without --mode doc is a usage error", () => {
+  const wd = mkdtempSync(join(tmpdir(), "settings-doc-"))
+  dirs.push(wd)
+  writeFileSync(join(wd, "args.txt"), "deep\n")
+  const bad = spawnSync(process.execPath, [SCRIPT, "resolve", "--wd", wd, "--args-file", join(wd, "args.txt"), "--doc", "p.md"], { encoding: "utf8" })
+  assert.equal(bad.status, 2)
+  assert.match(bad.stderr, /^usage:/)
+})
+
+test("W9: a trailing comma closes a list value instead of stopping the run", () => {
+  assert.deepEqual(resolveSettings(["dims=impact,"]).settings.dims, { value: { set: ["impact"] }, source: "flag" })
+})
+
+for (const typed of ["[2024]-plan.md", "(draft)plan.md"]) {
+  test(`W10: ${typed} keeps the leading bracket whose partner is inside the token`, () => {
+    assert.deepEqual(doc([typed]).target, { kind: "doc", ref: typed })
+  })
+}
+
+test("W11: with docPath, #42 and a URL in free text are prose, not a PR stop", () => {
+  const r = doc(["the", "plan", "for", "#42", "https://x.io/a?b=c"], { docPath: "/abs/plan.md" })
+  assert.deepEqual(r.target, { kind: "doc", ref: "/abs/plan.md" })
+  assert.deepEqual(r.ignored.map((i) => i.token), ["the", "plan", "for", "#42", "https://x.io/a?b=c"])
+})
+
+test("W12: [deep, and lang=ru] split across tokens still read as settings", () => {
+  const r = resolveSettings(["[deep,", "lang=ru]"])
+  assert.equal(r.settings.depth.value, "deep")
+  assert.equal(r.settings.lang.value, "ru")
+})
+
+test("16c: one PR typed as owner/repo#N and as its URL (with a tab) is one target", () => {
+  const r = resolveSettings(["o/r#12", "https://github.com/o/r/pull/12/files", "o/s#12"])
+  assert.deepEqual(r.target, { kind: "prs", ref: null, refs: ["o/r#12", "o/s#12"] })
+  assert.deepEqual(r.ignored, [{ token: "https://github.com/o/r/pull/12/files", reason: "duplicate" }])
+})
+
+for (const [typed, kept] of [["pi-model=$(x)", "pi-model=$(x)"], ["base=@{-1}", "base=@{-1}"], ["#`id`", "#`id`"], ["(pi-model=$(x))", "pi-model=$(x)"]]) {
+  test(`W13: cleanToken keeps ${typed} for its whitelist as ${kept}`, () => {
+    assert.equal(cleanToken(typed), kept)
+  })
+}

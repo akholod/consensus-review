@@ -5,16 +5,41 @@ change, an arbiter merges what they found, and a sceptic tries to refute
 every serious finding. Back to the [README](../README.md).
 
 ```text
-/consensus-review [<PR-url|owner/repo#N|#N>] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict]
+/consensus-review [<PR-url|owner/repo#N|#N> …] [deep|minimal] [dims=<list>] [sceptic=off|basic|strict]
                   [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]
 ```
 
 `<PR>` is a PR URL (it may end in `/files`, `?diff=split` or `#…`), `owner/repo#N` or
 `#N`. Without it, the review covers your uncommitted changes (staged,
-unstaged and untracked). Two targets: the last one wins. A token that
+unstaged and untracked). Two or more targets are one feature (below). A token that
 looks like a target but is not one (any other URL, a `/pull/` path, or
 `…#N` with other characters) stops the run:
 `<token>: not a valid PR target (letters, digits and ._-/#=? only)`.
+
+Brackets, quotes and commas typed around a token are dropped:
+`(lang=ru)`, `[deep]` and `deep,` work like `lang=ru` and `deep`.
+
+**Multi-repo folder (workspace mode).** Run from a folder that is not a
+git repository but holds several (up to two levels deep), and the
+uncommitted changes of all of them are reviewed as **one feature**: one
+diff with paths prefixed by the repository directory (`api/src/x.ts`),
+new untracked files included, one panel, one report (`.reviews/review-workspace-<folder>-<date>.md`).
+Repository profiles and lenses do not apply there (user and built-in
+ones do), and no run archive is written. Ask for "a separate report per
+repo" in the prompt to get the old per-repository reviews.
+
+**Several PRs (feature mode).** `/consensus-review acme/api#7
+https://github.com/acme/web/pull/5` reviews both PRs as one feature: one
+diff, one report. Each PR needs its repository (`owner/repo#N` or a URL;
+a bare `#N` stops), and two PRs of one repository stop. A PR whose
+repository has a checkout in the folder (or next to the current
+repository) is prefixed by that directory and its code is readable;
+otherwise by `@<owner>/<repo>`, diff-only. Quotes outside the diff are
+not checked in this mode: the checkouts need not be at the PR heads.
+Without `gh`, each PR comes over its public diff URL; `base=` (the
+local-clone path, which fetches objects into that checkout, never a ref)
+is used only when exactly one PR has a checkout, since one branch cannot
+be the base of several PRs.
 
 ## Arguments
 
@@ -41,7 +66,7 @@ with its source (`flag`, `profile <name>` or `default`).
 
 | Argument                  | Effect                                                                                                                                       |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<PR>`                    | the PR to review; default: your uncommitted changes. A malformed PR URL or `owner/repo#N` stops the run, never falls back                    |
+| `<PR>`                    | the PR to review (several: one feature); default: your uncommitted changes. A malformed PR URL or `owner/repo#N` stops the run, never falls back |
 | `depth=<mode>`            | `auto` (default), `minimal` or `deep`; shorthands `deep` and `minimal`. `deep` skips triage and runs the full panel; `minimal` forces the smallest tier with a shallow exploration budget; the last one wins |
 | `dims=<list>`             | set the lanes from `architecture,quality,impact,tests`: `dims=impact,quality` replaces the tier's set, `dims=+architecture,-quality` adjusts it. Do not mix both forms. `dims=+tests` is the only way to review tests when the diff has no test files |
 | `sceptic=strict`          | the default: an independent verifier plus the consultants re-run as refuters; typed votes per finding (see The sceptic)                      |

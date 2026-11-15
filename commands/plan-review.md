@@ -1,6 +1,6 @@
 ---
 description: Consensus review of a plan, spec or design doc before code exists (Opus arbiter + plan-reviewer + a consultant — codex, else pi, else claude-cli — optional `extra=pi`) across 5 document dimensions (feasibility/completeness/ambiguity/scope/testability); P0–P2 with the consequence bar; Open questions for the author; basic sceptic by default
-argument-hint: "<path> [sceptic=off|basic|strict] [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]"
+argument-hint: "[<path>] [sceptic=off|basic|strict] [lang=<language>] [no-file] [profile=<name>] [<key>=<value>…]"
 ---
 
 You are the **Opus arbiter** of a consensus review of **one document** — a plan, spec or design
@@ -16,11 +16,18 @@ Arguments: `$ARGUMENTS`
 
 Work dir **outside the repo**: `WD=$(mktemp -d)`. Right after it, print `work dir: <WD>` and record `INVOKE=<abs path of the cwd>`. Keep `WD` and `INVOKE` as **literals** from here on; a later `cd` must move neither.
 
-Write `$ARGUMENTS` **verbatim** with the Write tool to `$WD/args.txt`, then in **one** foreground call:
+Write `$ARGUMENTS` **verbatim** with the Write tool to `$WD/args.txt`. Brackets, quotes and commas around a token are fine (`(sceptic=strict)`, `[lang=ru]`, `deep,`): the resolver drops them.
+
+**Pick the document (`DOC`).** The path is optional; the user may refer to a plan from this conversation instead:
+- `$ARGUMENTS` holds exactly one token that is not a setting and it names an existing file → run `resolve` as is, without `--doc`. When you do pass `--doc` for a path the user typed, pass it exactly as typed.
+- Otherwise (no path, free text such as "the plan we discussed", or a path that does not exist as typed) take the document from the conversation: the plan or spec file it was discussing or that you wrote in it (e.g. under `.omc/plans/`, `docs/`, `plans/`), as an absolute path. A plan that exists only as text in the conversation → write that text **verbatim** with the Write tool to `$WD/plan.md` and use that path (it is reviewed against `INVOKE`'s repository; its label is `.plan-review/plan.md`). Then add `--doc '<DOC>'`: the document is the target, and every other free word is listed under `Ignored args`.
+- Two or more plausible documents, or none → ask the user with AskUserQuestion (the candidates as options, newest first) instead of guessing; never stop just because the path was not typed.
+
+Then in **one** foreground call:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" resolve --wd '<literal WD>' --args-file '<literal WD>/args.txt' --mode doc
+node "${CLAUDE_PLUGIN_ROOT}/scripts/settings.mjs" resolve --wd '<literal WD>' --args-file '<literal WD>/args.txt' --mode doc [--doc '<DOC>']
 ```
-Exit 2 → print its stderr message and **stop** (a PR target, two paths, no path, a bad value). Exit 0 → read `$WD/settings.json` and use **only** its values: `target.ref` is the document path as typed; `settings.<key>.value`; `ignored`; `lines.settings` / `lines.ignored` (§9). Never re-derive a setting from `$ARGUMENTS`. `depth`, `deep`, `minimal`, `dims`, `lenses` and `base` are already in `ignored` (`not used by plan-review`).
+Exit 2 → print its stderr message and **stop** (a PR target, two paths, a bad value). Exit 0 → read `$WD/settings.json` and use **only** its values: `target.ref` is the document path as typed; `settings.<key>.value`; `ignored`; `lines.settings` / `lines.ignored` (§9). Never re-derive a setting from `$ARGUMENTS`. `depth`, `deep`, `minimal`, `dims`, `lenses` and `base` are already in `ignored` (`not used by plan-review`).
 
 **Quoting rule:** every value from `settings.json`, `doc.json` or a path you paste into a Bash command goes in **single quotes** (`'<value>'`); a `'` inside is written `'\''`. Only a shell variable already set from such a literal stays in double quotes.
 

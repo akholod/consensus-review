@@ -160,7 +160,7 @@ function finish(v) {
   const meta = {
     createdAt: now.toISOString(),
     command,
-    target: !settings ? null : ["pr", "doc"].includes(settings.target?.kind) ? settings.target.ref : "uncommitted",
+    target: !settings ? null : settings.target?.kind === "prs" ? settings.target.refs.join(" ") : ["pr", "doc"].includes(settings.target?.kind) ? settings.target.ref : "uncommitted",
     mode: triage?.mode ?? null,
     pluginVersion: readJson(join(ROOT, ".claude-plugin/plugin.json"))?.version ?? null,
     report: v.report ? resolve(v.report) : null,

@@ -147,3 +147,27 @@ test("Q6: a code citation still reads the worktree under diffOnly", () => {
   const code = reader({ "scripts/x.mjs": "export const x = parseValue(raw)\n" })
   ok(docCheck({ file: "scripts/x.mjs", line: "1", quote: "export const x = parseValue(raw)" }, code, "docs/p.md"), "head")
 })
+
+// Workspace roots hold symlinked checkouts (scripts/lib/feature.mjs findRepos follows them); the
+// worktree reader must read through such a top-level link, and only in a root that is no work tree.
+import { execFileSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { makeReadHeadFile } from "../../scripts/lib/quote-check.mjs"
+
+test("Q9: a workspace root reads through a top-level symlinked checkout; a repository's own link stays confined", (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "qc-ws-")))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const real = join(base, "elsewhere")
+  mkdirSync(join(real, "src"), { recursive: true })
+  writeFileSync(join(real, "src", "a.js"), "export const guard = 1\n")
+  const ws = join(base, "ws")
+  mkdirSync(ws)
+  symlinkSync(real, join(ws, "api"))
+
+  assert.equal(makeReadHeadFile({ repo: ws, headSha: "worktree" })("api/src/a.js"), "export const guard = 1\n")
+
+  execFileSync("git", ["init", "-q"], { cwd: ws })
+  assert.equal(makeReadHeadFile({ repo: ws, headSha: "worktree" })("api/src/a.js"), null)
+})

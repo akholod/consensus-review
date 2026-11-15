@@ -3,7 +3,7 @@
 // from the reader `makeReadHeadFile` builds; it reads only, never checks out or fetches.
 
 import { spawnSync } from "node:child_process"
-import { readFileSync, realpathSync, statSync } from "node:fs"
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { join, sep } from "node:path"
 import { parseDiff } from "../../src/loop-review/context.mjs"
 
@@ -95,11 +95,23 @@ export function makeReadHeadFile({ repo, headSha }) {
   if (headSha === "worktree") {
     let root
     try { root = realpathSync(repo) } catch { return null }
+    // A workspace root (no work tree itself) may hold symlinked checkouts: a path under such a
+    // top-level link may resolve inside the link's target. A repository's own links stay confined.
+    const workspace = git(root, ["rev-parse", "--is-inside-work-tree"]).status !== 0
+    const linkedRoot = (path) => {
+      const top = join(root, path.split("/")[0])
+      try {
+        return workspace && lstatSync(top).isSymbolicLink() ? realpathSync(top) : null
+      } catch {
+        return null
+      }
+    }
     return (path) => {
       if (!safePath(path)) return null
       try {
         const real = realpathSync(join(root, path))
-        if (!real.startsWith(root + sep)) return null
+        const linked = linkedRoot(path)
+        if (!real.startsWith(root + sep) && !(linked && real.startsWith(linked + sep))) return null
         const st = statSync(real)
         if (!st.isFile() || st.size > MAX_FILE) return null
         return readFileSync(real, "utf8")

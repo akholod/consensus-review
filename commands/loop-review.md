@@ -35,10 +35,10 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/loop-review.mjs" [flags]
 
 | Flag | Meaning |
 |---|---|
-| `--pr=<n\|url>` | Review a pull request (reuses the `gh` path; the gh-less clone fallback adds git objects to the reviewed clone, never a ref, `FETCH_HEAD` or config) |
+| `--pr=<n\|url>` | Review a pull request (reuses the `gh` path; the gh-less clone fallback adds git objects to the reviewed clone, never a ref, `FETCH_HEAD` or config). Repeat it (`--pr=acme/api#7 --pr=acme/web#5`) to review several PRs of different repositories as **one feature**: one diff, one report, each PR's paths under its checkout's directory (in the folder, or next to the current repository), else under its repository name |
 | `--base=<branch>` | The branch the PR targets; without `gh`, a PR from a local clone needs it (and stops otherwise) |
 | `--range=<base..head>` | Review a git range |
-| *(neither)* | Review uncommitted changes against `HEAD` |
+| *(neither)* | Review uncommitted changes against `HEAD`. Run from a folder that is not a repository but holds several, it reviews all their uncommitted changes as **one feature** (workspace mode), paths prefixed by the repository directory |
 | `--model=<m>` | Runner model (default `sonnet`) |
 | `--timeout=<sec>` | Per-pass wall clock (default 240) |
 | `--max-tokens=`, `--max-calls=`, `--max-ms=` | Hard budgets; exhausting one blocks `CLEAN` |
@@ -80,6 +80,10 @@ Fixed, not tunable at run time:
 - docs / generated / formatting-only: 0–1 lightweight pass
 - every non-trivial code diff: **at least 2** passes
 - auth, permission, migration, destructive-data, public-contract or cross-service changes: **at least 3**, hard maximum **4** before escalation
+
+## A feature across repositories
+
+Workspace mode and several `--pr` review one feature, never one report per repository. No repository lenses apply there (no single repository owns the run; user and built-in lenses still do), no originals are read (there is no single base), and the archive is written only when the invoking directory is a git repository that ignores `.reviews/`. A `#N` without its repository, two PRs of one repository, or a bare `--pr` stops the run with exit 2. A PR without a checkout is reviewed under `@<owner>/<repo>/…`. Without `gh`, each PR comes over its public diff URL; `--base` (the local-clone path, which fetches objects into that checkout's object store, never a ref, `FETCH_HEAD` or config) applies only when exactly one PR has a checkout, since one branch cannot be the base of several PRs.
 
 ## Project lenses
 

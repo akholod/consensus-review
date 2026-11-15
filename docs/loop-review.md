@@ -26,10 +26,10 @@ not an omission.
 
 | Flag                                       | Meaning                                                          |
 | ------------------------------------------ | ---------------------------------------------------------------- |
-| `--pr=<n\|url>`                            | review a pull request                                            |
+| `--pr=<n\|url>`                            | review a pull request; repeat it for several PRs of different repositories, reviewed as one feature |
 | `--base=<branch>`                          | the branch the PR targets; needed for a PR from a local clone without `gh` ([how](consensus-review.md#pull-requests-without-gh)) |
 | `--range=<base..head>`                     | review a git range                                               |
-| _(neither)_                                | review uncommitted changes against `HEAD`                        |
+| _(neither)_                                | review uncommitted changes against `HEAD`; from a folder of repositories, all of them as one feature |
 | `--model=<m>`                              | model for every pass, default `sonnet`                           |
 | `--timeout=<sec>`                          | wall clock per pass, default `240`                               |
 | `--max-tokens`, `--max-calls`, `--max-ms`  | hard budgets, unlimited by default (`0`); running out of one rules out `CLEAN` |
